@@ -16,6 +16,19 @@
 
 展示完成后必须暂停，明确询问用户是否“确认允许本次 GitHub → 本机更新”。只有用户在看到上述报告后再次明确确认，才能执行 `git switch`、`git pull`、merge、rebase、checkout、restore、工作流导入、配置写入、Jimeng 源码/镜像替换或其它反向覆盖操作。用户最初粘贴本提示词不算二次确认；用户未回复、拒绝或不在线时必须停止，不得自行继续。
 
+## 当前发布契约与升级目标
+
+本提示词对应当前发布快照：Node.js `22.23.1`、npm `10.9.8`、n8n `2.32.6`、PostgreSQL `18.4`、Playwright `1.61.1`、Jimeng `0.9.1`；n8n 清单为 36 个唯一工作流和 3 个部署包；数据库映射为 `merchroute` → `merchroute_app`、`merchroute_n8n` → `merchroute_n8n`。
+
+升级目标必须从目标 `origin/main` 提交中的以下机器可读文件确定，不能只相信本提示词中的静态文字：
+
+- `deployment/runtime-versions.json`：工具链、n8n、PostgreSQL、Playwright、社区节点和 Jimeng 镜像版本。
+- `deployment/n8n/manifest.json`：唯一工作流数量、ID 集、3 个部署包、哈希和停用导入策略。
+- `deployment/postgres/init/01-databases.sh`：`merchroute` / `merchroute_app` 与 `merchroute_n8n` / `merchroute_n8n` 的所有权契约。
+- `package-lock.json`：npm 依赖锁定结果。
+
+二次确认前，只允许用 `git show origin/main:<路径>` 只读提取目标提交中的上述契约，并将本机值、目标值和差异列入报告；不得 checkout 文件。取得二次确认并完成快进更新后，重新从工作树读取四份文件，运行 `npm run versions:check`、`npm run deployment:verify` 和 `npm run deployment:test`。若机器可读值与本节或 README 不一致，立即停止并报告“发布文档与代码契约不同步”。升级不得重命名、重建或交换现有两个数据库及其 owner 角色。
+
 ## 强制成功条件
 
 只有同时满足以下条件才可报告升级成功：

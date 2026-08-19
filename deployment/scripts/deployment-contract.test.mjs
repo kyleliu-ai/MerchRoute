@@ -492,6 +492,52 @@ test('agent prompt keeps mandatory safety, retry, inactive workflow, path, and r
   }
 });
 
+test('README and agent prompts stay aligned with the machine-readable release contract', async () => {
+  const runtime = JSON.parse(await readFile(path.join(projectRoot, 'deployment', 'runtime-versions.json'), 'utf8'));
+  const manifest = JSON.parse(await readFile(path.join(projectRoot, 'deployment', 'n8n', 'manifest.json'), 'utf8'));
+  const postgresInit = await readFile(path.join(projectRoot, 'deployment', 'postgres', 'init', '01-databases.sh'), 'utf8');
+  const documents = await Promise.all([
+    readFile(path.join(projectRoot, 'README.md'), 'utf8'),
+    readFile(path.join(projectRoot, 'deployment', 'AGENT_INSTALL_PROMPT.zh-CN.md'), 'utf8'),
+    readFile(path.join(projectRoot, 'deployment', 'AGENT_UPDATE_PROMPT.zh-CN.md'), 'utf8'),
+  ]);
+  const releaseValues = [
+    runtime.node,
+    runtime.npm,
+    runtime.n8n,
+    runtime.postgresqlTested,
+    runtime.playwright,
+    runtime.jimeng.version,
+    `${manifest.uniqueWorkflowCount} 个唯一工作流`,
+    `${manifest.packages.length} 个部署包`,
+    'deployment/runtime-versions.json',
+    'deployment/n8n/manifest.json',
+    'deployment/postgres/init/01-databases.sh',
+    'package-lock.json',
+    'merchroute_app',
+    'merchroute_n8n',
+  ];
+  for (const document of documents) {
+    for (const value of releaseValues) assert.match(document, new RegExp(value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  }
+  for (const databaseContract of [
+    'CREATE ROLE merchroute_app',
+    'CREATE DATABASE merchroute OWNER merchroute_app',
+    'CREATE ROLE merchroute_n8n',
+    'CREATE DATABASE merchroute_n8n OWNER merchroute_n8n',
+  ]) assert.match(postgresInit, new RegExp(databaseContract));
+});
+
+test('README references every generated isolated UI screenshot', async () => {
+  const readme = await readFile(path.join(projectRoot, 'README.md'), 'utf8');
+  for (const file of ['overview.webp', 'procurement.webp', 'media-review.webp', 'wb-listing.webp', 'ozon-listing.webp', 'pricing.webp', 'shipping.webp', 'settings.webp', 'notifications.webp']) {
+    const relativePath = `docs/assets/ui/${file}`;
+    assert.match(readme, new RegExp(relativePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    const image = await readFile(path.join(projectRoot, ...relativePath.split('/')));
+    assert.ok(image.byteLength > 20_000, `${relativePath} should contain a rendered UI screenshot`);
+  }
+});
+
 test('agent update prompt preserves existing state and gates E007 before and after restart', async () => {
   const prompt = await readFile(path.join(projectRoot, 'deployment', 'AGENT_UPDATE_PROMPT.zh-CN.md'), 'utf8');
   for (const required of [

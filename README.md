@@ -18,6 +18,34 @@ MerchRoute 是一套本地优先的电商运营工具，覆盖采购商品管理
 | 系统设置 | 工作流阶段、下载、目录、平台店铺与运行配置 |
 | 消息中心 | 任务进度、异常、待处理事项和操作结果通知 |
 
+## 界面预览
+
+以下界面由当前源码在隔离 E2E 数据库中使用合成商品生成，不包含真实店铺、凭据、商品数据或本机路径。点击图片可查看原尺寸。
+
+<p align="center">
+  <a href="docs/assets/ui/overview.webp"><img src="docs/assets/ui/overview.webp" alt="MerchRoute 图片审核与投递总览" width="100%"></a><br>
+  <strong>图片审核与投递总览</strong>：集中查看 E001–E005 处理阶段、待审核数量和投递方向。
+</p>
+
+<table>
+  <tr>
+    <td width="50%"><a href="docs/assets/ui/procurement.webp"><img src="docs/assets/ui/procurement.webp" alt="MerchRoute 采购管理界面"></a><br><strong>采购管理</strong>：采购台账、来源链接、下载工作流和任务状态。</td>
+    <td width="50%"><a href="docs/assets/ui/media-review.webp"><img src="docs/assets/ui/media-review.webp" alt="MerchRoute 图片审核界面"></a><br><strong>图片审核</strong>：按工作流查看产品媒体、审核状态和后续投递目标。</td>
+  </tr>
+  <tr>
+    <td width="50%"><a href="docs/assets/ui/wb-listing.webp"><img src="docs/assets/ui/wb-listing.webp" alt="MerchRoute Wildberries 上品界面"></a><br><strong>WB 上品</strong>：自动任务、手动资料、类目模板和店铺预设。</td>
+    <td width="50%"><a href="docs/assets/ui/ozon-listing.webp"><img src="docs/assets/ui/ozon-listing.webp" alt="MerchRoute OZON 上品界面"></a><br><strong>OZON 上品</strong>：自动任务、多店铺手动上品、类目与预设管理。</td>
+  </tr>
+  <tr>
+    <td width="50%"><a href="docs/assets/ui/pricing.webp"><img src="docs/assets/ui/pricing.webp" alt="MerchRoute 售价计算界面"></a><br><strong>售价管理</strong>：结合采购、运费和平台费用计算目标售价。</td>
+    <td width="50%"><a href="docs/assets/ui/shipping.webp"><img src="docs/assets/ui/shipping.webp" alt="MerchRoute 运费计算界面"></a><br><strong>运费管理</strong>：按目的国、重量和体积比较跨境物流渠道。</td>
+  </tr>
+  <tr>
+    <td width="50%"><a href="docs/assets/ui/settings.webp"><img src="docs/assets/ui/settings.webp" alt="MerchRoute 系统设置界面"></a><br><strong>系统设置</strong>：统一维护工作流、审核投递、运行参数和下载调用。</td>
+    <td width="50%"><a href="docs/assets/ui/notifications.webp"><img src="docs/assets/ui/notifications.webp" alt="MerchRoute 消息中心界面"></a><br><strong>消息中心</strong>：集中追踪任务结果、异常和待处理事项。</td>
+  </tr>
+</table>
+
 ## 系统组成与数据流
 
 ```text
@@ -67,6 +95,19 @@ tests/e2e                        Playwright 浏览器测试
 
 机器可读契约在 [deployment/runtime-versions.json](deployment/runtime-versions.json)。版本不一致时不要继续安装依赖，先切换到固定版本并运行 `npm run versions:check`。
 
+## 发布契约同步
+
+README、智能体安装提示词和智能体升级提示词必须与同一个提交中的机器可读契约保持一致：
+
+| 契约 | 权威文件 | 当前发布快照 |
+| --- | --- | --- |
+| 工具链和 Jimeng | [deployment/runtime-versions.json](deployment/runtime-versions.json) | Node.js `22.23.1`、npm `10.9.8`、n8n `2.32.6`、PostgreSQL `18.4`、Playwright `1.61.1`、Jimeng `0.9.1` |
+| n8n 工作流 | [deployment/n8n/manifest.json](deployment/n8n/manifest.json) | 36 个唯一工作流、3 个部署包；新安装全部停用 |
+| PostgreSQL | [deployment/postgres/init/01-databases.sh](deployment/postgres/init/01-databases.sh) | `merchroute` → `merchroute_app`；`merchroute_n8n` → `merchroute_n8n` |
+| npm 依赖 | [package-lock.json](package-lock.json) | 锁文件安装，禁止用浮动 `latest` 替代固定版本 |
+
+每次修改版本、工作流清单或数据库初始化契约时，必须在同一 PR 中更新本 README、[安装提示词](deployment/AGENT_INSTALL_PROMPT.zh-CN.md) 和[升级提示词](deployment/AGENT_UPDATE_PROMPT.zh-CN.md)。`npm run deployment:test` 会从上述权威文件读取实际值并阻止三份文档发生漂移；`npm run deployment:verify` 继续验证工作流数量、哈希、依赖和脱敏边界。
+
 ## 推荐部署方式：把一份提示词交给智能体
 
 从干净的 Windows 11 或 Apple Silicon macOS 部署时，将 [智能体安装部署提示词](deployment/AGENT_INSTALL_PROMPT.zh-CN.md) 的完整内容复制给 Codex、Claude Code 等具备终端和文件权限的智能体。提示词要求智能体持续执行、调用已测试脚本、在本机凭据填写处暂停，并在全部只读验收后生成脱敏报告。
@@ -87,6 +128,8 @@ chmod +x deployment/scripts/bootstrap-macos.sh
 ```
 
 遇到端口、Docker、数据库、n8n 所有者初始化或凭据探测问题时，见 [部署故障排查](deployment/TROUBLESHOOTING.zh-CN.md)。
+
+维护 README 界面图时，先启动项目自带的隔离 E2E 服务，再运行 `npm run docs:capture-ui`。截图脚本只接受 `127.0.0.1:4183`，并要求存在 E2E 数据库标记，避免误截生产页面。
 
 ## 开发环境快速启动
 

@@ -14,6 +14,19 @@
 - 新建两个相互隔离的空数据库：`merchroute` 与 `merchroute_n8n`，使用不同最小权限角色；禁止恢复历史数据库。
 - 导入 36 个唯一 n8n 工作流，其中必须包含 `G8MSbp9u0dudSgba` / `E007-v01-1688产品媒体下载`；36 个全部保持停用，不得启用任何工作流。
 
+### 发布契约来源与同步检查
+
+本提示词对应当前发布快照：Node.js `22.23.1`、npm `10.9.8`、n8n `2.32.6`、PostgreSQL `18.4`、Playwright `1.61.1`、Jimeng `0.9.1`；n8n 清单为 36 个唯一工作流和 3 个部署包；数据库映射为 `merchroute` → `merchroute_app`、`merchroute_n8n` → `merchroute_n8n`。
+
+真正执行安装时，同一 Git commit 中的以下文件才是机器可读权威来源：
+
+- `deployment/runtime-versions.json`：Node.js、npm、n8n、PostgreSQL、Playwright、社区节点和 Jimeng 镜像版本。
+- `deployment/n8n/manifest.json`：唯一工作流数量、ID 集、3 个部署包、哈希和新安装停用策略。
+- `deployment/postgres/init/01-databases.sh`：两个数据库、各自 owner 角色及 PUBLIC 权限撤销规则。
+- `package-lock.json`：npm 依赖锁定结果。
+
+克隆完成后、安装任何依赖或创建数据库前，必须读取并记录这四份文件，再运行 `npm run versions:check`、`npm run deployment:verify` 和 `npm run deployment:test`。若机器可读值与本节或 README 不一致，立即停止并报告“发布文档与代码契约不同步”；不得自行选择其中一个版本继续，也不得使用浮动 `latest`。数据库必须精确创建为 `merchroute`（owner `merchroute_app`）和 `merchroute_n8n`（owner `merchroute_n8n`），不得交换角色。
+
 ## 成功条件
 
 只有同时满足以下条件才可报告部署成功：
