@@ -28,7 +28,7 @@
     "write-file-atomic": "^6.0.0"
   },
   "devDependencies": {
-    "@types/node": "^22.15.32",
+    "@types/node": "^26.2.0",
     "@types/pg": "^8.15.4",
     "@types/write-file-atomic": "^4.0.3",
     "tsx": "^4.20.3",
