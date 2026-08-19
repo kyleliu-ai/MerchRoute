@@ -35,6 +35,7 @@
     "test:e2e": "playwright test",
     "e2e:prepare": "tsx tests/e2e/prepare.ts",
     "e2e:server": "node scripts/start-e2e-server.mjs",
+    "docs:capture-ui": "node scripts/capture-readme-screenshots.mjs",
     "smoke:wb-presets": "node scripts/smoke-wb-presets.mjs",
     "smoke:wb-multistore-migration": "node scripts/smoke-wb-multistore-migration.mjs",
     "smoke:ozon-multistore-migration": "node scripts/smoke-ozon-multistore-migration.mjs",
