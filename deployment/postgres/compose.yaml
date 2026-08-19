@@ -1,0 +1,24 @@
+name: merchroute-postgres
+services:
+  postgres:
+    image: postgres:18.4-alpine
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?POSTGRES_ADMIN_PASSWORD is required}
+      MERCHROUTE_DB_PASSWORD: ${MERCHROUTE_DB_PASSWORD:?MERCHROUTE_DB_PASSWORD is required}
+      N8N_DB_PASSWORD: ${N8N_DB_PASSWORD:?N8N_DB_PASSWORD is required}
+    volumes:
+      - merchroute-postgres-data:/var/lib/postgresql/data
+      - ./init/01-databases.sh:/docker-entrypoint-initdb.d/01-databases.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  merchroute-postgres-data:
+    name: merchroute-postgres-data

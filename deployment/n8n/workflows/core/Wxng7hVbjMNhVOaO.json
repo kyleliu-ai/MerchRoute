@@ -1,0 +1,927 @@
+{
+  "id": "Wxng7hVbjMNhVOaO",
+  "name": "E001-v02-批量抠图-即梦",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "triggerOn": "folder",
+        "path": "__MERCHROUTE_DATA_ROOT__/01_monitorFolder/E001-抠图-监听",
+        "events": [
+          "addDir"
+        ],
+        "options": {
+          "awaitWriteFinish": true,
+          "ignored": ".staging",
+          "ignoreInitial": true,
+          "depth": 0,
+          "usePolling": true,
+          "ignoreMode": "contain"
+        }
+      },
+      "id": "0db4db58-c6ba-4ab1-8f66-2c5e01015948",
+      "name": "Local File Trigger",
+      "type": "n8n-nodes-base.localFileTrigger",
+      "typeVersion": 1,
+      "position": [
+        -960,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const __hiddenFs = require('fs');\nconst __hiddenPath = require('path');\nconst __HIDDEN_PS_TEMPLATE = \"$ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue';[Console]::OutputEncoding=New-Object System.Text.UTF8Encoding $false;$OutputEncoding=[Console]::OutputEncoding;function q([string]$a){if($null -eq $a){return '\\\"\\\"'}if($a.Length -eq 0){return '\\\"\\\"'}if($a -notmatch '[\\\\s\\\"]'){return $a}$r='\\\"';$b=0;foreach($c in $a.ToCharArray()){if($c -eq '\\\\'){$b++;continue}if($c -eq '\\\"'){$r+=('\\\\'*($b*2+1))+'\\\"';$b=0;continue}if($b -gt 0){$r+='\\\\'*$b;$b=0}$r+=$c}if($b -gt 0){$r+='\\\\'*($b*2)}return $r+'\\\"'};$sp=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__SPEC_PATH_B64__'));$o=[IO.Path]::GetTempFileName();$e=[IO.Path]::GetTempFileName();try{$s=Get-Content -LiteralPath $sp -Raw -Encoding UTF8|ConvertFrom-Json;$av=@();foreach($x in $s.args){$av+=[string]$x};$al=($av|%{q $_}) -join ' ';$p=Start-Process -FilePath ([string]$s.executable) -ArgumentList $al -WindowStyle Hidden -Wait -PassThru -RedirectStandardOutput $o -RedirectStandardError $e;$out=if(Test-Path -LiteralPath $o){[IO.File]::ReadAllText($o,[Text.Encoding]::UTF8)}else{''};$err=if(Test-Path -LiteralPath $e){[IO.File]::ReadAllText($e,[Text.Encoding]::UTF8)}else{''};if($out){[Console]::Out.Write($out)};if($err){[Console]::Error.Write($err)};exit $p.ExitCode}finally{Remove-Item -LiteralPath $o,$e -Force -ErrorAction SilentlyContinue;if(Test-Path -LiteralPath $sp){Remove-Item -LiteralPath $sp -Force -ErrorAction SilentlyContinue}}\";\nfunction __hiddenB64Utf8(value) { return Buffer.from(String(value ?? ''), 'utf8').toString('base64'); }\nfunction __hiddenShQuote(value) { const text = String(value ?? ''); return \"'\" + text.replace(/'/g, \"'\\\"'\\\"'\") + \"'\"; }\nfunction __useWindowsHiddenCommand() { return __hiddenPath.sep === '\\\\'; }\nfunction __buildHiddenCommand(executable, args) {\n  const __isWin = __useWindowsHiddenCommand();\n  const __tempRoot = __isWin ? '__MERCHROUTE_TEMP_DIR__' : '/tmp';\n  const dir = __hiddenPath.join(__tempRoot, 'n8n-hidden-command-specs');\n  __hiddenFs.mkdirSync(dir, { recursive: true });\n  const specPath = __hiddenPath.join(dir, 'cmd-' + Date.now() + '-' + Math.random().toString(36).slice(2, 10) + '.json');\n  const spec = { executable: String(executable), args: args.map((arg) => String(arg ?? '')), createdAt: new Date().toISOString(), version: 'n8n-hidden-cli-v1' };\n  __hiddenFs.writeFileSync(specPath, JSON.stringify(spec), 'utf8');\n  const psScript = __HIDDEN_PS_TEMPLATE.replace('__SPEC_PATH_B64__', __hiddenB64Utf8(specPath));\n  return 'powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -OutputFormat Text -EncodedCommand ' + Buffer.from(psScript, 'utf16le').toString('base64');\n}\nfunction __buildNodeCommand(args) {\n  const normalizedArgs = args.map((arg) => String(arg ?? ''));\n  if (__useWindowsHiddenCommand()) return __buildHiddenCommand('node', normalizedArgs);\n  return ['node', ...normalizedArgs.map(__hiddenShQuote)].join(' ');\n}\nfunction __buildNodeEvalCommand(scriptBase64, scriptArgs = []) {\n  return __buildNodeCommand(['-e', \"eval(Buffer.from(process.argv[1],'base64').toString('utf8'))\", scriptBase64, ...scriptArgs.map((arg) => String(arg ?? ''))]);\n}\nfunction __buildNodeGzipEvalCommand(scriptBase64, scriptArgs = []) {\n  return __buildNodeCommand(['-e', \"eval(require('zlib').gunzipSync(Buffer.from(process.argv[1],'base64')).toString('utf8'))\", scriptBase64, ...scriptArgs.map((arg) => String(arg ?? ''))]);\n}\n\nconst E001_WAIT_FOLDER_STABLE_SCRIPT_BASE64 = 'Y29uc3QgZnM9cmVxdWlyZSgnZnMnKSxwYXRoPXJlcXVpcmUoJ3BhdGgnKTtjb25zdCBmb2xkZXI9ZGVjb2RlVVJJQ29tcG9uZW50KHByb2Nlc3MuYXJndlsyXXx8JycpO2NvbnN0IG1heFdhaXRNcz1OdW1iZXIocHJvY2Vzcy5hcmd2WzNdfHwnNjAwMDAnKTtjb25zdCBpbnRlcnZhbE1zPU51bWJlcihwcm9jZXNzLmFyZ3ZbNF18fCcyMDAwJyk7Y29uc3Qgc3RhYmxlU2FtcGxlc1JlcXVpcmVkPU51bWJlcihwcm9jZXNzLmFyZ3ZbNV18fCcyJyk7Y29uc3QgYWxsb3dlZD1uZXcgU2V0KFsnLmpwZycsJy5qcGVnJywnLnBuZycsJy53ZWJwJ10pO2NvbnN0IHNsZWVwPShtcyk9Pm5ldyBQcm9taXNlKHI9PnNldFRpbWVvdXQocixtcykpO2Z1bmN0aW9uIG5vcm1hbGl6ZSh2YWx1ZSl7cmV0dXJuIFN0cmluZyh2YWx1ZXx8JycpLnJlcGxhY2UoL1xcL2csJy8nKTt9ZnVuY3Rpb24gc25hcHNob3QoKXtpZighZm9sZGVyKXRocm93IG5ldyBFcnJvcignZm9sZGVyUGF0aCBpcyByZXF1aXJlZCcpO2lmKCFmcy5leGlzdHNTeW5jKGZvbGRlcikpdGhyb3cgbmV3IEVycm9yKCdEaXJlY3RvcnkgZG9lcyBub3QgZXhpc3Q6ICcrZm9sZGVyKTtjb25zdCBzdGF0PWZzLnN0YXRTeW5jKGZvbGRlcik7aWYoIXN0YXQuaXNEaXJlY3RvcnkoKSl0aHJvdyBuZXcgRXJyb3IoJ1BhdGggaXMgbm90IGEgZGlyZWN0b3J5OiAnK2ZvbGRlcik7Y29uc3QgZW50cmllcz1mcy5yZWFkZGlyU3luYyhmb2xkZXIse3dpdGhGaWxlVHlwZXM6dHJ1ZX0pLmZpbHRlcihlPT5lLmlzRmlsZSgpKS5tYXAoZT0+ZS5uYW1lKS5maWx0ZXIobj0+YWxsb3dlZC5oYXMocGF0aC5leHRuYW1lKG4pLnRvTG93ZXJDYXNlKCkpKS5zb3J0KChhLGIpPT5hLmxvY2FsZUNvbXBhcmUoYiwnemgtQ04nLHtudW1lcmljOnRydWUsc2Vuc2l0aXZpdHk6J2Jhc2UnfSkpO2xldCB0b3RhbEJ5dGVzPTAsbGF0ZXN0TXRpbWVNcz0wO2NvbnN0IGZpbGVzPVtdO2Zvcihjb25zdCBuYW1lIG9mIGVudHJpZXMpe2NvbnN0IGZ1bGxQYXRoPXBhdGguam9pbihmb2xkZXIsbmFtZSk7Y29uc3Qgc3RhdD1mcy5zdGF0U3luYyhmdWxsUGF0aCk7dG90YWxCeXRlcys9c3RhdC5zaXplO2xhdGVzdE10aW1lTXM9TWF0aC5tYXgobGF0ZXN0TXRpbWVNcyxzdGF0Lm10aW1lTXMpO2ZpbGVzLnB1c2goe25hbWUsYnl0ZXM6c3RhdC5zaXplLG10aW1lTXM6TWF0aC5yb3VuZChzdGF0Lm10aW1lTXMpfSk7fXJldHVybntjb3VudDpmaWxlcy5sZW5ndGgsdG90YWxCeXRlcyxsYXRlc3RNdGltZU1zOk1hdGgucm91bmQobGF0ZXN0TXRpbWVNcyksZmlsZXN9O31hc3luYyBmdW5jdGlvbiBtYWluKCl7Y29uc3Qgc3RhcnRlZEF0PURhdGUubm93KCk7bGV0IHByZXZpb3VzPW51bGwsc3RhYmxlU2FtcGxlcz0wLGN1cnJlbnQ9bnVsbCxjaGVja3M9MDt3aGlsZShEYXRlLm5vdygpLXN0YXJ0ZWRBdDw9bWF4V2FpdE1zKXtjdXJyZW50PXNuYXBzaG90KCk7Y2hlY2tzKys7Y29uc3Qgc2FtZT1wcmV2aW91cyYmY3VycmVudC5jb3VudD09PXByZXZpb3VzLmNvdW50JiZjdXJyZW50LnRvdGFsQnl0ZXM9PT1wcmV2aW91cy50b3RhbEJ5dGVzJiZjdXJyZW50LmxhdGVzdE10aW1lTXM9PT1wcmV2aW91cy5sYXRlc3RNdGltZU1zO3N0YWJsZVNhbXBsZXM9c2FtZT9zdGFibGVTYW1wbGVzKzE6MTtpZihjdXJyZW50LmNvdW50PjAmJnN0YWJsZVNhbXBsZXM+PXN0YWJsZVNhbXBsZXNSZXF1aXJlZClicmVhaztwcmV2aW91cz1jdXJyZW50O2F3YWl0IHNsZWVwKGludGVydmFsTXMpO31jb25zdCB3YWl0ZWRNcz1EYXRlLm5vdygpLXN0YXJ0ZWRBdDtjb25zdCBvaz1jdXJyZW50JiZjdXJyZW50LmNvdW50PjAmJnN0YWJsZVNhbXBsZXM+PXN0YWJsZVNhbXBsZXNSZXF1aXJlZDtjb25zb2xlLmxvZyhKU09OLnN0cmluZ2lmeSh7b2ssZm9sZGVyOm5vcm1hbGl6ZShmb2xkZXIpLHdhaXRlZE1zLGNoZWNrcyxzdGFibGVTYW1wbGVzLGNvdW50OmN1cnJlbnQ/Y3VycmVudC5jb3VudDowLHRvdGFsQnl0ZXM6Y3VycmVudD9jdXJyZW50LnRvdGFsQnl0ZXM6MCxsYXRlc3RNdGltZU1zOmN1cnJlbnQ/Y3VycmVudC5sYXRlc3RNdGltZU1zOjAsZmlsZXM6Y3VycmVudD9jdXJyZW50LmZpbGVzLm1hcChmPT5mLm5hbWUpOltdfSkpO2lmKCFvaylwcm9jZXNzLmV4aXQoMik7fW1haW4oKS5jYXRjaChlcnJvcj0+e2NvbnNvbGUubG9nKEpTT04uc3RyaW5naWZ5KHtvazpmYWxzZSxmb2xkZXI6bm9ybWFsaXplKGZvbGRlciksZXJyb3I6ZXJyb3IubWVzc2FnZX0pKTtwcm9jZXNzLmV4aXQoMSk7fSk7';\n\nconst windowMs = 120 * 1000;\nconst now = Date.now();\nconst state = $getWorkflowStaticData('global');\n\nif (!state.p006BatchCutoutDedupe || typeof state.p006BatchCutoutDedupe !== 'object' || Array.isArray(state.p006BatchCutoutDedupe)) {\n  state.p006BatchCutoutDedupe = {};\n}\n\nconst recent = state.p006BatchCutoutDedupe;\nconst cutoff = now - windowMs;\nfor (const [key, seenAt] of Object.entries(recent)) {\n  if (!Number.isFinite(seenAt) || seenAt < cutoff) {\n    delete recent[key];\n  }\n}\n\nfunction normalizePath(value) {\n  let result = String(value || '').trim().replace(/\\\\/g, '/');\n  while (result.length > 1 && result.endsWith('/')) result = result.slice(0, -1);\n  return result;\n}\n\nfunction dirname(value) {\n  const normalized = normalizePath(value);\n  const index = normalized.lastIndexOf('/');\n  return index > 0 ? normalized.slice(0, index) : normalized;\n}\n\nfunction looksLikeFile(value) {\n  const lastPart = normalizePath(value).split('/').pop() || '';\n  return /\\.[A-Za-z0-9]{1,8}$/.test(lastPart);\n}\n\nconst output = [];\nfor (const [index, item] of $input.all().entries()) {\n  const rawPath = normalizePath(item.json?.path || item.json?.filePath || item.json?.folderPath || '');\n  if (!rawPath) continue;\n\n  const event = String(item.json?.event || item.json?.eventName || '').toLowerCase();\n  const productFolderPath = event.includes('adddir') || (!event.includes('add') && !looksLikeFile(rawPath))\n    ? rawPath\n    : dirname(rawPath);\n  const key = productFolderPath.toLowerCase();\n  const folderStableCommand = __buildNodeEvalCommand(E001_WAIT_FOLDER_STABLE_SCRIPT_BASE64, [encodeURIComponent(productFolderPath), '60000', '2000', '2']);\n\n  if (recent[key] && now - recent[key] < windowMs) {\n    continue;\n  }\n\n  recent[key] = now;\n  output.push({\n    json: {\n      ...item.json,\n      rawTriggerPath: rawPath,\n      productFolderPath,\n      fileSelector: productFolderPath + '/*',\n      folderStableCommand,\n      dedupeKey: key,\n      dedupeWindowSeconds: Math.round(windowMs / 1000),\n    },\n    pairedItem: { item: index },\n  });\n}\n\nreturn output;"
+      },
+      "id": "9b9bf43f-e68d-4368-ba64-c4ec6f8f92d7",
+      "name": "Dedupe Folder Path",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -736,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "fileSelector": "={{ $json.fileSelector }}",
+        "options": {}
+      },
+      "id": "9c51d5ac-d038-47d8-a97a-ed760eaf6413",
+      "name": "Read Product Folder Files",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        -64,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst trigger = $('Dedupe Folder Path').first().json || {};\nconst productFolderPath = trigger.productFolderPath;\n\nif (!productFolderPath) {\n  throw new Error('productFolderPath is required from Dedupe Folder Path.');\n}\n\nconst allowedImageExtensions = new Set(['jpg', 'jpeg', 'png', 'webp']);\nconst imageFiles = [];\n\nfunction normalizePath(value) {\n  let result = String(value || '').trim().replace(/\\\\/g, '/');\n  while (result.length > 1 && result.endsWith('/')) result = result.slice(0, -1);\n  return result;\n}\n\nfunction joinPath(folder, fileName) {\n  const normalizedFolder = normalizePath(folder);\n  const normalizedFileName = String(fileName || '').replace(/^[\\\\/]+/, '');\n  return normalizedFolder ? normalizedFolder + '/' + normalizedFileName : normalizedFileName;\n}\n\nfunction folderBaseName(value) {\n  return normalizePath(value).split('/').filter(Boolean).pop() || 'product';\n}\n\nfunction getFileName(item) {\n  return String(item.json?.fileName || item.binary?.data?.fileName || '');\n}\n\nfunction getExtension(fileName, item) {\n  const binaryExt = String(item.binary?.data?.fileExtension || '').toLowerCase();\n  if (binaryExt) return binaryExt;\n  const dotIndex = fileName.lastIndexOf('.');\n  return dotIndex > -1 ? fileName.slice(dotIndex + 1).toLowerCase() : '';\n}\n\nfunction baseNameWithoutExtension(fileName) {\n  const dotIndex = fileName.lastIndexOf('.');\n  return dotIndex > 0 ? fileName.slice(0, dotIndex) : fileName;\n}\n\nfor (const [index, item] of items.entries()) {\n  const fileName = getFileName(item);\n  if (!fileName || !item.binary?.data) continue;\n\n  const extension = getExtension(fileName, item);\n  if (allowedImageExtensions.has(extension)) {\n    imageFiles.push({ item, index, fileName, extension });\n  }\n}\n\nconst productName = folderBaseName(productFolderPath).trim();\n\nif (imageFiles.length < 1) {\n  throw new Error('产品目录中至少需要 1 张图片，支持 .jpg/.jpeg/.png/.webp。');\n}\n\nconst collator = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' });\nimageFiles.sort((a, b) => collator.compare(a.fileName, b.fileName));\n\nconst mimeByExtension = {\n  jpg: 'image/jpeg',\n  jpeg: 'image/jpeg',\n  png: 'image/png',\n  webp: 'image/webp',\n};\n\nfunction taskIdFromIndex(index) {\n  const value = String(index + 1);\n  return value.length < 2 ? value.padStart(2, '0') : value;\n}\n\nconst imageTasks = imageFiles.map((file, orderIndex) => {\n  const binaryData = file.item.binary?.data || {};\n  const mimeType = binaryData.mimeType || mimeByExtension[file.extension] || 'application/octet-stream';\n  const sourceBaseName = baseNameWithoutExtension(file.fileName);\n  const sourceDirectory = normalizePath(binaryData.directory || productFolderPath);\n  const sourceFilePath = joinPath(sourceDirectory, file.fileName);\n  const byteValue = Number(binaryData.bytes);\n  return {\n    taskId: taskIdFromIndex(orderIndex),\n    sourceFileName: file.fileName,\n    sourceBaseName,\n    sourceExtension: file.extension,\n    mimeType,\n    bytes: Number.isFinite(byteValue) && byteValue >= 0 ? byteValue : 0,\n    sourceFilePath,\n  };\n});\n\nreturn [{\n  json: {\n    productName,\n    productFolderPath,\n    imageCount: imageTasks.length,\n    imageTasks,\n    sourceImages: imageTasks.map(({ sourceFilePath, ...metadata }) => metadata),\n  },\n}];"
+      },
+      "id": "a98e711c-e3c2-4020-ba56-61fb4d581db5",
+      "name": "Parse Product Folder",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        160,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "df0d53f3-f752-4f91-8f5e-19306f160cc9",
+              "name": "downloadFatherFolder",
+              "value": "={{ $json.downloadFatherFolder }}",
+              "type": "string"
+            },
+            {
+              "id": "30af4e43-6c7b-4c68-a8d8-6237ec867661",
+              "name": "productName",
+              "value": "={{ $json.productName }}",
+              "type": "string"
+            },
+            {
+              "id": "c4361b79-5211-48f2-ad3b-7cffcc3a28b5",
+              "name": "SKU",
+              "value": "={{ $json.SKU }}",
+              "type": "string"
+            },
+            {
+              "id": "da11c087-d7d7-453d-ac8a-12408bcdd4f8",
+              "name": "productFolderPath",
+              "value": "={{ $json.productFolderPath }}",
+              "type": "string"
+            },
+            {
+              "id": "6b715237-e7e8-43aa-a789-c8285abb5c4e",
+              "name": "imageCount",
+              "value": "={{ $json.imageCount }}",
+              "type": "number"
+            },
+            {
+              "id": "04b65817-25cd-4aeb-97f6-8baa06373e57",
+              "name": "imageTasks",
+              "value": "={{ $json.imageTasks }}",
+              "type": "array"
+            },
+            {
+              "id": "7f3d7141-c086-4248-b830-9deeec891db1",
+              "name": "sourceImages",
+              "value": "={{ $json.sourceImages }}",
+              "type": "array"
+            },
+            {
+              "id": "a0e1e905-c988-419a-9237-e6411fe7553d",
+              "name": "prompt",
+              "value": "=本次任务的首要目标是：先精准抠出商品主体，再生成纯白背景电商图；如果参考图中存在人物、脚部、地面、场景或拼图内容，必须全部删除，只保留产品本体。请先对上传的 {{$json.productName}} 参考图执行精准抠图处理，只提取并保留商品主体本身，删除原背景、场景、地面、拼图排版、人物、手部、脚部、腿部、阴影干扰和所有无关内容，然后将背景统一替换为纯白背景。无论参考图中包含单张产品图、拼图、多角度展示图或上脚展示图，都必须仅保留同一款产品主体，不保留人物穿着部分和任何场景元素。必须严格参考原图中的商品外观，保持产品的颜色、结构、轮廓、比例、材质、表面纹理、缝线、鞋带、按键、接口、孔位、装饰细节和整体造型完全一致，不允许改变产品，不允许新增、删减或修改任何细节、文字、图案、配件或功能结构。要求最终画面中仅展示一个完整清晰的产品主体，主体居中，边缘干净利落，抠图自然，无残留背景，无场景痕迹，无人物元素，不裁切，不变形，不模糊，生成标准电商纯白背景高清产品图。\n负面提示词:未抠图，抠图不干净，残留原背景，保留场景，保留地面，保留人物，保留脚部，保留腿部，保留手部，拼图版式，多角度拼接，多个产品，重复产品，灰色背景，渐变背景，杂乱背景，非纯白背景，场景背景，颜色改变，产品变形，比例错误，细节丢失，材质错误，边缘毛糙，阴影过重，反光过强，模糊，低清晰度，噪点，过度锐化，过度美化，额外配件，额外文字，额外图案，额外标识，水印，裁切，不完整展示",
+              "type": "string"
+            },
+            {
+              "id": "5ad659be-470f-4e4c-aa78-8fa24e435fd1",
+              "name": "model",
+              "value": "即梦4.5",
+              "type": "string"
+            },
+            {
+              "id": "c325ace6-66eb-4890-8d6e-16a4f50b3485",
+              "name": "ratio",
+              "value": "1:1",
+              "type": "string"
+            },
+            {
+              "id": "f63954f9-2100-4723-b446-f55f6e7655d7",
+              "name": "resolution",
+              "value": "2k",
+              "type": "string"
+            },
+            {
+              "id": "b641c91c-0788-4e02-9f75-601f7438e65c",
+              "name": "concurrent",
+              "value": 8,
+              "type": "number"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "7574b75e-de84-4966-af31-e7bde91249ce",
+      "name": "setParameter",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        832,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json || {};\n\nconst productName = String(input.productName || '').trim();\nif (!productName) throw new Error('productName is required.');\n\nconst imageTasks = Array.isArray(input.imageTasks) ? input.imageTasks : [];\nif (imageTasks.length < 1) {\n  throw new Error('imageTasks must contain at least 1 image.');\n}\n\nconst concurrent = Math.max(1, Math.floor(Number(input.concurrent || 8)));\nconst modelInput = String(input.model || '即梦4.5').trim();\nconst modelApiName = modelInput === '即梦4.5' ? 'jimeng-4.5' : modelInput;\nconst basePrompt = String(input.prompt || '').trim();\nif (!basePrompt) throw new Error('setParameter.prompt is required.');\n\nreturn imageTasks.map((task, index) => {\n  const taskId = task.taskId || String(index + 1).padStart(2, '0');\n  const imageUrl = String(task.imageUrl || '').trim();\n  if (!/^https?:\\/\\//i.test(imageUrl)) {\n    throw new Error('imageUrl is missing or invalid for task ' + taskId);\n  }\n  const viewPrompt = basePrompt.replace(/\\{\\{\\s*\\$json\\.productName\\s*\\}\\}/g, productName);\n  return {\n    json: {\n      ...input,\n      concurrent,\n      modelApiName,\n      taskId,\n      originalIndex: index,\n      sourceFileName: task.sourceFileName,\n      sourceBaseName: task.sourceBaseName,\n      sourceExtension: task.sourceExtension,\n      folderPath: input.productFolderPath,\n      viewPrompt,\n      imageUrls: [imageUrl],\n    },\n    pairedItem: { item: 0 },\n  };\n});"
+      },
+      "id": "c3aa8674-c611-451a-87bd-3331d515db2b",
+      "name": "Build Jimeng Tasks",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -944,
+        416
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:8000/v1/images/generations",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: $json.modelApiName, prompt: $json.viewPrompt, images: $json.imageUrls, ratio: $json.ratio, resolution: $json.resolution }) }}",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": "={{ Math.max(1, Number($json.concurrent || 8)) }}"
+            }
+          },
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 60000
+        }
+      },
+      "id": "65cc1712-f9fd-4c16-90f0-877b3d47da3f",
+      "name": "Generate Cutout Image",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -672,
+        416
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const generatedItems = $input.all();\n\nfunction cleanFilePart(value) {\n  return String(value || '')\n    .trim()\n    .replace(/[<>:\"/\\\\|?*\\x00-\\x1F]/g, '_')\n    .replace(/[. ]+$/g, '')\n    || 'image';\n}\n\nfunction isUrl(value) {\n  return typeof value === 'string' && /^https?:\\/\\//i.test(value.trim());\n}\n\nfunction collectUrls(json) {\n  const urls = [];\n  const pushUrl = (value) => {\n    if (isUrl(value)) urls.push(value.trim());\n  };\n  const inspectEntry = (entry) => {\n    if (!entry) return;\n    if (typeof entry === 'string') {\n      pushUrl(entry);\n      return;\n    }\n    if (typeof entry !== 'object') return;\n    pushUrl(entry.url);\n    pushUrl(entry.image_url);\n    pushUrl(entry.output);\n  };\n  if (Array.isArray(json?.data)) for (const entry of json.data) inspectEntry(entry);\n  else inspectEntry(json?.data);\n  if (Array.isArray(json?.urls)) for (const entry of json.urls) inspectEntry(entry);\n  if (Array.isArray(json?.image_urls)) for (const entry of json.image_urls) inspectEntry(entry);\n  pushUrl(json?.url);\n  pushUrl(json?.image_url);\n  pushUrl(json?.output);\n  return [...new Set(urls)];\n}\n\nfunction normalizePath(value) {\n  let result = String(value || '').trim().replace(/\\\\/g, '/');\n  while (result.length > 1 && result.endsWith('/')) result = result.slice(0, -1);\n  return result;\n}\n\nfunction basename(value) {\n  return normalizePath(value).split('/').filter(Boolean).pop() || '';\n}\n\nfunction variantFileName(productName, taskId, variantIndex) {\n  const base = cleanFilePart(productName);\n  const normalizedTaskId = String(taskId || '').padStart(2, '0');\n  const variantId = String(variantIndex + 1).padStart(2, '0');\n  return base + '-' + normalizedTaskId + '-' + variantId + '.png';\n}\n\nconst firstResult = generatedItems[0]?.json || {};\nconst sourceProductFolderPath = normalizePath(firstResult.folderPath || firstResult.productFolderPath || '');\nconst sourceProductFolderName = basename(sourceProductFolderPath);\nconst SKU = String(firstResult.SKU || '').trim();\nconst namingProductName = String(firstResult.productName || '').trim();\nconst executionId = String($execution.id || '').trim();\nif (!/^\\d{7}$/.test(SKU)) throw new Error('n8n_setParameter_xxx.json 的 SKU 必须是保留前导零的 7 位数字。');\nif (!namingProductName) throw new Error('n8n_setParameter_xxx.json 的 productName 不能为空。');\nif (!/^\\d+$/.test(executionId)) throw new Error('当前工作流 executionId 无效。');\nconst productFolderName = SKU + '-' + cleanFilePart(namingProductName) + '-' + executionId;\nconst downloadFatherFolder = normalizePath(firstResult.downloadFatherFolder || '');\nconst concurrent = Math.max(1, Math.floor(Number(firstResult.concurrent || 8)));\n\nif (!sourceProductFolderPath) throw new Error('source product folder path is required.');\nif (!sourceProductFolderName) throw new Error('source product folder name is required.');\nif (!downloadFatherFolder) throw new Error('setParameter.downloadFatherFolder is required.');\n\nconst outputFolderPath = downloadFatherFolder + '/' + productFolderName;\nconst batchItems = [];\nconst failedTasks = [];\nlet successTaskCount = 0;\n\nfor (const [taskIndex, item] of generatedItems.entries()) {\n  const task = item.json || {};\n  const urls = collectUrls(task);\n  const taskId = task.taskId || String(taskIndex + 1).padStart(2, '0');\n\n  if (!task.ok || urls.length < 1) {\n    failedTasks.push({\n      taskId,\n      sourceFileName: task.sourceFileName || '',\n      error: task.finalFailureReason || task.retryReason || task.message || 'Jimeng task did not return image URLs after retry',\n      httpCode: task.httpCode || '',\n      retryAttempt: task.retryAttempt || 0,\n    });\n    continue;\n  }\n\n  successTaskCount += 1;\n  for (const [variantIndex, fileUrl] of urls.entries()) {\n    batchItems.push({\n      fileUrl,\n      folderPath: outputFolderPath,\n      fileName: variantFileName(namingProductName, taskId, variantIndex),\n      mimeType: 'image/png',\n      fileKind: 'image',\n      taskId,\n      variantId: String(variantIndex + 1).padStart(2, '0'),\n      sourceFileName: task.sourceFileName || '',\n    });\n  }\n}\n\nreturn [{\n  json: {\n    ok: failedTasks.length === 0,\n    SKU,\n    productName: namingProductName,\n    n8nExecutionId: executionId,\n    sourceProductFolderPath,\n    sourceProductFolderName,\n    productFolderName,\n    downloadFatherFolder,\n    folderPath: outputFolderPath,\n    outputFolderPath,\n    supportFolderPath: sourceProductFolderPath,\n    generatedTaskCount: generatedItems.length,\n    successTaskCount,\n    failedTaskCount: failedTasks.length,\n    downloadItemCount: batchItems.length,\n    hasDownloadItems: batchItems.length > 0,\n    failedTasks,\n    batchItems,\n    concurrency: concurrent,\n    concurrent,\n  },\n}];"
+      },
+      "id": "e09e4ca0-b61a-41d0-80bf-8f833ee8bff1",
+      "name": "Build Download Batch",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        416
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "KmZ1AibtVGxzCgzc",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/KmZ1AibtVGxzCgzc",
+          "cachedResultName": "S001-Url文件下载-v02"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "batchItems": "={{ $json.batchItems }}",
+            "concurrency": "={{ $json.concurrency }}",
+            "supportFolderPath": "={{ $json.supportFolderPath }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "fileUrl",
+              "displayName": "fileUrl",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": true
+            },
+            {
+              "id": "folderPath",
+              "displayName": "folderPath",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": true
+            },
+            {
+              "id": "fileName",
+              "displayName": "fileName",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": true
+            },
+            {
+              "id": "contentText",
+              "displayName": "contentText",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": true
+            },
+            {
+              "id": "mimeType",
+              "displayName": "mimeType",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": true
+            },
+            {
+              "id": "fileKind",
+              "displayName": "fileKind",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": true
+            },
+            {
+              "id": "batchItems",
+              "displayName": "batchItems",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "array",
+              "removed": false
+            },
+            {
+              "id": "concurrency",
+              "displayName": "concurrency",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "number",
+              "removed": false
+            },
+            {
+              "id": "supportFolderPath",
+              "displayName": "supportFolderPath",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "9a8d05a0-b1d6-4c15-bcec-9059c6daca07",
+      "name": "Call 'S001-Url文件下载-v02'",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        1120,
+        416
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## E001-v02-批量抠图-即梦\n\n### 主要功能\n监听产品采集父目录的新子目录，读取新增子目录中的所有产品图片，调用 S005 将图片批量上传到 SiliconFlow 获取 URL 后提交给即梦 4.5 执行抠图/白底处理，并把成功生成的图片批量下载到指定输出父目录下的同名产品子目录。\n\n### 输入与运行参数\n- 图片文件：支持 `.jpg/.jpeg/.png/.webp`，数量不限，但至少 1 张。\n- 调用子工作流 `S016-JSON文件-解析`，在源图文件夹中递归查找最新的 `n8n_setParameter*.json`。\n- `productName`：优先读取 JSON 的 `data.productName`；无匹配文件、解析失败或字段为空时使用源图文件夹名。\n- `downloadFatherFolder`：优先读取 JSON 的 `data.downloadFatherFolder`；无可用值时使用 `__MERCHROUTE_DATA_ROOT__\\02_GenerateFolder\\E001-抠图-下载`。\n- `setParameter` 继续配置 `prompt`、`model`、`ratio`、`resolution`、`concurrent`。\n\n### S016 调用参数\n- `folderPath`：来自 `Local File Trigger.path`。\n- `filePrefix`：`n8n_setParameter`。\n- `fileExtension`：`json`。\n- `returnMode`：`latest`。\n\n### 目录稳定等待\n- 新增子目录触发后，会先等待图片文件数量和总大小连续稳定，再读取目录，避免复制未完成时只处理部分图片。\n- 当前策略：最多等待 60 秒，每 2 秒检查一次，连续 2 次稳定后继续。\n\n### 并发与异常处理\n- `setParameter.concurrent` 控制生图和下载并发，当前默认 `8`。\n- SiliconFlow 批量上传并发固定为 `5`；任一图片上传失败时整批停止，不调用即梦。\n- 每张图片执行一次即梦图生图任务，任务失败不会影响其它任务。\n- 即梦首次请求失败、业务失败或返回空 URL 时，仅该任务重试 1 次，并继续使用原 SiliconFlow 图片 URL。\n- 重试后仍失败的任务会进入失败清单，已成功生成的图片仍会继续下载。\n\n### 输出\n- 输出目录：`downloadFatherFolder/原产品目录名-时间戳`。\n- 单结果文件名：`原文件名-任务id.png`。\n- 多结果文件名：`原文件名-任务id-结果序号.png`。\n- 下载由子工作流 `S001-Url文件下载-v02` 执行；全部生图失败时不会调用下载子工作流。",
+        "height": 820,
+        "width": 680,
+        "color": 4
+      },
+      "id": "048e3873-d191-4c30-88e4-8225fe587836",
+      "name": "Workflow Summary Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -1728,
+        -112
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst sourceItems = $('Build Jimeng Tasks').all();\n\nfunction isUrl(value) {\n  return typeof value === 'string' && /^https?:\\/\\//i.test(value.trim());\n}\n\nfunction extractUrls(body) {\n  const urls = [];\n  const add = (value) => {\n    if (!value) return;\n    if (typeof value === 'string') {\n      if (isUrl(value)) urls.push(value.trim());\n      return;\n    }\n    if (typeof value !== 'object') return;\n    add(value.url);\n    add(value.image_url);\n    add(value.output);\n    if (value.b64_json) urls.push('data:image/png;base64,' + value.b64_json);\n  };\n  if (Array.isArray(body?.data)) for (const row of body.data) add(row);\n  else add(body?.data);\n  if (Array.isArray(body?.urls)) for (const row of body.urls) add(row);\n  if (Array.isArray(body?.images)) for (const row of body.images) add(row);\n  add(body?.url);\n  add(body?.image_url);\n  add(body?.output);\n  return [...new Set(urls.filter(Boolean))];\n}\n\nfunction sanitizeRaw(body) {\n  if (!body || typeof body !== 'object') return body || {};\n  const raw = { ...body };\n  if (Array.isArray(raw.images)) raw.images = '[omitted ' + raw.images.length + ' input image URL(s)]';\n  if (Array.isArray(raw.imageUrls)) raw.imageUrls = '[omitted ' + raw.imageUrls.length + ' input image URL(s)]';\n  if (Array.isArray(raw.imageUrls)) raw.imageUrls = '[omitted ' + raw.imageUrls.length + ' input image URL(s)]';\n  return raw;\n}\n\nfunction errorMessage(body) {\n  const candidates = [\n    body?.error?.message,\n    body?.error,\n    body?.message,\n    body?.description,\n    body?.cause?.message,\n  ];\n  const message = candidates.find((value) => typeof value === 'string' && value.trim());\n  return message ? message.trim() : '';\n}\n\nfunction getRetryReason(body, urls) {\n  const message = errorMessage(body);\n  const httpCode = body?.httpCode || body?.statusCode || body?.status || '';\n  if (httpCode && Number(httpCode) >= 400) return 'request_failed_http_' + httpCode;\n  if (body?.code !== undefined && body.code !== 0) return 'business_error_code_' + body.code;\n  if (/upload|上传|bad gateway|gateway|timeout|timed out|ECONN|fetch failed|socket|network|ENOTFOUND|ECONNRESET/i.test(message)) return 'request_or_upload_failed';\n  if (body?.data === null) return 'empty_data';\n  if (!urls.length) return 'empty_image_urls';\n  return '';\n}\n\nfunction buildResult(body, source, index, retryInfo = {}) {\n  const urls = extractUrls(body);\n  const reason = retryInfo.retryReason || getRetryReason(body, urls);\n  const success = !reason && urls.length > 0;\n  return {\n    ...source,\n    imageUrls: undefined,\n    originalIndex: source.originalIndex ?? index,\n    success,\n    ok: success,\n    taskId: source.taskId || String(index + 1).padStart(2, '0'),\n    sourceFileName: source.sourceFileName || '',\n    count: urls.length,\n    data: urls.map((url) => ({ url })),\n    image_urls: urls,\n    urls,\n    retryAttempt: retryInfo.retryAttempt || 0,\n    retryReason: reason,\n    message: errorMessage(body),\n    httpCode: body?.httpCode || body?.statusCode || body?.status || '',\n    raw: sanitizeRaw(body),\n  };\n}\n\nconst finalResults = [];\nconst retryItems = [];\n\nfor (let index = 0; index < items.length; index++) {\n  const body = items[index]?.json || {};\n  const source = sourceItems[index]?.json || {};\n  const urls = extractUrls(body);\n  const reason = getRetryReason(body, urls);\n\n  finalResults[index] = buildResult(body, source, index, { retryAttempt: 0, retryReason: reason });\n  if (reason) {\n    retryItems.push({\n      ...source,\n      originalIndex: source.originalIndex ?? index,\n      retryAttempt: 1,\n      retryReason: reason,\n      firstRaw: sanitizeRaw(body),\n    });\n  }\n}\n\nreturn [{\n  json: {\n    totalCount: items.length,\n    retryCount: retryItems.length,\n    hasRetryItems: retryItems.length > 0,\n    finalResults,\n    retryItems,\n  },\n}];"
+      },
+      "name": "Build Retry Plan",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -448,
+        416
+      ],
+      "id": "c757efb9-c955-4b56-9ccf-040d0fc10192"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "retry-items-present",
+              "leftValue": "={{ $json.hasRetryItems }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Has Retry Items",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -224,
+        416
+      ],
+      "id": "31dfcd26-5faf-4744-9762-2a6821731c0c"
+    },
+    {
+      "parameters": {
+        "jsCode": "const root = $input.first()?.json || {};\nconst retryItems = Array.isArray(root.retryItems) ? root.retryItems : [];\nreturn retryItems.map((item, index) => ({\n  json: item,\n  pairedItem: { item: index },\n}));"
+      },
+      "name": "Expand Retry Items",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        0,
+        336
+      ],
+      "id": "a7a3516a-93bb-4e58-8332-2eff38dd0bf0"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:8000/v1/images/generations",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: $json.modelApiName, prompt: $json.viewPrompt, images: $json.imageUrls, ratio: $json.ratio, resolution: $json.resolution }) }}",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": "={{ Math.max(1, Number($json.concurrent || 8)) }}"
+            }
+          },
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 120000
+        }
+      },
+      "name": "Generate Cutout Image Retry Once",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        224,
+        336
+      ],
+      "id": "a7260263-4a55-4a77-ac6f-4121f7a3efb3",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const inputItems = $input.all();\nconst plan = $('Build Retry Plan').first().json || {};\nconst finalResults = Array.isArray(plan.finalResults) ? plan.finalResults.slice() : [];\nlet retrySourceItems = [];\ntry {\n  retrySourceItems = $('Expand Retry Items').all();\n} catch (error) {\n  retrySourceItems = [];\n}\n\nfunction isUrl(value) {\n  return typeof value === 'string' && /^https?:\\/\\//i.test(value.trim());\n}\n\nfunction extractUrls(body) {\n  const urls = [];\n  const add = (value) => {\n    if (!value) return;\n    if (typeof value === 'string') {\n      if (isUrl(value)) urls.push(value.trim());\n      return;\n    }\n    if (typeof value !== 'object') return;\n    add(value.url);\n    add(value.image_url);\n    add(value.output);\n    if (value.b64_json) urls.push('data:image/png;base64,' + value.b64_json);\n  };\n  if (Array.isArray(body?.data)) for (const row of body.data) add(row);\n  else add(body?.data);\n  if (Array.isArray(body?.urls)) for (const row of body.urls) add(row);\n  if (Array.isArray(body?.images)) for (const row of body.images) add(row);\n  add(body?.url);\n  add(body?.image_url);\n  add(body?.output);\n  return [...new Set(urls.filter(Boolean))];\n}\n\nfunction sanitizeRaw(body) {\n  if (!body || typeof body !== 'object') return body || {};\n  const raw = { ...body };\n  if (Array.isArray(raw.images)) raw.images = '[omitted ' + raw.images.length + ' input image URL(s)]';\n  if (Array.isArray(raw.imageUrls)) raw.imageUrls = '[omitted ' + raw.imageUrls.length + ' input image URL(s)]';\n  return raw;\n}\n\nfunction errorMessage(body) {\n  const candidates = [\n    body?.error?.message,\n    body?.error,\n    body?.message,\n    body?.description,\n    body?.cause?.message,\n  ];\n  const message = candidates.find((value) => typeof value === 'string' && value.trim());\n  return message ? message.trim() : '';\n}\n\nfunction getRetryReason(body, urls) {\n  const message = errorMessage(body);\n  const httpCode = body?.httpCode || body?.statusCode || body?.status || '';\n  if (httpCode && Number(httpCode) >= 400) return 'request_failed_http_' + httpCode;\n  if (body?.code !== undefined && body.code !== 0) return 'business_error_code_' + body.code;\n  if (/upload|上传|bad gateway|gateway|timeout|timed out|ECONN|fetch failed|socket|network|ENOTFOUND|ECONNRESET/i.test(message)) return 'request_or_upload_failed';\n  if (body?.data === null) return 'empty_data';\n  if (!urls.length) return 'empty_image_urls';\n  return '';\n}\n\nfunction buildRetryResult(body, retrySource) {\n  const urls = extractUrls(body);\n  const reason = getRetryReason(body, urls);\n  const success = !reason && urls.length > 0;\n  const previous = retrySource.firstRaw || {};\n  return {\n    ...retrySource,\n    imageUrls: undefined,\n    originalIndex: retrySource.originalIndex,\n    success,\n    ok: success,\n    count: urls.length,\n    data: urls.map((url) => ({ url })),\n    image_urls: urls,\n    urls,\n    retryAttempt: 1,\n    retryReason: retrySource.retryReason || '',\n    finalFailureReason: success ? '' : reason,\n    message: errorMessage(body) || (success ? '' : previous.message || 'Retry finished without image URLs'),\n    httpCode: body?.httpCode || body?.statusCode || body?.status || '',\n    firstRaw: previous,\n    raw: sanitizeRaw(body),\n  };\n}\n\nfor (let i = 0; i < inputItems.length; i++) {\n  const retrySource = retrySourceItems[i]?.json;\n  if (!retrySource || retrySource.originalIndex === undefined) continue;\n  finalResults[retrySource.originalIndex] = buildRetryResult(inputItems[i]?.json || {}, retrySource);\n}\n\nreturn finalResults\n  .map((result, index) => ({ result, index }))\n  .filter((row) => row.result)\n  .sort((a, b) => a.index - b.index)\n  .map((row) => ({\n    json: row.result,\n    pairedItem: { item: row.index },\n  }));"
+      },
+      "name": "Merge Generation Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        416
+      ],
+      "id": "f4d9989e-86a3-4aef-a19c-a23236ad0943"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "download-items-present",
+              "leftValue": "={{ $json.hasDownloadItems }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Has Download Items",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        896,
+        416
+      ],
+      "id": "78b2b8bb-b6f3-4c69-b052-cbaefb6f2bf2"
+    },
+    {
+      "parameters": {
+        "command": "={{ $json.folderStableCommand }}"
+      },
+      "name": "Wait Folder Stable",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        -512,
+        160
+      ],
+      "id": "f03c5589-78f3-4b88-b386-99f10b898115"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first();\nconst json = input?.json || {};\nconst stdout = String(json.stdout || '').trim();\nconst stderr = String(json.stderr || '').trim();\n\nfunction parseLastJson(text) {\n  const lines = text.split(/\\r?\\n/).map((line) => line.trim()).filter(Boolean).reverse();\n  for (const line of lines) {\n    try {\n      const parsed = JSON.parse(line);\n      if (parsed && typeof parsed === 'object') return parsed;\n    } catch (error) {}\n  }\n  return null;\n}\n\nconst summary = parseLastJson(stdout);\nif (!summary || summary.ok !== true) {\n  throw new Error('目录稳定等待失败：' + (summary?.error || stderr || stdout || 'no summary'));\n}\n\nconst trigger = $('Dedupe Folder Path').first().json || {};\nreturn [{\n  json: {\n    ...trigger,\n    folderStable: true,\n    folderStableWaitedMs: summary.waitedMs,\n    folderStableChecks: summary.checks,\n    folderStableImageCount: summary.count,\n    folderStableTotalBytes: summary.totalBytes,\n    folderStableFiles: summary.files,\n  },\n}];"
+      },
+      "name": "Parse Folder Stable Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -288,
+        160
+      ],
+      "id": "1338ecce-787a-42e3-8c42-e8c51439dfc8"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "gDMR3Mxnm9dKQJtO",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/gDMR3Mxnm9dKQJtO",
+          "cachedResultName": "S016-JSON文件-解析"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "folderPath": "={{ $('Local File Trigger').first().json.path }}",
+            "filePrefix": "n8n_setParameter",
+            "fileExtension": "json",
+            "returnMode": "latest"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "folderPath",
+              "displayName": "folderPath",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "filePrefix",
+              "displayName": "filePrefix",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "fileExtension",
+              "displayName": "fileExtension",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "returnMode",
+              "displayName": "returnMode",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "c48cf3da-2a3a-4e22-bc37-94d4f7e01a16",
+      "name": "Call 'S016-JSON文件-解析'",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        384,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const parsed = $('Parse Product Folder').first()?.json || {};\nconst lookup = $input.first()?.json || {};\nconst defaultDownloadFatherFolder = \"G:\\\\01_MerchRoute\\\\02_GenerateFolder\\\\E001-抠图-下载\";\n\nfunction cleanString(value) {\n  return typeof value === 'string' ? value.trim() : '';\n}\n\nif (lookup.success !== true || !lookup.data || typeof lookup.data !== 'object' || Array.isArray(lookup.data)) {\n  throw new Error('读取 n8n_setParameter 配置失败：' + String(lookup.message || lookup.errorType || 'S016 data is missing'));\n}\n\nconst data = lookup.data;\nconst configFile = lookup.latestFile?.filePath || lookup.latestFile?.fileName || 'n8n_setParameter_xxx.json';\nconst SKU = cleanString(data.SKU);\nconst productName = cleanString(data.productName);\nif (!/^\\d{7}$/.test(SKU)) throw new Error(configFile + ' 的 SKU 必须是保留前导零的 7 位数字。');\nif (!productName) throw new Error(configFile + ' 的 productName 不能为空。');\n\nconst downloadFatherFolder = cleanString(data.downloadFatherFolder) || defaultDownloadFatherFolder;\nreturn [{ json: { ...parsed, SKU, productName, downloadFatherFolder } }];"
+      },
+      "id": "1bf60bd4-8c47-48db-8228-2da2ee76934f",
+      "name": "Resolve Product Parameters",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        608,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "5fKlIwJWfXJM1y4E",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/5fKlIwJWfXJM1y4E",
+          "cachedResultName": "S005-文件上传-转URL-硅基API-v4"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "filePaths": "={{ $json.imageTasks.map(task => task.sourceFilePath) }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "filePaths",
+              "displayName": "filePaths",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "array",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "9a548b7e-070f-4b37-8c6f-8eac97f01c45",
+      "name": "Call 'S005-文件上传-转URL-硅基API-v4'",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        1056,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const config = $('setParameter').first().json || {};\nconst tasks = Array.isArray(config.imageTasks) ? config.imageTasks : [];\nconst uploadedItems = $input.all();\n\nfunction cleanString(value) {\n  return String(value ?? '').trim();\n}\n\nfunction isHttpUrl(value) {\n  return /^https?:\\/\\//i.test(cleanString(value));\n}\n\nif (tasks.length < 1) {\n  throw new Error('setParameter.imageTasks must contain at least one task.');\n}\n\nif (uploadedItems.length !== tasks.length) {\n  throw new Error('SiliconFlow upload count mismatch: expected ' + tasks.length + ', received ' + uploadedItems.length);\n}\n\nconst uploadedByIndex = new Map();\nfor (const [position, item] of uploadedItems.entries()) {\n  const row = item.json || {};\n  const inputIndex = Number(row.inputIndex);\n  const sourceFileName = cleanString(row.sourceFileName);\n  const url = cleanString(row.url);\n\n  if (!Number.isInteger(inputIndex) || inputIndex < 0 || inputIndex >= tasks.length) {\n    throw new Error('Invalid SiliconFlow inputIndex at result ' + (position + 1) + ': ' + row.inputIndex);\n  }\n  if (uploadedByIndex.has(inputIndex)) {\n    throw new Error('Duplicate SiliconFlow inputIndex: ' + inputIndex);\n  }\n  const expectedFileName = cleanString(tasks[inputIndex]?.sourceFileName);\n  if (!sourceFileName || sourceFileName !== expectedFileName) {\n    throw new Error('SiliconFlow filename mismatch at inputIndex ' + inputIndex + ': expected ' + expectedFileName + ', received ' + (sourceFileName || '(empty)'));\n  }\n  if (!isHttpUrl(url)) {\n    throw new Error('SiliconFlow URL is missing or invalid for ' + expectedFileName);\n  }\n  uploadedByIndex.set(inputIndex, url);\n}\n\nconst imageTasks = tasks.map((task, index) => {\n  const imageUrl = uploadedByIndex.get(index);\n  if (!imageUrl) throw new Error('Missing SiliconFlow URL for task ' + (task.taskId || index + 1));\n  return { ...task, imageUrl };\n});\n\nreturn [{\n  json: {\n    ...config,\n    imageTasks,\n  },\n}];"
+      },
+      "id": "1db17d0f-cf89-4c49-84e0-3f075db2d4a1",
+      "name": "Attach Uploaded Image URLs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1280,
+        160
+      ]
+    }
+  ],
+  "connections": {
+    "Local File Trigger": {
+      "main": [
+        [
+          {
+            "node": "Dedupe Folder Path",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dedupe Folder Path": {
+      "main": [
+        [
+          {
+            "node": "Wait Folder Stable",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Product Folder Files": {
+      "main": [
+        [
+          {
+            "node": "Parse Product Folder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Product Folder": {
+      "main": [
+        [
+          {
+            "node": "Call 'S016-JSON文件-解析'",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "setParameter": {
+      "main": [
+        [
+          {
+            "node": "Call 'S005-文件上传-转URL-硅基API-v4'",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Jimeng Tasks": {
+      "main": [
+        [
+          {
+            "node": "Generate Cutout Image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Cutout Image": {
+      "main": [
+        [
+          {
+            "node": "Build Retry Plan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Download Batch": {
+      "main": [
+        [
+          {
+            "node": "Has Download Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Retry Plan": {
+      "main": [
+        [
+          {
+            "node": "Has Retry Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Retry Items": {
+      "main": [
+        [
+          {
+            "node": "Expand Retry Items",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Merge Generation Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Expand Retry Items": {
+      "main": [
+        [
+          {
+            "node": "Generate Cutout Image Retry Once",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Cutout Image Retry Once": {
+      "main": [
+        [
+          {
+            "node": "Merge Generation Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Generation Results": {
+      "main": [
+        [
+          {
+            "node": "Build Download Batch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Download Items": {
+      "main": [
+        [
+          {
+            "node": "Call 'S001-Url文件下载-v02'",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Wait Folder Stable": {
+      "main": [
+        [
+          {
+            "node": "Parse Folder Stable Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Folder Stable Result": {
+      "main": [
+        [
+          {
+            "node": "Read Product Folder Files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call 'S016-JSON文件-解析'": {
+      "main": [
+        [
+          {
+            "node": "Resolve Product Parameters",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resolve Product Parameters": {
+      "main": [
+        [
+          {
+            "node": "setParameter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call 'S005-文件上传-转URL-硅基API-v4'": {
+      "main": [
+        [
+          {
+            "node": "Attach Uploaded Image URLs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Attach Uploaded Image URLs": {
+      "main": [
+        [
+          {
+            "node": "Build Jimeng Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  }
+}

@@ -1,0 +1,24 @@
+name: Feature request
+description: Suggest an improvement to MerchRoute
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What workflow or user problem should this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the desired behavior and any alternatives considered.
+    validations:
+      required: true
+  - type: textarea
+    id: platform
+    attributes:
+      label: Platform considerations
+      description: Note any Windows, macOS, filesystem, PostgreSQL, or n8n integration constraints.

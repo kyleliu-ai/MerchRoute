@@ -1,0 +1,561 @@
+{
+  "id": "JEl0xCKTgtiIP9UT",
+  "name": "S013-v04-主图场景-编排子流",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "jsCode": "const uploadItems = $input.all();\nconst normalizedItems = $('Normalize Image Binary and Metadata').all();\nconst preparedItems = $('User Input Prepare').all();\nconst sharedInput = $('sysPrompt').first().json || {};\n\nif (uploadItems.length < 1 || uploadItems.length > 5) {\n  throw new Error('Expected 1-5 SiliconFlow upload responses, received ' + uploadItems.length);\n}\nif (normalizedItems.length !== uploadItems.length || preparedItems.length !== uploadItems.length) {\n  throw new Error('Image pipeline count mismatch: prepared=' + preparedItems.length + ', normalized=' + normalizedItems.length + ', uploaded=' + uploadItems.length);\n}\n\nconst clean = (value) => value === null || value === undefined ? '' : String(value).trim();\nconst preparedByIndex = new Map(\n  preparedItems.map((item, position) => [Number(item.json.imageIndex ?? position), item.json]),\n);\n\nconst uploadedImages = uploadItems.map((item, position) => {\n  const response = item.json || {};\n  if (response.status === false) {\n    throw new Error('SiliconFlow upload ' + (position + 1) + ' failed: ' + (response.message || response.msg || 'unknown error'));\n  }\n  if (response.code !== undefined && response.code !== null && Number(response.code) !== 20000) {\n    throw new Error('SiliconFlow upload ' + (position + 1) + ' failed with code ' + response.code + ': ' + (response.message || response.msg || 'unknown error'));\n  }\n\n  const data = response.data && typeof response.data === 'object' ? response.data : {};\n  const url = clean(data.object || data.url || response.url);\n  if (!url) throw new Error('SiliconFlow upload ' + (position + 1) + ' did not return an image URL');\n\n  const normalized = normalizedItems[position]?.json || {};\n  const imageIndex = Number.isFinite(Number(normalized.imageIndex)) ? Number(normalized.imageIndex) : position;\n  const prepared = preparedByIndex.get(imageIndex) || preparedItems[position]?.json || {};\n  return {\n    imageIndex,\n    imageSource: clean(prepared.imageSource || normalized.imageSource),\n    url,\n  };\n}).sort((a, b) => a.imageIndex - b.imageIndex);\n\nconst shared = sharedInput.constants || {};\nconst modelRun = clean(shared.model?.Model_Run);\nconst baseUrlRun = clean(shared.BaseUrl?.BaseUrl_Run);\nconst apiKeyRun = clean(shared.Authorization?.APIKey_Run);\nconst systemPrompt = clean(sharedInput.sysPrompt);\nif (!modelRun) throw new Error('Missing constants.model.Model_Run');\nif (!baseUrlRun) throw new Error('Missing constants.BaseUrl.BaseUrl_Run');\nif (!apiKeyRun) throw new Error('Missing constants.Authorization.APIKey_Run');\nif (!systemPrompt) throw new Error('Missing system prompt');\n\nconst prepared = preparedItems[0]?.json || {};\nconst content = [\n  ...uploadedImages.map((image) => ({\n    type: 'image_url',\n    image_url: { url: image.url },\n  })),\n  { type: 'text', text: prepared.userPrompt },\n];\n\nfor (const [index, item] of content.entries()) {\n  if (!item || (item.type !== 'image_url' && item.type !== 'text')) {\n    throw new Error('Invalid Qwen content item type at index ' + index);\n  }\n  if (item.type === 'image_url') {\n    const imageUrl = clean(item.image_url?.url);\n    if (!/^https?:\\/\\//i.test(imageUrl)) {\n      throw new Error('Invalid Qwen image URL at content index ' + index);\n    }\n  }\n  if (item.type === 'text' && !clean(item.text)) {\n    throw new Error('Qwen user text is empty');\n  }\n}\n\nconst request = {\n  model: modelRun,\n  messages: [\n    { role: 'system', content: systemPrompt },\n    { role: 'user', content },\n  ],\n  enable_thinking: false,\n  response_format: { type: 'json_object' },\n  temperature: 0.2,\n};\n\nreturn [{\n  json: {\n    request,\n    constants: {\n      ...shared,\n      model: {\n        ...(shared.model || {}),\n        Model_Run: modelRun,\n      },\n      BaseUrl: {\n        ...(shared.BaseUrl || {}),\n        BaseUrl_Run: baseUrlRun,\n      },\n      Authorization: {\n        ...(shared.Authorization || {}),\n        APIKey_Run: apiKeyRun,\n      },\n    },\n    source: {\n      ...($('When Executed by Another Workflow').first().json || {}),\n      uploadedImages,\n      imageCount: uploadedImages.length,\n    },\n  },\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1232,
+        480
+      ],
+      "id": "2826917a-a2b6-4996-a07f-e29127e9f918",
+      "name": "Build Qwen Request with SiliconFlow URLs",
+      "notesInFlow": true,
+      "notes": "将 3 张图片二进制转 Base64，组装阿里百炼 qwen3.7-plus 多模态请求体"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.constants.BaseUrl.BaseUrl_Run }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ $json.constants.Authorization.APIKey_Run }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.request }}",
+        "options": {
+          "timeout": 180000
+        }
+      },
+      "id": "0544b78b-121b-43de-9e4c-5d71e973504e",
+      "name": "HTTP Request Form",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1488,
+        480
+      ],
+      "notesInFlow": true,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "notes": "运行时模型服务：Model_Run + BaseUrl_Run + APIKey_Run"
+    },
+    {
+      "parameters": {
+        "fileSelector": "={{ $json.imageSource }}",
+        "options": {
+          "dataPropertyName": "={{ 'image_' + $json.imageIndex }}"
+        }
+      },
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        2000,
+        336
+      ],
+      "id": "fe751486-2073-4e6c-a08c-881990d0c1b8",
+      "name": "Read/Write Files from Disk",
+      "notesInFlow": true,
+      "notes": "读取本地图片文件；路径由 User Input Prepare 统一转换为正斜杠"
+    },
+    {
+      "parameters": {
+        "jsCode": "const source = $('When Executed by Another Workflow').first().json || {};\nconst shared = $('sysPrompt').first().json || {};\n\nconst clean = (value) => value === null || value === undefined ? '' : String(value).trim();\nconst positiveNumber = (value, fallback) => {\n  const number = Number(value);\n  return Number.isFinite(number) && number > 0 ? number : fallback;\n};\nconst extractImageSource = (value) => {\n  if (typeof value === 'string') return clean(value);\n  if (!value || typeof value !== 'object') return '';\n  return clean(value.url ?? value.imageUrl ?? value.imageSource ?? value.path);\n};\n\nconst numberedKeys = [\n  'viewImageAdd1',\n  'viewImageAdd2',\n  'viewImageAdd3',\n  'viewImageAdd4',\n  'viewImageAdd5',\n];\n\nconst numberedImages = numberedKeys\n  .map((key) => extractImageSource(source[key] ?? shared[key]))\n  .filter(Boolean);\n\nconst arrayKeys = ['viewImageAdds', 'imageUrls', 'images', 'viewImages'];\nlet arrayImages = [];\nlet arrayInputField = '';\n\nif (numberedImages.length === 0) {\n  for (const key of arrayKeys) {\n    const candidate = source[key] ?? shared[key];\n    let values = [];\n    if (Array.isArray(candidate)) {\n      values = candidate;\n    } else if (candidate && typeof candidate === 'object' && Array.isArray(candidate.items)) {\n      values = candidate.items;\n    } else if (typeof candidate === 'string' && candidate.trim()) {\n      try {\n        const parsed = JSON.parse(candidate);\n        values = Array.isArray(parsed) ? parsed : [];\n      } catch {\n        values = [];\n      }\n    }\n    const extracted = values.map(extractImageSource).filter(Boolean);\n    if (extracted.length > 0) {\n      arrayImages = extracted;\n      arrayInputField = key;\n      break;\n    }\n  }\n}\n\nconst selectedImages = numberedImages.length > 0 ? numberedImages : arrayImages;\nif (selectedImages.length < 1 || selectedImages.length > 5) {\n  throw new Error('Expected 1-5 image inputs, received ' + selectedImages.length);\n}\n\nconst imageSources = selectedImages.map((value) => value.replace(/\\\\/g, '/'));\nconst userInput = {\n  Category: clean(source.Category ?? shared.Category),\n  productName: clean(source.productName ?? shared.productName),\n  productDescription: clean(source.productDescription ?? shared.productDescription),\n  targetPlatform: clean(source.targetPlatform ?? shared.targetPlatform),\n  Country: clean(source.Country ?? shared.Country),\n  Language: clean(source.Language ?? shared.Language),\n  titleLength: positiveNumber(source.titleLength ?? shared.titleLength, 20),\n  titleDescriptionLenth: positiveNumber(source.titleDescriptionLenth ?? shared.titleDescriptionLenth, 60),\n  ratio: clean(source.ratio ?? shared.ratio),\n  imageCount: imageSources.length,\n};\n\nconst userInputJson = JSON.stringify(userInput, null, 2);\nconst userPrompt = [\n  '下面是当前电商主图场景编排任务。',\n  '请严格遵循系统提示词，结合用户输入 JSON、类目规则，以及后续上传的全部产品参考图完成输出。',\n  '本次实际提供 ' + imageSources.length + ' 张产品参考图，请综合识别，不要遗漏。',\n  '用户输入 JSON：',\n  userInputJson,\n].join('\\n');\n\nreturn imageSources.map((imageSource, imageIndex) => ({\n  json: {\n    imageIndex,\n    imageSource,\n    isUrl: /^https?:\\/\\//i.test(imageSource),\n    imageCount: imageSources.length,\n    imageInputMode: numberedImages.length > 0 ? 'numbered' : arrayInputField,\n    userInputJson,\n    userPrompt,\n  },\n  pairedItem: { item: 0 },\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1552,
+        240
+      ],
+      "id": "0137b26b-de18-48a3-8a93-f1612809fa20",
+      "name": "User Input Prepare",
+      "notesInFlow": true,
+      "notes": "把用户输入转为 JSON，拆分 3 张图片来源，支持 URL 或本地路径"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "d7f2ef70-5ce2-465a-bd22-b3647c590144",
+              "leftValue": "={{ $json.isUrl }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "33b25892-323a-4dfb-86d2-de205eb3a10b",
+      "name": "Is Image URL",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1776,
+        240
+      ],
+      "notesInFlow": true,
+      "notes": "按图片来源分流：true 为 HTTP/HTTPS URL，false 为本地文件路径"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.imageSource }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "image/*,*/*;q=0.8"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "={{ 'image_' + $json.imageIndex }}"
+            }
+          },
+          "timeout": 60000
+        }
+      },
+      "id": "63be6235-605c-44ec-b145-760ab75a3c93",
+      "name": "Download Image URL",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2000,
+        144
+      ],
+      "notesInFlow": true,
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1500,
+      "notes": "下载 URL 图片为 binary.data"
+    },
+    {
+      "parameters": {},
+      "id": "13ace734-e2ae-49f1-9bd2-ca19496b8a8b",
+      "name": "Merge Images",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2224,
+        240
+      ],
+      "notesInFlow": true,
+      "notes": "合并 URL 下载和本地读取的图片，后续 Code 会按 imageIndex 重新排序"
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json || {};\nlet content = response?.choices?.[0]?.message?.content ?? response?.message?.content ?? response?.content;\nconst productName = String($('When Executed by Another Workflow').first().json.productName ?? '');\n\nif (content && typeof content === 'object') {\n  return [{ json: { ...content, productName } }];\n}\n\nif (typeof content !== 'string') {\n  throw new Error('Qwen response did not include choices[0].message.content.');\n}\n\nlet text = content.trim();\nconst fenced = text.match(/^```(?:json)?\\s*([\\s\\S]*?)\\s*```$/i);\nif (fenced) {\n  text = fenced[1].trim();\n}\n\nfunction parseJson(raw) {\n  try {\n    return JSON.parse(raw);\n  } catch (error) {\n    const firstBrace = raw.indexOf('{');\n    const lastBrace = raw.lastIndexOf('}');\n    if (firstBrace !== -1 && lastBrace > firstBrace) {\n      return JSON.parse(raw.slice(firstBrace, lastBrace + 1));\n    }\n    throw error;\n  }\n}\n\nlet parsed;\ntry {\n  parsed = parseJson(text);\n} catch (error) {\n  throw new Error(`Qwen output is not valid JSON: ${error.message}. Output preview: ${text.slice(0, 500)}`);\n}\n\nif (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {\n  throw new Error('Qwen output JSON must be an object.');\n}\n\nreturn [{ json: { ...parsed, productName } }];"
+      },
+      "id": "1a811f28-fb7b-4cff-9f46-7d381f92b166",
+      "name": "Parse Qwen JSON Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        480
+      ],
+      "notesInFlow": true,
+      "notes": "解析百炼返回的 choices[0].message.content，只输出最终 JSON 对象"
+    },
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "Category"
+            },
+            {
+              "name": "productName"
+            },
+            {
+              "name": "productDescription"
+            },
+            {
+              "name": "targetPlatform"
+            },
+            {
+              "name": "Country"
+            },
+            {
+              "name": "Language"
+            },
+            {
+              "name": "titleLength",
+              "type": "number"
+            },
+            {
+              "name": "titleDescriptionLenth",
+              "type": "number"
+            },
+            {
+              "name": "viewImageAdd1"
+            },
+            {
+              "name": "viewImageAdd2"
+            },
+            {
+              "name": "viewImageAdd3"
+            },
+            {
+              "name": "viewImageAdd4"
+            },
+            {
+              "name": "viewImageAdd5"
+            },
+            {
+              "name": "ratio"
+            },
+            {
+              "name": "viewImageAdds",
+              "type": "array"
+            },
+            {
+              "name": "imageUrls",
+              "type": "array"
+            },
+            {
+              "name": "images",
+              "type": "array"
+            },
+            {
+              "name": "viewImages",
+              "type": "array"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        656,
+        240
+      ],
+      "id": "4756df21-fd1c-4d81-a00b-9fc1c3d9a9ab",
+      "name": "When Executed by Another Workflow"
+    },
+    {
+      "parameters": {
+        "content": "## S013-Qwen3.7-主图场景-编排子流（Category 规则包版）\n\n### 主要功能\n根据产品信息、Category 和 1-5 张产品参考视图，调用 Qwen3.7 多模态模型，生成电商主图场景编排 JSON。\n\n### 核心设计\n- 通用基础 System Prompt\n- Category 类目规则包\n- 根据 Category 自动路由\n- 输出 JSON 校验\n- 细节展示/特写场景合计最多 2 个\n- 使用/试穿/试用/生活方式场景至少 4 个\n- 鞋类、服装、包袋等穿戴类产品至少 2 个模特试穿/穿搭/上脚/手持场景\n\n### 类目规则文件\n由 MERCHROUTE_CATEGORY_RULES_FILE 指定（Windows 兼容回退：__MERCHROUTE_DATA_ROOT__/00-config/category-scene-rules.json）\n\n### 输入\nproductName、productDescription、Category、targetPlatform、Country、Language、ratio、titleLength(Number)、titleDescriptionLenth(Number)、viewImageAdd1/2/3\n\n### 输出\nproductAppearance、sellingPoints、targetMarket、scenePrompt01-07。每个 scenePrompt 包含 prompt、title、titleDescription。\n\n### 注意\n本流程只做“主图场景编排”，不生成最终图生图提示词；最终图生图提示词由下游子工作流组装。\n\n### 质量校验策略\n- 结构问题：硬性报错，阻止下游继续执行。\n- 内容质量问题：写入 validation.warnings，不中断流程。\n- 质量问题包括：细节/特写图过多、使用/生活方式/模特/试用场景不足、穿戴类模特展示不足等。\n",
+        "height": 756,
+        "width": 600
+      },
+      "id": "32d23d63-9f87-4346-801d-655714c49568",
+      "name": "工作流说明便签",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "content": "",
+        "height": 752,
+        "width": 1892,
+        "color": 2
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        592,
+        0
+      ],
+      "typeVersion": 1,
+      "id": "5c9745dc-f7b7-4102-b54b-42181365a597",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-globals.globalConstants",
+      "typeVersion": 1,
+      "position": [
+        848,
+        240
+      ],
+      "id": "3a742d60-a79a-49d8-8de5-97431975db95",
+      "name": "Global Constants"
+    },
+    {
+      "parameters": {
+        "jsCode": "const sourceInput = $('When Executed by Another Workflow').first().json || {};\nconst constantsInput = $('Global Constants').first().json || {};\n\nconst fallbackRules = {\n  \"version\": \"1.0.0\",\n  \"categoryAliases\": {\n    \"运动鞋\": \"shoes.sports_shoes\",\n    \"休闲鞋\": \"shoes.sports_shoes\",\n    \"男鞋\": \"shoes.sports_shoes\",\n    \"女鞋\": \"shoes.sports_shoes\",\n    \"鞋子\": \"shoes.sports_shoes\",\n    \"跑步鞋\": \"shoes.sports_shoes\",\n    \"单肩包\": \"bags.crossbody_bag\",\n    \"斜挎包\": \"bags.crossbody_bag\",\n    \"手提包\": \"bags.crossbody_bag\",\n    \"包包\": \"bags.crossbody_bag\",\n    \"吹风机\": \"beauty.hair_dryer\",\n    \"电吹风\": \"beauty.hair_dryer\",\n    \"收纳盒\": \"home.storage_box\",\n    \"收纳架\": \"home.storage_box\",\n    \"厨具\": \"kitchen.cookware\",\n    \"锅具\": \"kitchen.cookware\",\n    \"小家电\": \"electronics.small_appliance\",\n    \"台灯\": \"lighting.table_lamp\",\n    \"灯具\": \"lighting.table_lamp\",\n    \"服装\": \"clothing.general\"\n  },\n  \"categories\": {\n    \"generic.product\": {\n      \"categoryName\": \"通用产品\",\n      \"keywords\": [],\n      \"appearanceFocus\": [\"颜色、形状、结构、材质质感、可见部件和关键细节\"],\n      \"sellingPointFocus\": [\"核心功能\", \"使用便利\", \"适用场景\", \"外观细节\", \"电商展示价值\"],\n      \"sceneStrategy\": [\"商品整体展示\", \"核心卖点展示\", \"真实使用场景\", \"多场景应用\", \"生活方式场景\", \"产品试用场景\", \"最多 2 个细节或特写场景\"],\n      \"sceneDistribution\": {\n        \"maxDetailOrCloseUpScenes\": 2,\n        \"minUsageLifestyleOrTrialScenes\": 4,\n        \"minModelTryOnScenes\": 0\n      },\n      \"forbiddenClaims\": [\"不得虚构功能、参数、认证、配件、材质或使用效果\"],\n      \"titleGuidance\": [\"标题简短，描述对应场景\"],\n      \"detailSceneGuidance\": [\"细节展示和特写场景合计不得超过 2 个\", \"细节展示场景 title 和 titleDescription 必须为空字符串\"]\n    }\n  }\n};\n\nfunction normalizeText(value) {\n  return value === undefined || value === null ? '' : String(value).trim();\n}\n\nfunction getInputCategory(input) {\n  return normalizeText(input.Category || input.category || input.productCategory || '');\n}\n\nfunction positiveNumber(value, fallback) {\n  return typeof value === 'number' && Number.isFinite(value) && value > 0\n    ? value\n    : fallback;\n}\n\nlet rules = fallbackRules;\ntry {\n  const buffer = await this.helpers.getBinaryDataBuffer(0, 'data');\n  const text = buffer.toString('utf8').trim();\n  if (text) {\n    rules = JSON.parse(text);\n  }\n} catch (error) {\n  rules = fallbackRules;\n}\n\nif (!rules || typeof rules !== 'object') {\n  rules = fallbackRules;\n}\nif (!rules.categories || typeof rules.categories !== 'object') {\n  rules.categories = fallbackRules.categories;\n}\nif (!rules.categoryAliases || typeof rules.categoryAliases !== 'object') {\n  rules.categoryAliases = fallbackRules.categoryAliases;\n}\n\nconst rawCategory = getInputCategory(sourceInput);\nlet normalizedCategory = rules.categoryAliases[rawCategory] || rawCategory;\n\nfunction findCategoryByKeywords() {\n  const haystack = [\n    sourceInput.Category,\n    sourceInput.productName,\n    sourceInput.productDescription\n  ].map(normalizeText).join(' ').toLowerCase();\n\n  for (const [key, rule] of Object.entries(rules.categories)) {\n    const keywords = Array.isArray(rule.keywords) ? rule.keywords : [];\n    if (keywords.some((word) => haystack.includes(String(word).toLowerCase()))) {\n      return key;\n    }\n  }\n  return '';\n}\n\nif (!normalizedCategory || !rules.categories[normalizedCategory]) {\n  const detected = findCategoryByKeywords();\n  normalizedCategory = detected || 'generic.product';\n}\nif (!rules.categories[normalizedCategory]) {\n  normalizedCategory = 'generic.product';\n}\n\nconst categoryRule = rules.categories[normalizedCategory] || rules.categories['generic.product'];\n\nconst titleLimit = positiveNumber(sourceInput.titleLength, 20);\nconst titleDescriptionLimit = positiveNumber(sourceInput.titleDescriptionLenth, 60);\n\nconst categoryRuleText = JSON.stringify(categoryRule, null, 2);\n\nconst baseSystemPrompt = `\n你是“电商产品主图展示场景智能编排助手”。\n\n你的任务：根据用户输入的产品信息、电商平台信息、销售国家、标题语言和产品参考视图图片，生成用于电商主图的产品展示场景描述。\n\n你不是图片生成模型。\n你不直接生成图片。\n你不生成完整图生图提示词。\n你只负责生成：productAppearance、sellingPoints、targetMarket、scenePrompt01 到 scenePrompt07。\n\n下游子工作流会根据你的输出继续组装最终图生图提示词、平台规则、视觉风格、外观一致性约束和图像生成参数。\n\n# 输入字段\n\n上游可能提供：\n- productName：产品名称\n- productDescription：产品描述\n- Category：产品类目\n- targetPlatform：目标平台，如 WB / OZON / WB/OZON\n- Country：销售国家\n- Language：标题和标题描述语言，如俄文 / 英文\n- ratio：图片比例\n- titleLength：标题长度限制，当前限制为 ${titleLimit} 字符内\n- titleDescriptionLenth：标题描述长度限制，当前限制为 ${titleDescriptionLimit} 字符内\n- viewImageAdd1 / viewImageAdd2 / viewImageAdd3 / viewImageAdd4 / viewImageAdd5，或数组字段 viewImageAdds / imageUrls / images / viewImages：1-5 张产品参考图\n\n# 参考视图规则\n\n用户提供 1-5 张产品参考图。这些参考图不是固定的正面、背面、侧面，而是来自以下 5 种视图中的任意 1-5 张组合：\n正面视图、背面视图、侧面视图、45° 斜俯视图、顶视图 / 底视图。\n\n如果图片或文件名有明确标签，按标签识别具体视图类型。\n如果没有标签，不要强行判断为正面、背面、侧面，只按上传顺序理解为参考视图，不预设具体视图类型。\n\n只描述图片中真实可见的内容。看不清的细节不要编造。\n用户没有提供、图片也看不到的功能、结构、配件、认证、参数，不得写入 JSON。\n\n# 当前类目规则\n\n当前标准类目：${normalizedCategory}\n当前类目名称：${categoryRule.categoryName || normalizedCategory}\n\n当前类目规则包如下，必须优先参考：\n${categoryRuleText}\n\n# 输出硬性要求\n\n最终只能输出一个 JSON 对象。\n禁止输出 Markdown、代码块、解释、注释或 JSON 以外的任何文字。\nJSON 必须可以被 JSON.parse 正常解析。\n字段完整，字段顺序固定，无尾逗号，无未转义换行。\n\n必须严格输出以下字段名：\nscenePrompt01、scenePrompt02、scenePrompt03、scenePrompt04、scenePrompt05、scenePrompt06、scenePrompt07。\n\n字段名中的 0 必须是阿拉伯数字 0，不得写成英文字母 O 或 o。\n必须输出 scenePrompt03，不得输出 scenePromptO3、scenePrompto3、scenePrompt3、scenePrompt_03、scene_prompt03 或任何其他变体。\n\n# 固定 JSON 结构\n\n{\n  \"productAppearance\": \"\",\n  \"sellingPoints\": [],\n  \"targetMarket\": \"\",\n  \"scenePrompt01\": {\"prompt\":\"\",\"title\":\"\",\"titleDescription\":\"\"},\n  \"scenePrompt02\": {\"prompt\":\"\",\"title\":\"\",\"titleDescription\":\"\"},\n  \"scenePrompt03\": {\"prompt\":\"\",\"title\":\"\",\"titleDescription\":\"\"},\n  \"scenePrompt04\": {\"prompt\":\"\",\"title\":\"\",\"titleDescription\":\"\"},\n  \"scenePrompt05\": {\"prompt\":\"\",\"title\":\"\",\"titleDescription\":\"\"},\n  \"scenePrompt06\": {\"prompt\":\"\",\"title\":\"\",\"titleDescription\":\"\"},\n  \"scenePrompt07\": {\"prompt\":\"\",\"title\":\"\",\"titleDescription\":\"\"}\n}\n\n# productAppearance 规则\n\nproductAppearance 是产品外观描述，必须基于参考图和产品信息总结：\n颜色、形状、结构、材质质感、按钮/按键/开关/旋钮、接口/孔位/指示灯、风口/开口、线缆/手柄/支架/配件等可见细节。\n\nproductAppearance 必须强调：后续生成产品图时，必须严格保持参考图中的产品外观、颜色、结构、比例、材质质感、按键位置、接口位置、孔位和关键细节一致。\n\nproductAppearance 只描述外观，不要把功能卖点写成外观结构，不得添加图片中不存在的外观、结构或配件。\n\n# sellingPoints 规则\n\nsellingPoints 必须输出 7 条中文产品卖点。\n卖点应根据 productName、productDescription、productAppearance、Category、targetPlatform、Country 和当前类目规则生成。\n卖点必须真实有效，不得虚构用户没有提供、图片中也看不到的功能、参数、认证、配件或效果。\n不得使用“最强、第一、100%、永久”等绝对化表述。\n\n# targetMarket 规则\n\ntargetMarket 必须使用中文。\n根据 Country、targetPlatform、productDescription、sellingPoints 和 Category 生成目标市场和目标人群描述。\n内容应包括销售国家、销售平台、适合人群、典型使用场景、产品适用需求。\n\n# 7 条主图展示场景规则\n\n必须输出 scenePrompt01 到 scenePrompt07，共 7 个场景对象。\n每个 scenePrompt 包含：\n- prompt：中文产品主图展示场景描述\n- title：根据 Language 生成的标题；细节展示或特写场景必须为空字符串 \"\"\n- titleDescription：根据 Language 生成的标题描述；细节展示或特写场景必须为空字符串 \"\"\n\nscenePrompt.prompt 只描述产品主图展示场景，不是完整图生图提示词。\n不要写模型参数、分辨率、采样、镜头参数、完整风格堆词或最终图生图模板。\n\n# 场景分布硬性规则\n\n生成 7 个场景时，必须控制场景类型分布，避免大量重复的细节图、特写图或局部结构图。\n\n硬性要求：\n1. 7 个场景中，细节展示场景和特写展示场景合计不得超过 2 个。\n2. 7 个场景中，至少 4 个场景必须属于以下类型之一：\n   - 真实使用场景\n   - 模特试穿 / 模特试用场景\n   - 产品试用场景\n   - 生活方式场景\n   - 多场景应用场景\n   - 动态体验场景\n3. 不得生成 3 个或以上仅展示局部结构、材质纹理、鞋底、接口、按钮、孔位、配件或工艺的场景。\n4. 每个场景必须有明确展示目的，7 个场景要覆盖：展示外观、使用体验、适用场景、生活方式、卖点强化、适量细节。\n5. 如果产品适合被人物穿着、佩戴、手持或试用，应优先增加模特试穿、模特试用、真实使用、生活方式场景的数量，但人物不得遮挡商品主体。\n\n对于鞋类、服饰、包袋等穿戴类产品：\n- 至少 2 个场景必须是模特试穿 / 上脚 / 上身 / 背包 / 手持 / 穿搭展示场景；\n- 至少 1 个场景必须是动态穿着、出行使用或生活方式场景；\n- 细节图和特写图合计最多 2 个。\n\n对于小家电、个护、家居工具、厨具等产品：\n- 至少 2 个场景必须是真实试用或使用场景；\n- 至少 1 个场景必须是生活方式或多场景应用场景；\n- 细节图和特写图合计最多 2 个。\n\n# 细节展示和特写场景定义\n\n只有当画面主体明确聚焦于产品局部区域，并且主要目的是展示局部结构、材质纹理、工艺细节或微距质感时，才可判定为细节展示或特写场景。\n\n细节展示或特写场景包括：\n- 微距特写\n- 局部结构特写\n- 材质纹理特写\n- 工艺细节特写\n- 近距离聚焦局部区域\n\n以下场景不应判定为细节展示或特写场景：\n- 商品整体展示图\n- 模特试穿图\n- 真实使用图\n- 生活方式图\n- 穿搭展示图\n- 多场景应用图\n- 带有完整产品主体的卖点强化图\n\n如果某个场景属于细节展示或特写场景：\n- title 必须输出空字符串 \"\"\n- titleDescription 必须输出空字符串 \"\"\n- prompt 中应说明该场景不添加标题和描述文字\n\n# scenePrompt.prompt 规则\n\n每个 prompt 必须使用中文，具体、清晰，让下游图生图提示词组装节点能理解该主图应该展示什么场景。\n\n每个 prompt 应包含：\n- 当前场景主题\n- 要突出的卖点或功能\n- 产品主体展示方式\n- 场景环境\n- 使用方式、试穿方式、试用方式或展示方式\n- 画面应突出商品主体\n- 必须保持参考图产品外观一致\n- 非细节展示场景可以使用少量清晰文字，且文字不得遮挡产品\n- 不改变产品结构、颜色、比例和关键细节\n\n7 个场景必须动态编排，不能机械套用同一套场景结构，不能重复表达同一个卖点。\n应适当增加产品真实使用、模特试穿、模特试用、生活方式和动态体验场景数量，避免 7 张图过于单一。\n\n# title 规则\n\n每个 scenePrompt 必须包含 title 字段。\n如果当前场景是细节展示或特写场景，title 必须输出空字符串 \"\"。\n如果当前场景不是细节展示或特写场景，title 必须使用 Language 指定语言。\ntitle 必须不超过 ${titleLimit} 个字符，字符数包含空格、数字和标点。\ntitle 应简短醒目，概括当前场景核心卖点或展示主题。\n不得使用夸张营销词，不得虚构产品参数。\n\n# titleDescription 规则\n\n每个 scenePrompt 必须包含 titleDescription 字段。\n如果当前场景是细节展示或特写场景，titleDescription 必须输出空字符串 \"\"。\n如果当前场景不是细节展示或特写场景，titleDescription 必须使用 Language 指定语言。\ntitleDescription 必须不超过 ${titleDescriptionLimit} 个字符，字符数包含空格、数字和标点。\ntitleDescription 应说明当前场景中的产品功能、使用方式或适用场景，并与 prompt 语义一致。\n不得写长句、大段文字，不得虚构参数、认证、功能或用户未提供的卖点。\n\n# 禁止事项\n\n不得输出 JSON 以外的任何内容。\n不得生成图片。\n不得生成完整图生图提示词。\n不得把这些参考图固定理解为正面、背面、侧面。\n不得虚构产品不存在的功能、参数、配件、认证、材质或使用方式。\n不得把图片中看不到的细节写成确定事实。\n不得改变产品外观、颜色、结构、比例和关键细节。\n不得添加图片中不存在的按钮、屏幕、喷嘴、支架、收纳盒等结构。\n不得使用“最强、第一、100%、永久”等绝对化表述。\n不得让人物、背景、文字遮挡商品主体。\n不得所有产品都使用同一套场景逻辑。\n不得让 title 或 titleDescription 超过长度限制。\n不得让 title 和 titleDescription 使用错误语言。\n不得生成超过 2 个细节展示或特写场景。\n\n# 最终自检\n\n输出前检查：\n1. 是否只输出 JSON；\n2. 是否字段完整且顺序正确；\n3. 是否 JSON 格式合法；\n4. 是否 sellingPoints 正好 7 条；\n5. 是否 scenePrompt01 到 scenePrompt07 共 7 个；\n6. 是否每个 scenePrompt 都包含 prompt、title、titleDescription；\n7. 是否细节展示和特写场景合计不超过 2 个；\n8. 是否至少 4 个场景属于真实使用、模特试穿、模特试用、生活方式、多场景应用或动态体验；\n9. 如果是穿戴类产品，是否至少 2 个场景为模特试穿、上脚、上身、背包、手持或穿搭展示；\n10. 是否 title 和 titleDescription 符合语言与长度要求；\n11. 是否没有虚构功能、参数、配件、认证；\n12. 是否没有 JSON 以外的任何文字。\n\n最终回复只能是 JSON 对象。\n`.trim();\n\nreturn [\n  {\n    json: {\n      ...constantsInput,\n      ...sourceInput,\n      sysPrompt: baseSystemPrompt,\n      normalizedCategory,\n      categoryRule,\n      categoryRulesVersion: rules.version || '',\n      titleLimit,\n      titleDescriptionLimit\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1328,
+        240
+      ],
+      "id": "a2f12614-ea71-41ca-832c-54207ed16049",
+      "name": "sysPrompt",
+      "notesInFlow": true,
+      "notes": "动态生成：通用基础 System Prompt + Category 类目规则包"
+    },
+    {
+      "parameters": {
+        "fileSelector": "={{ $env.MERCHROUTE_CATEGORY_RULES_FILE || '__MERCHROUTE_DATA_ROOT__/00-config/category-scene-rules.json' }}",
+        "options": {
+          "dataPropertyName": "data"
+        }
+      },
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        1104,
+        240
+      ],
+      "id": "b657e480-2648-4806-9cc8-282bfa77c0ce",
+      "name": "Read Category Rules File",
+      "notesInFlow": true,
+      "notes": "读取类目场景规则文件 category-scene-rules.json"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst preparedItems = $('User Input Prepare').all();\n\nreturn items.map((item, position) => {\n  const binary = item.binary || {};\n  const indexedKey = Object.keys(binary).find((key) => /^image_\\d+$/.test(key));\n  if (!indexedKey) throw new Error('Image binary ' + (position + 1) + ' is missing its indexed property');\n\n  const imageIndex = Number(indexedKey.slice('image_'.length));\n  const prepared = preparedItems.find((candidate) => Number(candidate.json.imageIndex) === imageIndex)?.json;\n  if (!prepared) throw new Error('No prepared image metadata found for imageIndex ' + imageIndex);\n\n  return {\n    json: {\n      imageIndex,\n      imageSource: prepared.imageSource,\n      imageCount: prepared.imageCount,\n    },\n    binary: { data: binary[indexedKey] },\n    pairedItem: { item: position },\n  };\n});"
+      },
+      "id": "cb2f3ea7-5648-47de-90f2-79552c56a51e",
+      "name": "Normalize Image Binary and Metadata",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.siliconflow.cn/v1/files",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "multipart/form-data"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "purpose",
+              "value": "assistants"
+            },
+            {
+              "parameterType": "formBinaryData",
+              "name": "file",
+              "inputDataFieldName": "data"
+            }
+          ]
+        },
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 1
+            }
+          }
+        }
+      },
+      "id": "4cccd7bb-713c-4a7b-bcf5-0906da9134e3",
+      "name": "Upload Images to SiliconFlow",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        976,
+        480
+      ]
+    }
+  ],
+  "connections": {
+    "HTTP Request Form": {
+      "main": [
+        [
+          {
+            "node": "Parse Qwen JSON Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read/Write Files from Disk": {
+      "main": [
+        [
+          {
+            "node": "Merge Images",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "User Input Prepare": {
+      "main": [
+        [
+          {
+            "node": "Is Image URL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Image URL": {
+      "main": [
+        [
+          {
+            "node": "Download Image URL",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Read/Write Files from Disk",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Image URL": {
+      "main": [
+        [
+          {
+            "node": "Merge Images",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Images": {
+      "main": [
+        [
+          {
+            "node": "Normalize Image Binary and Metadata",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Global Constants",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Global Constants": {
+      "main": [
+        [
+          {
+            "node": "Read Category Rules File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "sysPrompt": {
+      "main": [
+        [
+          {
+            "node": "User Input Prepare",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Category Rules File": {
+      "main": [
+        [
+          {
+            "node": "sysPrompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Qwen Request with SiliconFlow URLs": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request Form",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload Images to SiliconFlow": {
+      "main": [
+        [
+          {
+            "node": "Build Qwen Request with SiliconFlow URLs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Image Binary and Metadata": {
+      "main": [
+        [
+          {
+            "node": "Upload Images to SiliconFlow",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  }
+}

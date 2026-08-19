@@ -1,0 +1,561 @@
+{
+  "id": "mTZV8BkPZpzHIJjz",
+  "name": "WB-S000-声明商品目录",
+  "active": true,
+  "nodes": [
+    {
+      "id": "714e6de2-d21e-4412-a072-c20f5bdb6a3b",
+      "name": "说明",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -840,
+        -620
+      ],
+      "parameters": {
+        "content": "# WB-S000 目录声明\n\n统一承接 Webhook 与定时扫描入口。新店铺任务必须声明 `packageRelPath/packageSignature/materializationHash`，严格核对店铺、版本、publication、product.json 与全部引用媒体 SHA-256 后，将不可变包移动到原 taskId 的 processing 目录。\n\n部署前已生成的共享目录与 `.store-ready/<publicationId>.json` 继续走只读兼容复制分支，允许在途任务收尾。\n\n同一 `productCode + revision`：内容相同返回原任务，内容不同返回 409；低版本拒绝。本工作流不调用 WB API。",
+        "width": 680,
+        "height": 470
+      }
+    },
+    {
+      "id": "8a60ab19-b36f-4977-b69e-fe672b38179c",
+      "name": "When Executed by Another Workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -760,
+        0
+      ],
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "source"
+            },
+            {
+              "name": "folderName"
+            },
+            {
+              "name": "priority",
+              "type": "number"
+            },
+            {
+              "name": "storeId"
+            },
+            {
+              "name": "storeAlias"
+            },
+            {
+              "name": "publicationId"
+            },
+            {
+              "name": "generatedVersionId"
+            },
+            {
+              "name": "credentialVersionId"
+            },
+            {
+              "name": "storeConfigVersion",
+              "type": "number"
+            },
+            {
+              "name": "warehouseId"
+            },
+            {
+              "name": "packageRelPath"
+            },
+            {
+              "name": "packageSignature"
+            },
+            {
+              "name": "materializationHash"
+            },
+            {
+              "name": "requestedRevision",
+              "type": "number"
+            },
+            {
+              "name": "requestedIdempotencyKey"
+            },
+            {
+              "name": "requestedSubmissionMode"
+            },
+            {
+              "name": "requestedMediaPolicy"
+            },
+            {
+              "name": "requestedMediaTargetVendorCodes",
+              "type": "array"
+            },
+            {
+              "name": "requestedAutomationRunId"
+            },
+            {
+              "name": "requestedExistingCardBaseline",
+              "type": "array"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "12be9df1-692a-4109-83f6-40becae5d58f",
+      "name": "Load Runtime Config",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -520,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nasync function runtimeRequest(method, endpoint, body, timeoutMs = 30_000) {\n  const base = String($env.MERCHROUTE_RUNTIME_BASE_URL || 'http://127.0.0.1:4173').replace(/\\/+$/, '');\n  const key = String($env.MERCHROUTE_RUNTIME_KEY || '').trim();\n  if (!key) throw new Error('MERCHROUTE_RUNTIME_KEY 未配置，无法访问 MerchRoute WB runtime API');\n  const RuntimeURL = require('url').URL;\n  const target = new RuntimeURL(base + endpoint);\n  const payload = body === undefined ? '' : JSON.stringify(body);\n  const transport = target.protocol === 'https:' ? require('https') : require('http');\n  const response = await new Promise((resolve, reject) => {\n    const request = transport.request(target, {\n      method,\n      headers: {\n        'Accept': 'application/json',\n        'Content-Type': 'application/json',\n        'X-MerchRoute-Runtime-Key': key,\n        ...(payload ? { 'Content-Length': Buffer.byteLength(payload) } : {}),\n      },\n    }, (incoming) => {\n      const chunks = [];\n      let bytes = 0;\n      incoming.on('data', (chunk) => {\n        bytes += chunk.length;\n        if (bytes > 20 * 1024 * 1024) {\n          request.destroy(new Error('MerchRoute runtime API 响应超过 20 MiB 限制'));\n          return;\n        }\n        chunks.push(chunk);\n      });\n      incoming.on('end', () => resolve({\n        status: Number(incoming.statusCode || 0),\n        text: Buffer.concat(chunks).toString('utf8'),\n      }));\n    });\n    const boundedTimeoutMs = Math.max(1_000, Math.min(180_000, Number(timeoutMs) || 30_000));\n    request.setTimeout(boundedTimeoutMs, () => request.destroy(new Error('MerchRoute runtime API 请求超时')));\n    request.on('error', reject);\n    if (payload) request.write(payload);\n    request.end();\n  });\n  const text = response.text;\n  let data = {};\n  if (text) {\n    try { data = JSON.parse(text); } catch (_) { data = { raw: text }; }\n  }\n  if (response.status < 200 || response.status >= 300) {\n    const nestedError = data && typeof data.error === 'object' && data.error !== null ? data.error : {};\n    const errorValue = typeof data.error === 'string' ? data.error : '';\n    const error = new Error(String(data.message || nestedError.message || errorValue || data.code || nestedError.code || ('MerchRoute runtime API HTTP ' + response.status)));\n    error.code = String(data.code || nestedError.code || errorValue || 'RUNTIME_API_FAILED');\n    error.httpStatus = response.status;\n    error.details = data;\n    throw error;\n  }\n  return data;\n}\nfunction toItems(value) {\n  const rows = Array.isArray(value) ? value : value == null ? [] : [value];\n  return rows.map((row) => ({ json: row || {} }));\n}\nfunction migrated(name) {\n  return [{ json: { ok: false, migrated: true, error: 'MIGRATED_TO_POSTGRESQL', code: 'MIGRATED_TO_POSTGRESQL', message: name + ' 已迁移到 MerchRoute PostgreSQL runtime API' } }];\n}\nfunction runtimeFailureDetails(error) {\n  const queue = [error];\n  const seen = new Set();\n  const codes = [];\n  const messages = [];\n  const statuses = [];\n  while (queue.length && seen.size < 16) {\n    const current = queue.shift();\n    if (!current || typeof current !== 'object' || seen.has(current)) continue;\n    seen.add(current);\n    for (const key of ['code','errno','errorCode']) if (current[key] != null) codes.push(String(current[key]).toUpperCase());\n    for (const key of ['message','description']) if (current[key]) messages.push(String(current[key]));\n    for (const key of ['httpStatus','statusCode','httpCode','status']) {\n      if (current[key] == null) continue;\n      const status = Number(current[key]);\n      if (Number.isFinite(status)) statuses.push(status);\n    }\n    for (const key of ['cause','error','originalError']) {\n      if (current[key] && typeof current[key] === 'object') queue.push(current[key]);\n    }\n  }\n  return { codes, messages, statuses };\n}\nfunction isRuntimeNetworkFailure(error) {\n  const details = runtimeFailureDetails(error);\n  const retryableCodes = new Set([\n    'ETIMEDOUT','ESOCKETTIMEDOUT','ECONNRESET','ECONNABORTED','ECONNREFUSED','ENOTFOUND','EAI_AGAIN','EPIPE',\n    'UND_ERR_CONNECT_TIMEOUT','UND_ERR_HEADERS_TIMEOUT','UND_ERR_BODY_TIMEOUT','UND_ERR_SOCKET',\n  ]);\n  if (details.codes.some((code) => retryableCodes.has(code))) return true;\n  if (details.statuses.some((status) => [408, 425, 429].includes(status) || status >= 500)) return true;\n  const message = details.messages.join(' | ');\n  return /\\b(?:ETIMEDOUT|ESOCKETTIMEDOUT|ECONNRESET|ECONNABORTED|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|EPIPE|UND_ERR_CONNECT_TIMEOUT|UND_ERR_HEADERS_TIMEOUT|UND_ERR_BODY_TIMEOUT|UND_ERR_SOCKET)\\b|fetch failed|failed to fetch|timed?\\s*out|请求超时|socket hang up|temporary tls eof|network socket disconnected/i.test(message);\n}\nfunction persistentNetworkDelaySeconds(attempt) {\n  const schedule = [30, 60, 300, 900];\n  return schedule[Math.min(Math.max(1, Number(attempt || 1)), schedule.length) - 1];\n}\n\nreturn (async () => {\n  const values = {};\n  values[\"config_id\"] = \"default\";\n  if (\"wb_runtime_config\" === 'wb_runtime_config') {\n    if (\"Load Runtime Config\" === 'Load Dispatch Config') {\n      const gate = $getWorkflowStaticData('global');\n      gate.runtimeNetworkRecovery = gate.runtimeNetworkRecovery && typeof gate.runtimeNetworkRecovery === 'object'\n        ? gate.runtimeNetworkRecovery : {};\n      const recovery = gate.runtimeNetworkRecovery;\n      if (recovery.active === true && Number.isFinite(Date.parse(String(recovery.nextAttemptAt || '')))\n          && Date.parse(String(recovery.nextAttemptAt)) > Date.now()) {\n        return [{ json: { __runtimeNetworkWait: true, networkRecovery: recovery } }];\n      }\n      try {\n        const data = await runtimeRequest('GET', '/api/v1/wb/runtime/config', undefined);\n        if (recovery.active === true) {\n          gate.runtimeNetworkRecovery = {\n            ...recovery, active: false, recoveredAt: new Date().toISOString(), nextAttemptAt: null,\n          };\n        }\n        return toItems(data.config || data);\n      } catch (error) {\n        if (!isRuntimeNetworkFailure(error)) throw error;\n        const attempt = recovery.active === true ? Number(recovery.attempt || 0) + 1 : 1;\n        const delaySeconds = persistentNetworkDelaySeconds(attempt);\n        gate.runtimeNetworkRecovery = {\n          active: true, phase: 'WB_RUNTIME_CONFIG', resumeState: 'DISPATCH', attempt,\n          pauseStartedAt: recovery.pauseStartedAt || new Date().toISOString(),\n          lastFailureAt: new Date().toISOString(),\n          nextAttemptAt: new Date(Date.now() + delaySeconds * 1000).toISOString(),\n          lastErrorCode: String(error?.code || 'RUNTIME_NETWORK_ERROR'),\n          lastErrorMessage: String(error?.message || 'MerchRoute runtime API 网络不可用').slice(0, 1000),\n        };\n        return [{ json: { __runtimeNetworkWait: true, networkRecovery: gate.runtimeNetworkRecovery } }];\n      }\n    }\n    const data = await runtimeRequest('GET', '/api/v1/wb/runtime/config', undefined);\n    return toItems(data.config || data);\n  }\n  if (\"wb_runtime_config\" === 'wb_publish_jobs') {\n    if (values.task_id) {\n      try {\n        const data = await runtimeRequest('GET', '/api/v1/wb/runtime/jobs/' + encodeURIComponent(String(values.task_id)), undefined);\n        return toItems(data.job || data);\n      } catch (error) {\n        if (\"Load Runtime Config\" === 'Lookup Job Status' && Number(error.httpStatus || 0) === 404) {\n          return [{ json: { __runtimeJobNotFound: true, task_id_requested: String(values.task_id) } }];\n        }\n        throw error;\n      }\n    }\n    const params = ['pageSize=100'];\n    if (values.product_code) params.push('productCode=' + encodeURIComponent(String(values.product_code)));\n    if (values.store_id) params.push('storeId=' + encodeURIComponent(String(values.store_id)));\n    if (\"Load Runtime Config\".includes('Dispatch')) params.push('due=true');\n    const data = await runtimeRequest('GET', '/api/v1/wb/runtime/jobs?' + params.join('&'), undefined);\n    const rows = Array.isArray(data.items) ? data.items : [];\n    if (\"Load Runtime Config\" === 'Get Product Jobs' && rows.length === 0) {\n      return [{ json: { __emptyProductJobs: true } }];\n    }\n    return toItems(rows);\n  }\n  if (\"wb_runtime_config\" === 'wb_product_registry') {\n    if (!values.product_code) return [];\n    const params = ['productCode=' + encodeURIComponent(String(values.product_code))];\n    if (values.store_id) params.push('storeId=' + encodeURIComponent(String(values.store_id)));\n    const data = await runtimeRequest('GET', '/api/v1/wb/runtime/registry?' + params.join('&'), undefined);\n    return toItems(data.items || []);\n  }\n  if (\"wb_runtime_config\" === 'wb_category_templates') {\n    if (!values.category_key) return [];\n    const data = await runtimeRequest('GET', '/api/v1/wb/runtime/categories/' + encodeURIComponent(String(values.category_key)), undefined);\n    return toItems(data.category || data);\n  }\n  return migrated(\"Load Runtime Config\");\n})();"
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "id": "fe9cdfb4-25bd-4d81-90aa-78514f803816",
+      "name": "Inspect Product Folder",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -260,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nconst fs = require('fs');\nconst path = require('path');\nconst crypto = require('crypto');\n\nfunction fail(code, message) {\n  const conflictCodes = new Set(['STORE_READY_MARKER_MISSING','STORE_READY_MARKER_INVALID','STORE_READY_MARKER_MISMATCH','SOURCE_CONTENT_MISMATCH','READY_SCOPE_CONFLICT','READY_MARKER_MISSING','REQUEST_REVISION_MISMATCH','REQUEST_IDEMPOTENCY_KEY_MISMATCH']);\n  const envelope = {\n    code: String(code || 'INTAKE_FAILED'), message: String(message || '目录声明失败'), stage: 'INSPECT_PRODUCT_FOLDER',\n    httpStatus: conflictCodes.has(String(code || '')) ? 409 : 400, retryable: false, deliveryUnknown: false,\n  };\n  const error = new Error('MERCHROUTE_INTAKE_ERROR_V1:' + JSON.stringify(envelope));\n  error.code = envelope.code;\n  throw error;\n}\nfunction inside(root, candidate) {\n  const rel = path.relative(root, candidate);\n  return rel !== '' && !rel.startsWith('..' + path.sep) && rel !== '..' && !path.isAbsolute(rel);\n}\nfunction stable(value) {\n  if (Array.isArray(value)) return '[' + value.map(stable).join(',') + ']';\n  if (value && typeof value === 'object') {\n    return '{' + Object.keys(value).sort().map((k) => JSON.stringify(k) + ':' + stable(value[k])).join(',') + '}';\n  }\n  return JSON.stringify(value);\n}\nfunction fnv1a64(text) {\n  let hash = 14695981039346656037n;\n  const prime = 1099511628211n;\n  for (let i = 0; i < text.length; i++) {\n    hash ^= BigInt(text.charCodeAt(i));\n    hash = BigInt.asUintN(64, hash * prime);\n  }\n  return hash.toString(16).padStart(16, '0');\n}\n\nconst input = $('When Executed by Another Workflow').first().json || {};\nconst config = $('Load Runtime Config').first().json || {};\nconst folderName = String(input.folderName || '').trim();\nconst source = String(input.source || 'unknown').trim();\nconst priority = Number(input.priority || 0);\nconst requestedRevision = input.requestedRevision == null || input.requestedRevision === '' ? null : Number(input.requestedRevision);\nconst requestedIdempotencyKey = String(input.requestedIdempotencyKey || '').trim();\nconst storeId = String(input.storeId || '').trim();\nconst storeAlias = String(input.storeAlias || '').trim().toLowerCase();\nconst publicationId = String(input.publicationId || '').trim();\nconst generatedVersionId = String(input.generatedVersionId || '').trim();\nconst credentialVersionId = String(input.credentialVersionId || '').trim();\nconst storeConfigVersion = Number(input.storeConfigVersion || 0);\nconst warehouseId = String(input.warehouseId || '').trim();\nconst packageRelPath = String(input.packageRelPath || '').trim();\nconst packageSignature = String(input.packageSignature || '').trim();\nconst materializationHash = String(input.materializationHash || '').trim();\nconst packageScoped = Boolean(packageRelPath || packageSignature || materializationHash);\nconst storeScoped = Boolean(storeId || storeAlias || publicationId || generatedVersionId || credentialVersionId || storeConfigVersion || warehouseId);\nif (packageScoped && !storeScoped) fail('PACKAGE_IDENTITY_MISSING', '店铺发布包必须同时声明完整店铺、版本与 publication 身份');\nconst DEFAULT_STORE_ID = '00000000-0000-4000-8000-000000000001';\nconst defaultLegacyPublication = storeScoped && storeId === DEFAULT_STORE_ID && storeAlias === 'default'\n  && Boolean(publicationId) && !credentialVersionId;\nconst scopeMode = credentialVersionId ? 'VAULT' : (defaultLegacyPublication ? 'LEGACY_PUBLICATION' : 'PURE_LEGACY');\nlet submissionMode = String(input.requestedSubmissionMode || 'UPSERT').trim().toUpperCase();\nlet mediaPolicy = String(input.requestedMediaPolicy || 'MISSING_ONLY').trim().toUpperCase();\nlet mediaTargetVendorCodes = Array.isArray(input.requestedMediaTargetVendorCodes) ? input.requestedMediaTargetVendorCodes.map(String) : [];\nlet automationRunId = String(input.requestedAutomationRunId || '').trim();\nlet existingCardBaseline = Array.isArray(input.requestedExistingCardBaseline) ? input.requestedExistingCardBaseline : [];\nfunction normalizeExistingCardBaseline(values) {\n  const rows = values.map((entry) => ({\n    vendorCode: String(entry?.vendorCode || '').trim(),\n    nmID: String(entry?.nmID || entry?.nmId || '').trim(),\n    ...((entry?.imtID || entry?.imtId) ? { imtID: String(entry.imtID || entry.imtId).trim() } : {}),\n    ...((entry?.subjectID || entry?.subjectId) ? { subjectID: String(entry.subjectID || entry.subjectId).trim() } : {}),\n  }));\n  if (rows.some((entry) => !/^[A-Za-z0-9._-]+$/.test(entry.vendorCode) || !/^[1-9]\\d*$/.test(entry.nmID))) fail('EXISTING_CARD_BASELINE_INVALID', 'existingCardBaseline 必须包含合法 vendorCode 和正整数 nmID');\n  if (new Set(rows.map((entry) => entry.vendorCode)).size !== rows.length) fail('EXISTING_CARD_BASELINE_DUPLICATE', 'existingCardBaseline.vendorCode 不能重复');\n  if (rows.some((entry) => (entry.imtID && !/^[1-9]\\d*$/.test(entry.imtID)) || (entry.subjectID && !/^[1-9]\\d*$/.test(entry.subjectID)))) fail('EXISTING_CARD_BASELINE_INVALID', 'existingCardBaseline 的 imtID/subjectID 必须为正整数');\n  return rows;\n}\nif (!config.import_root) fail('IMPORT_ROOT_MISSING', 'wb_runtime_config.import_root 未配置');\nif (storeScoped) {\n  if (!/^[a-f0-9-]{36}$/i.test(storeId)) fail('STORE_ID_INVALID', 'storeId 必须是 UUID');\n  if (!/^[a-z0-9][a-z0-9-]{1,31}$/.test(storeAlias)) fail('STORE_ALIAS_INVALID', 'storeAlias 格式无效');\n  if (!/^[a-f0-9-]{36}$/i.test(publicationId)) fail('PUBLICATION_ID_INVALID', 'publicationId 必须是 UUID');\n  if (!/^[a-f0-9-]{36}$/i.test(generatedVersionId)) fail('GENERATED_VERSION_ID_INVALID', 'generatedVersionId 必须是 UUID');\n  if (credentialVersionId && !/^[a-f0-9-]{36}$/i.test(credentialVersionId)) fail('CREDENTIAL_VERSION_INVALID', 'credentialVersionId 必须是 UUID');\n  if (!credentialVersionId && !defaultLegacyPublication) fail('CREDENTIAL_VERSION_REQUIRED', '仅固定 default 店铺的 legacy publication 可暂时不带 credentialVersionId');\n  if (!Number.isInteger(storeConfigVersion) || storeConfigVersion < 1) fail('STORE_CONFIG_VERSION_INVALID', 'storeConfigVersion 必须是正整数');\n  if (!/^[1-9]\\d*$/.test(warehouseId)) fail('WAREHOUSE_ID_INVALID', 'warehouseId 必须是正整数文本');\n  if (packageScoped) {\n    const expectedPackageRelPath = ['stores', storeAlias, 'inbox', folderName, publicationId].join('/');\n    if (packageRelPath !== expectedPackageRelPath || packageRelPath.includes('\\\\')) fail('PACKAGE_PATH_INVALID', 'packageRelPath 必须严格匹配店铺、SKU 与 publicationId');\n    if (!/^sha256:[a-f0-9]{64}$/.test(packageSignature)) fail('PACKAGE_SIGNATURE_INVALID', 'packageSignature 必须是 sha256 摘要');\n    if (!/^sha256:[a-f0-9]{64}$/.test(materializationHash)) fail('MATERIALIZATION_HASH_INVALID', 'materializationHash 必须是 sha256 摘要');\n  }\n}\nif (!['webhook', 'schedule', 'recovery', 'manual'].includes(source)) fail('SOURCE_INVALID', 'source 不受支持');\nif (!['UPSERT', 'CREATE_ONLY', 'COMPATIBLE_UPSERT'].includes(submissionMode)) fail('SUBMISSION_MODE_INVALID', 'submissionMode 仅允许 UPSERT、CREATE_ONLY 或 COMPATIBLE_UPSERT');\nif (!['MISSING_ONLY', 'REPLACE_SELECTED'].includes(mediaPolicy)) fail('MEDIA_POLICY_INVALID', 'mediaPolicy 仅允许 MISSING_ONLY 或 REPLACE_SELECTED');\nif (submissionMode !== 'COMPATIBLE_UPSERT' && mediaPolicy === 'REPLACE_SELECTED') fail('MEDIA_POLICY_MODE_INVALID', 'REPLACE_SELECTED 仅允许 COMPATIBLE_UPSERT 使用');\nif (submissionMode === 'COMPATIBLE_UPSERT' && mediaPolicy !== 'REPLACE_SELECTED') fail('MEDIA_POLICY_REQUIRED', 'COMPATIBLE_UPSERT 必须使用 REPLACE_SELECTED');\nif ((submissionMode === 'CREATE_ONLY' || submissionMode === 'COMPATIBLE_UPSERT') && !['webhook', 'recovery'].includes(source)) fail('SUBMISSION_MODE_SOURCE_INVALID', '自动提交模式仅允许 Webhook 或其恢复链路使用');\nif (mediaTargetVendorCodes.some((value) => !/^[A-Za-z0-9._-]+$/.test(value)) || new Set(mediaTargetVendorCodes).size !== mediaTargetVendorCodes.length) fail('MEDIA_TARGETS_INVALID', 'mediaTargetVendorCodes 必须是无重复的合法卖家商品编码数组');\nif (submissionMode === 'COMPATIBLE_UPSERT' && (!automationRunId || !/^[a-f0-9-]{36}$/i.test(automationRunId))) fail('AUTOMATION_RUN_ID_INVALID', 'COMPATIBLE_UPSERT 必须提供 UUID automationRunId');\nexistingCardBaseline = normalizeExistingCardBaseline(existingCardBaseline);\nif (submissionMode !== 'COMPATIBLE_UPSERT' && existingCardBaseline.length) fail('EXISTING_CARD_BASELINE_MODE_INVALID', 'existingCardBaseline 仅允许 COMPATIBLE_UPSERT 使用');\nif (!/^[A-Za-z0-9._-]+$/.test(folderName)) fail('FOLDER_NAME_INVALID', 'folderName 仅允许 ASCII 字母、数字、点、下划线和连字符');\nif (!Number.isFinite(priority)) fail('PRIORITY_INVALID', 'priority 必须是数字');\n\nconst importRoot = path.resolve(String(config.import_root));\nfs.mkdirSync(importRoot, { recursive: true });\nfor (const rel of ['inbox', 'processing', 'success', 'failed', '.locks/intake', '.locks/jobs', '.locks/dispatcher', 'system-errors']) {\n  fs.mkdirSync(path.join(importRoot, rel), { recursive: true });\n}\nconst rootReal = fs.realpathSync(importRoot);\nconst centralRecoveryPath = path.join(rootReal, 'processing', folderName);\nconst legacyStoreRecoveryPath = storeScoped ? path.join(rootReal, 'stores', storeAlias, 'processing', folderName) : centralRecoveryPath;\nconst declaredPackagePath = packageScoped ? path.resolve(rootReal, ...packageRelPath.split('/')) : '';\nif (packageScoped && !inside(rootReal, declaredPackagePath)) fail('PATH_ESCAPE', 'packageRelPath 逃逸导入根目录');\nconst sourcePath = source === 'recovery'\n  ? (fs.existsSync(centralRecoveryPath) ? centralRecoveryPath : legacyStoreRecoveryPath)\n  : (packageScoped ? declaredPackagePath : path.join(rootReal, 'inbox', folderName));\nif (!fs.existsSync(sourcePath)) fail('FOLDER_NOT_FOUND', '商品目录不存在: ' + folderName);\nconst sourceReal = fs.realpathSync(sourcePath);\nif (!inside(rootReal, sourceReal)) fail('PATH_ESCAPE', '商品目录逃逸导入根目录');\nif (!fs.statSync(sourceReal).isDirectory()) fail('NOT_A_DIRECTORY', '商品路径不是目录');\nif (source === 'recovery') {\n  const recoveryMarker = path.join(sourceReal, '.intake.json');\n  if (fs.existsSync(recoveryMarker)) {\n    let marker = {};\n    try { marker = JSON.parse(fs.readFileSync(recoveryMarker, 'utf8')); } catch (_) {}\n    const markerMode = String(marker.submissionMode || 'UPSERT').trim().toUpperCase();\n    if (!['UPSERT', 'CREATE_ONLY', 'COMPATIBLE_UPSERT'].includes(markerMode)) fail('RECOVERY_SUBMISSION_MODE_INVALID', '恢复标记中的 submissionMode 非法');\n    submissionMode = markerMode;\n    mediaPolicy = String(marker.mediaPolicy || 'MISSING_ONLY').trim().toUpperCase();\n    mediaTargetVendorCodes = Array.isArray(marker.mediaTargetVendorCodes) ? marker.mediaTargetVendorCodes.map(String) : [];\n    automationRunId = String(marker.automationRunId || '').trim();\n    if (Array.isArray(marker.existingCardBaseline)) existingCardBaseline = normalizeExistingCardBaseline(marker.existingCardBaseline);\n  }\n}\nif (!['MISSING_ONLY', 'REPLACE_SELECTED'].includes(mediaPolicy)) fail('RECOVERY_MEDIA_POLICY_INVALID', '恢复标记中的 mediaPolicy 非法');\nif (submissionMode === 'COMPATIBLE_UPSERT' && (mediaPolicy !== 'REPLACE_SELECTED' || !/^[a-f0-9-]{36}$/i.test(automationRunId))) fail('RECOVERY_COMPATIBLE_CONTEXT_INVALID', '恢复标记缺少兼容任务上下文');\nif (submissionMode !== 'COMPATIBLE_UPSERT' && existingCardBaseline.length) fail('RECOVERY_EXISTING_CARD_BASELINE_MODE_INVALID', '恢复标记中的 existingCardBaseline 仅允许 COMPATIBLE_UPSERT 使用');\nlet storeReadyMarker = null;\nlet storeReadyMarkerPath = '';\nif (source !== 'recovery') {\n  if (storeScoped) {\n    if (fs.existsSync(path.join(sourceReal, '_READY'))) {\n      fail('READY_SCOPE_CONFLICT', '多店铺 publication 目录不得同时保留 legacy _READY');\n    }\n    storeReadyMarkerPath = path.join(sourceReal, '.store-ready', publicationId + '.json');\n    if (!fs.existsSync(storeReadyMarkerPath)) fail('STORE_READY_MARKER_MISSING', '目录缺少当前 publication 的多店铺就绪凭证');\n    try { storeReadyMarker = JSON.parse(fs.readFileSync(storeReadyMarkerPath, 'utf8')); }\n    catch (_) { fail('STORE_READY_MARKER_INVALID', '当前 publication 的多店铺就绪凭证不是有效 JSON'); }\n    if (![1, 2].includes(Number(storeReadyMarker?.schemaVersion)) || String(storeReadyMarker?.kind || '') !== 'WB_STORE_PUBLICATION_READY'\n      || (packageScoped && Number(storeReadyMarker?.schemaVersion) !== 2)) {\n      fail('STORE_READY_MARKER_INVALID', '当前 publication 的多店铺就绪凭证版本或类型无效');\n    }\n  } else if (!fs.existsSync(path.join(sourceReal, '_READY'))) {\n    fail('READY_MARKER_MISSING', '目录缺少 _READY 完成标记');\n  }\n}\nconst productPath = path.join(sourceReal, 'product.json');\nif (!fs.existsSync(productPath)) fail('PRODUCT_JSON_MISSING', '目录缺少 product.json');\nconst productBytes = fs.readFileSync(productPath);\nlet text = productBytes.toString('utf8');\nif (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);\nlet product;\ntry { product = JSON.parse(text); } catch (error) { fail('PRODUCT_JSON_INVALID', 'product.json 不是有效 UTF-8 JSON'); }\n\nconst schemaVersion = Number(product.schemaVersion);\nif (![1, 2].includes(schemaVersion)) fail('SCHEMA_VERSION_UNSUPPORTED', 'schemaVersion 仅支持 1 或 2');\nconst isV2 = schemaVersion === 2;\nif (isV2 ? !/^\\d{7}$/.test(String(product.productCode || '')) : !/^[A-Za-z0-9._-]+$/.test(String(product.productCode || ''))) {\n  fail('PRODUCT_CODE_INVALID', isV2 ? 'productCode 必须是 MerchRoute 的 7 位数字 SKU' : 'productCode 格式非法');\n}\nif (source !== 'recovery' && product.productCode !== folderName) fail('FOLDER_PRODUCT_MISMATCH', '目录名必须等于 productCode');\nif (!Number.isInteger(product.revision) || product.revision < 1) fail('REVISION_INVALID', 'revision 必须为大于等于 1 的整数');\nif (requestedRevision != null && (!Number.isInteger(requestedRevision) || requestedRevision !== product.revision)) fail('REQUEST_REVISION_MISMATCH', '请求 revision 与 product.json 不一致');\nconst expectedIdempotencyKey = (storeScoped ? storeAlias + '|' : '') + product.productCode + '|' + product.revision + (automationRunId ? '|' + automationRunId : '');\nif (requestedIdempotencyKey && requestedIdempotencyKey !== expectedIdempotencyKey) fail('REQUEST_IDEMPOTENCY_KEY_MISMATCH', '请求 idempotencyKey 必须等于 productCode|revision');\nif (isV2) {\n  const rawRoot = String(config.import_root || '').trim();\n  const windowsRoot = /^[A-Za-z]:[\\\\/]/.test(rawRoot) || /^\\\\\\\\/.test(rawRoot);\n  const rootApi = windowsRoot ? path.win32 : path.posix;\n  const normalizedRoot = rootApi.normalize(rawRoot).replace(/[\\\\/]+$/, '') || rootApi.parse(rawRoot).root;\n  const canonicalRoot = windowsRoot ? normalizedRoot.replace(/\\\\/g, '/').toLowerCase() : normalizedRoot;\n  const expectedRootHash = 'sha256:' + crypto.createHash('sha256').update(canonicalRoot, 'utf8').digest('hex');\n  if (String(config.root_source || '') !== 'merchroute-postgresql' || !config.root_synced_at || String(config.root_sync_hash || '') !== expectedRootHash) {\n    fail('IMPORT_ROOT_NOT_SYNCED', 'v2 任务要求 MerchRoute 与 n8n 的 import_root 已完成一致性同步');\n  }\n}\nconst categoryKey = isV2 ? String(product.category?.key || '') : String(product.categoryKey || '');\nif (!categoryKey) fail('CATEGORY_REQUIRED', '类目 key 必填');\nif (!isV2 && !['adult_casual_sneakers', 'daily_bag'].includes(categoryKey)) fail('CATEGORY_NOT_ALLOWED', 'v1 categoryKey 不在历史兼容类目中');\nif (isV2) {\n  if (!Number.isInteger(Number(product.category?.subjectId)) || Number(product.category.subjectId) < 1) fail('SUBJECT_ID_INVALID', 'category.subjectId 必须为正整数');\n  if (!Number.isInteger(Number(product.category?.templateVersion)) || Number(product.category.templateVersion) < 1) fail('TEMPLATE_VERSION_INVALID', 'category.templateVersion 必须为正整数');\n  if (!/^sha256:[a-f0-9]{64}$/.test(String(product.category?.schemaHash || ''))) fail('SCHEMA_HASH_INVALID', 'category.schemaHash 必须为 sha256 摘要');\n}\nif (product.brand !== undefined && product.brand !== null && typeof product.brand !== 'string') {\n  fail('BRAND_INVALID', 'brand 必须是字符串');\n}\n// v2 保留空品牌，由 WB 原生合同决定是否展示；v1 维持历史兼容行为。\nproduct.brand = isV2 ? String(product.brand || '').trim() : (String(product.brand || '').trim() || 'Нет бренда');\nif (!product.titleRu || typeof product.titleRu !== 'string' || product.titleRu.length > 60) fail('TITLE_INVALID', 'titleRu 必填且最多 60 个字符');\nif (!product.descriptionRu || typeof product.descriptionRu !== 'string' || product.descriptionRu.length > 5000) fail('DESCRIPTION_INVALID', 'descriptionRu 必填且最多 5000 个字符');\nif (isV2 && /[\\r\\n]/.test(product.descriptionRu)) fail('DESCRIPTION_NEWLINE_INVALID', 'v2 descriptionRu 不得包含真实 CR/LF，段落必须使用字面量 \\\\n\\\\n');\nif (!isV2 && (!product.countryOfOrigin || typeof product.countryOfOrigin !== 'string')) fail('COUNTRY_REQUIRED', 'countryOfOrigin 必填');\nif (!isV2 && !['female', 'male', 'unisex'].includes(product.gender)) fail('GENDER_INVALID', 'gender 仅允许 female、male、unisex');\nif (!product.packaging || !['lengthCm','widthCm','heightCm','weightKg'].every((key) => Number.isFinite(Number(product.packaging[key])) && Number(product.packaging[key]) > 0)) {\n  fail('PACKAGING_INVALID', 'packaging 长宽高和重量必须为大于 0 的数字');\n}\nif (!Number.isFinite(Number(product.priceCny)) || Number(product.priceCny) <= 0) fail('PRICE_INVALID', 'priceCny 必须大于 0');\nif (!Number.isInteger(product.discountPercent) || product.discountPercent < 0 || product.discountPercent > 99) fail('DISCOUNT_INVALID', 'discountPercent 必须为 0 到 99 的整数');\nif (Object.prototype.hasOwnProperty.call(product, 'clubDiscount') && (!Number.isInteger(product.clubDiscount) || (product.clubDiscount !== 0 && (product.clubDiscount < 3 || product.clubDiscount > 31)))) {\n  fail('CLUB_DISCOUNT_INVALID', 'clubDiscount 必须为 0（关闭）或 3 到 31 的整数');\n}\nif (isV2 && Object.prototype.hasOwnProperty.call(product, 'videoUploadMode') && !['ORIGINAL', 'COMPRESSED_COPY'].includes(String(product.videoUploadMode || '').trim().toUpperCase())) {\n  fail('VIDEO_UPLOAD_MODE_INVALID', 'videoUploadMode 仅允许 ORIGINAL 或 COMPRESSED_COPY');\n}\nif (isV2) product.videoUploadMode = String(product.videoUploadMode || 'ORIGINAL').trim().toUpperCase();\nif (!isV2 && (!product.attributes || typeof product.attributes !== 'object' || Array.isArray(product.attributes))) fail('ATTRIBUTES_INVALID', 'attributes 必须是对象');\nif (!Array.isArray(product.variants) || product.variants.length < 1 || product.variants.length > 30) fail('VARIANTS_INVALID', 'variants 数量必须为 1 到 30');\nif (isV2) {\n  product.variants.forEach((variant, index) => {\n    if (variant.descriptionRu == null || variant.descriptionRu === '') return;\n    if (typeof variant.descriptionRu !== 'string' || variant.descriptionRu.length > 5000) {\n      fail('VARIANT_DESCRIPTION_INVALID', 'variants[' + index + '].descriptionRu 最多 5000 个字符');\n    }\n    if (/[\\r\\n]/.test(variant.descriptionRu)) {\n      fail('VARIANT_DESCRIPTION_NEWLINE_INVALID', 'variants[' + index + '].descriptionRu 不得包含真实 CR/LF，段落必须使用字面量 \\\\n\\\\n');\n    }\n  });\n}\nif (!isV2 && categoryKey === 'adult_casual_sneakers') {\n  if (!product.compliance || typeof product.compliance.tnved !== 'string' || !/^[0-9]{10}$/.test(product.compliance.tnved)) {\n    fail('TNVED_REQUIRED', '鞋类必须由合规人员提供 10 位 compliance.tnved');\n  }\n  if (typeof product.compliance.kizMarked !== 'boolean') {\n    fail('KIZ_CONFIRMATION_REQUIRED', '鞋类必须明确填写 compliance.kizMarked');\n  }\n}\nconst vendorCodes = new Set();\nconst variantCodes = new Set();\nconst barcodes = new Set();\nfunction safeRelativeMedia(value, extensions) {\n  const rel = String(value || '');\n  if (!rel || rel.includes('\\\\') || rel.includes('\\u0000') || rel.startsWith('/') || /^[A-Za-z]:\\//.test(rel) || rel.split('/').some((part) => part === '..' || part === '.')) return false;\n  const extension = rel.split('.').pop()?.toLowerCase();\n  return extensions.includes(extension);\n}\nfunction characteristicValueValid(value) {\n  if (Array.isArray(value)) return value.length > 0 && value.every((item) => ['string','number','boolean'].includes(typeof item));\n  return ['string','number','boolean'].includes(typeof value);\n}\nfor (const variant of product.variants) {\n  if (!/^[A-Za-z0-9._-]+$/.test(String(variant.variantCode || ''))) fail('VARIANT_CODE_INVALID', 'variantCode 格式非法');\n  if (!/^[A-Za-z0-9._-]+$/.test(String(variant.vendorCode || ''))) fail('VENDOR_CODE_INVALID', 'vendorCode 格式非法');\n  if (!String(variant.vendorCode).startsWith(String(product.productCode))) fail('VENDOR_CODE_PREFIX_REQUIRED', 'vendorCode 必须以 productCode 开头，确保 WB 精确对账');\n  if (variantCodes.has(variant.variantCode)) fail('VARIANT_CODE_DUPLICATE', 'variantCode 必须在商品内唯一');\n  if (vendorCodes.has(variant.vendorCode)) fail('VENDOR_CODE_DUPLICATE', 'vendorCode 必须在商品内唯一');\n  variantCodes.add(variant.variantCode);\n  vendorCodes.add(variant.vendorCode);\n  if (!isV2 && (!variant.color || typeof variant.color !== 'string')) fail('COLOR_REQUIRED', '每个颜色变体必须填写 color');\n  if (isV2) {\n    if (!Array.isArray(variant.characteristics) || !variant.characteristics.length) fail('CHARACTERISTICS_REQUIRED', 'v2 每个变体必须包含最终 WB characteristics');\n    const characteristicIds = new Set();\n    for (const characteristic of variant.characteristics) {\n      const characteristicId = Number(characteristic?.id);\n      if (!Number.isInteger(characteristicId) || characteristicId < 1) fail('CHARACTERISTIC_ID_INVALID', 'characteristic.id 必须为正整数');\n      if (characteristicIds.has(characteristicId)) fail('CHARACTERISTIC_DUPLICATE', '同一变体 characteristic.id 不能重复: ' + characteristicId);\n      if (!characteristicValueValid(characteristic?.value)) fail('CHARACTERISTIC_VALUE_INVALID', 'characteristic.value 类型非法: ' + characteristicId);\n      characteristicIds.add(characteristicId);\n    }\n  }\n  if (!Array.isArray(variant.images) || variant.images.length < 1 || variant.images.length > 30) fail('IMAGES_INVALID', '每个颜色变体必须有 1 到 30 张图片');\n  if (new Set(variant.images.map(String)).size !== variant.images.length) fail('IMAGES_DUPLICATE', '同一变体不能重复引用同一图片');\n  for (const image of variant.images) if (!safeRelativeMedia(image, ['jpg','jpeg','png','webp'])) fail('IMAGE_PATH_INVALID', '图片必须是安全的 POSIX 相对路径: ' + String(image));\n  if (isV2 && variant.video != null && !safeRelativeMedia(variant.video, ['mp4','mov'])) fail('VIDEO_PATH_INVALID', '视频必须是安全的 MP4/MOV POSIX 相对路径');\n  if (!Array.isArray(variant.sizes) || !variant.sizes.length) fail('SIZES_INVALID', '每个颜色变体至少要有一个库存单位');\n  if (!isV2 && categoryKey === 'daily_bag' && variant.sizes.length !== 1) fail('BAG_SIZE_INVALID', '包类每个颜色只能有一个无尺码库存单位');\n  for (const size of variant.sizes) {\n    if (!Number.isInteger(size.stock) || size.stock < 0) fail('STOCK_INVALID', 'stock 必须是非负整数');\n    if (size.barcode != null && !/^(?:|[0-9]{8,30})$/.test(String(size.barcode))) fail('BARCODE_INVALID', 'barcode 必须为空或 8 到 30 位数字');\n    if (size.barcode && barcodes.has(String(size.barcode))) fail('BARCODE_DUPLICATE', 'barcode 必须在商品内唯一');\n    if (size.barcode) barcodes.add(String(size.barcode));\n    if (!isV2 && categoryKey === 'adult_casual_sneakers') {\n      if (!size.techSize || typeof size.techSize !== 'string') fail('TECH_SIZE_REQUIRED', '鞋类每个尺码必须填写 techSize');\n      if (!Number.isFinite(Number(size.insoleLengthCm)) || Number(size.insoleLengthCm) <= 0) fail('INSOLE_LENGTH_REQUIRED', '鞋类每个尺码必须填写大于 0 的 insoleLengthCm');\n    } else if (!isV2 && (size.techSize !== undefined || size.insoleLengthCm !== undefined)) {\n      fail('BAG_SIZELESS_REQUIRED', '包类库存单位不得填写 techSize 或 insoleLengthCm');\n    }\n  }\n}\n\nconst canonical = stable(product);\nconst payloadSignature = 'fnv1a64:' + fnv1a64(canonical);\nconst taskId = (storeScoped ? storeAlias + '__' : '') + product.productCode + '__r' + product.revision;\nif (source !== 'recovery' && storeScoped) {\n  const markerStore = storeReadyMarker && typeof storeReadyMarker.store === 'object' ? storeReadyMarker.store : {};\n  const markerRequest = storeReadyMarker && typeof storeReadyMarker.request === 'object' ? storeReadyMarker.request : {};\n  const expectedRequest = {\n    submissionMode,\n    mediaPolicy,\n    mediaTargetVendorCodes: [...new Set(mediaTargetVendorCodes.map(String))].sort(),\n    automationRunId: automationRunId || null,\n    existingCardBaseline: existingCardBaseline.map((entry) => ({\n      vendorCode: String(entry.vendorCode || ''), nmID: String(entry.nmID || ''),\n      ...(entry.imtID ? { imtID: String(entry.imtID) } : {}),\n      ...(entry.subjectID ? { subjectID: String(entry.subjectID) } : {}),\n    })).sort((a, b) => a.vendorCode.localeCompare(b.vendorCode)),\n  };\n  const productSha256 = 'sha256:' + crypto.createHash('sha256').update(productBytes).digest('hex');\n  const contentPaths = new Set(['product.json']);\n  for (const variant of product.variants) {\n    for (const image of variant.images) contentPaths.add(String(image));\n    if (variant.video) contentPaths.add(String(variant.video));\n  }\n  for (const manifest of ['variants/variant-media-manifest.json', 'variant-media-manifest.json']) {\n    if (fs.existsSync(path.resolve(sourceReal, ...manifest.split('/')))) contentPaths.add(manifest);\n  }\n  const contentRows = [...contentPaths].sort().map((relativePath) => {\n    const resolved = path.resolve(sourceReal, ...relativePath.split('/'));\n    const stat = fs.statSync(resolved);\n    return { relativePath, size: Number(stat.size), sha256: 'sha256:' + crypto.createHash('sha256').update(fs.readFileSync(resolved)).digest('hex') };\n  });\n  const computedPackageSignature = 'sha256:' + crypto.createHash('sha256').update(JSON.stringify(contentRows), 'utf8').digest('hex');\n  const identityMatches = String(storeReadyMarker.sku || '') === String(product.productCode)\n    && Number(storeReadyMarker.revision) === Number(product.revision)\n    && String(storeReadyMarker.generatedVersionId || '') === generatedVersionId\n    && String(storeReadyMarker.publicationId || '') === publicationId\n    && String(storeReadyMarker.taskId || '') === taskId\n    && String(storeReadyMarker.idempotencyKey || '') === expectedIdempotencyKey\n    && String(markerStore.id || '') === storeId\n    && String(markerStore.alias || '') === storeAlias\n    && String(markerStore.credentialVersionId || '') === credentialVersionId\n    && Number(markerStore.configVersion) === storeConfigVersion\n    && String(markerStore.warehouseId || '') === warehouseId\n    && stable(markerRequest) === stable(expectedRequest)\n    && String(storeReadyMarker.productSha256 || '') === productSha256\n    && String(storeReadyMarker.sourceContentSignature || '') === computedPackageSignature\n    && (!packageScoped || (String(storeReadyMarker.packageRelPath || '') === packageRelPath\n      && String(storeReadyMarker.packageSignature || '') === packageSignature\n      && packageSignature === computedPackageSignature\n      && String(storeReadyMarker.materializationHash || '') === materializationHash))\n    && Number.isFinite(Date.parse(String(storeReadyMarker.readyAt || '')));\n  if (!identityMatches) fail('STORE_READY_MARKER_MISMATCH', '多店铺就绪凭证与请求、店铺快照或商品内容不一致');\n}\nif (source === 'recovery' && folderName !== taskId) fail('RECOVERY_FOLDER_MISMATCH', 'processing 目录名必须等于 taskId');\nreturn [{ json: {\n  source, priority, folder_name: product.productCode, product_code: product.productCode,\n  revision: product.revision, category_key: categoryKey,\n  submission_mode: submissionMode, media_policy: mediaPolicy,\n  media_target_vendor_codes: mediaTargetVendorCodes, automation_run_id: automationRunId,\n  existing_card_baseline: existingCardBaseline,\n  scope_mode: scopeMode, store_scoped: storeScoped, store_id: storeId, store_alias: storeAlias,\n  package_scoped: packageScoped, package_rel_path: packageRelPath,\n  package_signature: packageSignature, materialization_hash: materializationHash,\n  publication_id: publicationId, generated_version_id: generatedVersionId, credential_version_id: credentialVersionId,\n  store_config_version: storeConfigVersion, warehouse_id: warehouseId,\n  task_id: taskId, idempotency_key: expectedIdempotencyKey,\n  payload_signature: payloadSignature, product, root_real: rootReal,\n  source_real: sourceReal, config_version: Number(config.config_version || 1),\n  store_ready_marker_path: storeReadyMarkerPath,\n  source_content_signature: String(storeReadyMarker?.sourceContentSignature || ''),\n  root_sync_hash: String(config.root_sync_hash || ''),\n  lock_ttl_seconds: Number(config.lock_ttl_seconds || 600),\n} }];\n"
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "92068419-8fb6-4bab-bac8-955c5cd1abe5",
+      "name": "Get Product Jobs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nasync function runtimeRequest(method, endpoint, body, timeoutMs = 30_000) {\n  const base = String($env.MERCHROUTE_RUNTIME_BASE_URL || 'http://127.0.0.1:4173').replace(/\\/+$/, '');\n  const key = String($env.MERCHROUTE_RUNTIME_KEY || '').trim();\n  if (!key) throw new Error('MERCHROUTE_RUNTIME_KEY 未配置，无法访问 MerchRoute WB runtime API');\n  const RuntimeURL = require('url').URL;\n  const target = new RuntimeURL(base + endpoint);\n  const payload = body === undefined ? '' : JSON.stringify(body);\n  const transport = target.protocol === 'https:' ? require('https') : require('http');\n  const response = await new Promise((resolve, reject) => {\n    const request = transport.request(target, {\n      method,\n      headers: {\n        'Accept': 'application/json',\n        'Content-Type': 'application/json',\n        'X-MerchRoute-Runtime-Key': key,\n        ...(payload ? { 'Content-Length': Buffer.byteLength(payload) } : {}),\n      },\n    }, (incoming) => {\n      const chunks = [];\n      let bytes = 0;\n      incoming.on('data', (chunk) => {\n        bytes += chunk.length;\n        if (bytes > 20 * 1024 * 1024) {\n          request.destroy(new Error('MerchRoute runtime API 响应超过 20 MiB 限制'));\n          return;\n        }\n        chunks.push(chunk);\n      });\n      incoming.on('end', () => resolve({\n        status: Number(incoming.statusCode || 0),\n        text: Buffer.concat(chunks).toString('utf8'),\n      }));\n    });\n    const boundedTimeoutMs = Math.max(1_000, Math.min(180_000, Number(timeoutMs) || 30_000));\n    request.setTimeout(boundedTimeoutMs, () => request.destroy(new Error('MerchRoute runtime API 请求超时')));\n    request.on('error', reject);\n    if (payload) request.write(payload);\n    request.end();\n  });\n  const text = response.text;\n  let data = {};\n  if (text) {\n    try { data = JSON.parse(text); } catch (_) { data = { raw: text }; }\n  }\n  if (response.status < 200 || response.status >= 300) {\n    const nestedError = data && typeof data.error === 'object' && data.error !== null ? data.error : {};\n    const errorValue = typeof data.error === 'string' ? data.error : '';\n    const error = new Error(String(data.message || nestedError.message || errorValue || data.code || nestedError.code || ('MerchRoute runtime API HTTP ' + response.status)));\n    error.code = String(data.code || nestedError.code || errorValue || 'RUNTIME_API_FAILED');\n    error.httpStatus = response.status;\n    error.details = data;\n    throw error;\n  }\n  return data;\n}\nfunction toItems(value) {\n  const rows = Array.isArray(value) ? value : value == null ? [] : [value];\n  return rows.map((row) => ({ json: row || {} }));\n}\nfunction migrated(name) {\n  return [{ json: { ok: false, migrated: true, error: 'MIGRATED_TO_POSTGRESQL', code: 'MIGRATED_TO_POSTGRESQL', message: name + ' 已迁移到 MerchRoute PostgreSQL runtime API' } }];\n}\nfunction runtimeFailureDetails(error) {\n  const queue = [error];\n  const seen = new Set();\n  const codes = [];\n  const messages = [];\n  const statuses = [];\n  while (queue.length && seen.size < 16) {\n    const current = queue.shift();\n    if (!current || typeof current !== 'object' || seen.has(current)) continue;\n    seen.add(current);\n    for (const key of ['code','errno','errorCode']) if (current[key] != null) codes.push(String(current[key]).toUpperCase());\n    for (const key of ['message','description']) if (current[key]) messages.push(String(current[key]));\n    for (const key of ['httpStatus','statusCode','httpCode','status']) {\n      if (current[key] == null) continue;\n      const status = Number(current[key]);\n      if (Number.isFinite(status)) statuses.push(status);\n    }\n    for (const key of ['cause','error','originalError']) {\n      if (current[key] && typeof current[key] === 'object') queue.push(current[key]);\n    }\n  }\n  return { codes, messages, statuses };\n}\nfunction isRuntimeNetworkFailure(error) {\n  const details = runtimeFailureDetails(error);\n  const retryableCodes = new Set([\n    'ETIMEDOUT','ESOCKETTIMEDOUT','ECONNRESET','ECONNABORTED','ECONNREFUSED','ENOTFOUND','EAI_AGAIN','EPIPE',\n    'UND_ERR_CONNECT_TIMEOUT','UND_ERR_HEADERS_TIMEOUT','UND_ERR_BODY_TIMEOUT','UND_ERR_SOCKET',\n  ]);\n  if (details.codes.some((code) => retryableCodes.has(code))) return true;\n  if (details.statuses.some((status) => [408, 425, 429].includes(status) || status >= 500)) return true;\n  const message = details.messages.join(' | ');\n  return /\\b(?:ETIMEDOUT|ESOCKETTIMEDOUT|ECONNRESET|ECONNABORTED|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|EPIPE|UND_ERR_CONNECT_TIMEOUT|UND_ERR_HEADERS_TIMEOUT|UND_ERR_BODY_TIMEOUT|UND_ERR_SOCKET)\\b|fetch failed|failed to fetch|timed?\\s*out|请求超时|socket hang up|temporary tls eof|network socket disconnected/i.test(message);\n}\nfunction persistentNetworkDelaySeconds(attempt) {\n  const schedule = [30, 60, 300, 900];\n  return schedule[Math.min(Math.max(1, Number(attempt || 1)), schedule.length) - 1];\n}\n\nreturn (async () => {\n  const values = {};\n  values[\"product_code\"] = (() => { const $json = ($input.first()?.json || {}); return ($('Inspect Product Folder').first().json.product_code); })();\n  values[\"store_id\"] = (() => { const $json = ($input.first()?.json || {}); return ($('Inspect Product Folder').first().json.store_id); })();\n  if (\"wb_publish_jobs\" === 'wb_runtime_config') {\n    if (\"Get Product Jobs\" === 'Load Dispatch Config') {\n      const gate = $getWorkflowStaticData('global');\n      gate.runtimeNetworkRecovery = gate.runtimeNetworkRecovery && typeof gate.runtimeNetworkRecovery === 'object'\n        ? gate.runtimeNetworkRecovery : {};\n      const recovery = gate.runtimeNetworkRecovery;\n      if (recovery.active === true && Number.isFinite(Date.parse(String(recovery.nextAttemptAt || '')))\n          && Date.parse(String(recovery.nextAttemptAt)) > Date.now()) {\n        return [{ json: { __runtimeNetworkWait: true, networkRecovery: recovery } }];\n      }\n      try {\n        const data = await runtimeRequest('GET', '/api/v1/wb/runtime/config', undefined);\n        if (recovery.active === true) {\n          gate.runtimeNetworkRecovery = {\n            ...recovery, active: false, recoveredAt: new Date().toISOString(), nextAttemptAt: null,\n          };\n        }\n        return toItems(data.config || data);\n      } catch (error) {\n        if (!isRuntimeNetworkFailure(error)) throw error;\n        const attempt = recovery.active === true ? Number(recovery.attempt || 0) + 1 : 1;\n        const delaySeconds = persistentNetworkDelaySeconds(attempt);\n        gate.runtimeNetworkRecovery = {\n          active: true, phase: 'WB_RUNTIME_CONFIG', resumeState: 'DISPATCH', attempt,\n          pauseStartedAt: recovery.pauseStartedAt || new Date().toISOString(),\n          lastFailureAt: new Date().toISOString(),\n          nextAttemptAt: new Date(Date.now() + delaySeconds * 1000).toISOString(),\n          lastErrorCode: String(error?.code || 'RUNTIME_NETWORK_ERROR'),\n          lastErrorMessage: String(error?.message || 'MerchRoute runtime API 网络不可用').slice(0, 1000),\n        };\n        return [{ json: { __runtimeNetworkWait: true, networkRecovery: gate.runtimeNetworkRecovery } }];\n      }\n    }\n    const data = await runtimeRequest('GET', '/api/v1/wb/runtime/config', undefined);\n    return toItems(data.config || data);\n  }\n  if (\"wb_publish_jobs\" === 'wb_publish_jobs') {\n    if (values.task_id) {\n      try {\n        const data = await runtimeRequest('GET', '/api/v1/wb/runtime/jobs/' + encodeURIComponent(String(values.task_id)), undefined);\n        return toItems(data.job || data);\n      } catch (error) {\n        if (\"Get Product Jobs\" === 'Lookup Job Status' && Number(error.httpStatus || 0) === 404) {\n          return [{ json: { __runtimeJobNotFound: true, task_id_requested: String(values.task_id) } }];\n        }\n        throw error;\n      }\n    }\n    const params = ['pageSize=100'];\n    if (values.product_code) params.push('productCode=' + encodeURIComponent(String(values.product_code)));\n    if (values.store_id) params.push('storeId=' + encodeURIComponent(String(values.store_id)));\n    if (\"Get Product Jobs\".includes('Dispatch')) params.push('due=true');\n    const data = await runtimeRequest('GET', '/api/v1/wb/runtime/jobs?' + params.join('&'), undefined);\n    const rows = Array.isArray(data.items) ? data.items : [];\n    if (\"Get Product Jobs\" === 'Get Product Jobs' && rows.length === 0) {\n      return [{ json: { __emptyProductJobs: true } }];\n    }\n    return toItems(rows);\n  }\n  if (\"wb_publish_jobs\" === 'wb_product_registry') {\n    if (!values.product_code) return [];\n    const params = ['productCode=' + encodeURIComponent(String(values.product_code))];\n    if (values.store_id) params.push('storeId=' + encodeURIComponent(String(values.store_id)));\n    const data = await runtimeRequest('GET', '/api/v1/wb/runtime/registry?' + params.join('&'), undefined);\n    return toItems(data.items || []);\n  }\n  if (\"wb_publish_jobs\" === 'wb_category_templates') {\n    if (!values.category_key) return [];\n    const data = await runtimeRequest('GET', '/api/v1/wb/runtime/categories/' + encodeURIComponent(String(values.category_key)), undefined);\n    return toItems(data.category || data);\n  }\n  return migrated(\"Get Product Jobs\");\n})();"
+      },
+      "alwaysOutputData": false,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "ec0d9ad9-eb42-474b-8525-ed2e9f67a645",
+      "name": "Evaluate Idempotency",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nconst prepared = $('Inspect Product Folder').first().json;\nconst rows = $input.all().map((item) => item.json)\n  .filter((row) => row && row.__emptyProductJobs !== true && row.task_id);\nconst same = rows.find((row) => row.task_id === prepared.task_id);\nif (same) {\n  if (same.payload_signature !== prepared.payload_signature) {\n    return [{ json: { action: 'RETURN', ok: false, httpStatus: 409,\n      error: 'revision_content_mismatch', message: '相同 productCode/revision 的内容签名不同',\n      taskId: prepared.task_id, state: same.state || 'UNKNOWN' } }];\n  }\n  let sameRuntime = {};\n  try { sameRuntime = JSON.parse(same.result_json || '{}'); } catch (_) {}\n  const existingMode = String(sameRuntime.submissionMode || 'UPSERT').toUpperCase();\n  if (existingMode !== prepared.submission_mode) {\n    return [{ json: { action: 'RETURN', ok: false, httpStatus: 409,\n      error: 'submission_mode_mismatch', message: '相同幂等任务不能切换 submissionMode',\n      taskId: prepared.task_id, state: same.state || 'UNKNOWN', submissionMode: existingMode } }];\n  }\n  const existingMediaPolicy = String(sameRuntime.mediaPolicy || 'MISSING_ONLY').toUpperCase();\n  const existingRunId = String(sameRuntime.automationRunId || '');\n  const preparedMediaPolicy = String(prepared.media_policy || 'MISSING_ONLY').toUpperCase();\n  if (existingMediaPolicy !== preparedMediaPolicy || existingRunId !== String(prepared.automation_run_id || '')) {\n    return [{ json: { action: 'RETURN', ok: false, httpStatus: 409,\n      error: 'submission_context_mismatch', message: '相同幂等任务不能切换媒体策略或 automationRunId',\n      taskId: prepared.task_id, state: same.state || 'UNKNOWN' } }];\n  }\n  const existingBaseline = Array.isArray(sameRuntime.existingCardBaseline) ? sameRuntime.existingCardBaseline : [];\n  const preparedBaseline = Array.isArray(prepared.existing_card_baseline) ? prepared.existing_card_baseline : [];\n  const baselineKey = (rows) => JSON.stringify(rows.map((entry) => ({\n    vendorCode: String(entry.vendorCode || ''), nmID: String(entry.nmID || entry.nmId || ''),\n    imtID: String(entry.imtID || entry.imtId || ''), subjectID: String(entry.subjectID || entry.subjectId || ''),\n  })).sort((a, b) => a.vendorCode.localeCompare(b.vendorCode)));\n  if (baselineKey(existingBaseline) !== baselineKey(preparedBaseline)) {\n    return [{ json: { action: 'RETURN', ok: false, httpStatus: 409,\n      error: 'existing_card_baseline_mismatch', message: '相同幂等任务不能改变 existingCardBaseline',\n      taskId: prepared.task_id, state: same.state || 'UNKNOWN' } }];\n  }\n  return [{ json: { action: 'RETURN', ok: true, httpStatus: 200,\n    taskId: same.task_id, productCode: same.product_code, revision: same.revision,\n    state: same.state, submissionMode: existingMode, idempotent: true } }];\n}\nconst createOnlyBlockingHistory = rows.filter((row) => !['FAILED'].includes(String(row.state || '').toUpperCase()));\nif (prepared.submission_mode === 'CREATE_ONLY' && createOnlyBlockingHistory.length > 0) {\n  return [{ json: { action: 'RETURN', ok: false, httpStatus: 409,\n    error: 'create_only_local_history_exists', message: 'CREATE_ONLY 仅允许从未产生过本地 WB 任务的 SKU',\n    taskId: prepared.task_id, existingTaskIds: createOnlyBlockingHistory.map((row) => String(row.task_id)).slice(0, 20) } }];\n}\nconst maxRevision = rows.reduce((max, row) => Math.max(max, Number(row.revision || 0)), 0);\nif (prepared.revision < maxRevision) {\n  return [{ json: { action: 'RETURN', ok: false, httpStatus: 409,\n    error: 'stale_revision', message: 'revision 低于已登记版本 ' + maxRevision,\n    taskId: prepared.task_id, latestRevision: maxRevision } }];\n}\nreturn [{ json: { ...prepared, action: 'CLAIM' } }];\n"
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "d539a2f4-3801-4c73-bb7f-e0f27dbf2b9c",
+      "name": "Should Claim",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        500,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "eaf3770b-b245-44b3-a23e-6e383052fbad",
+              "leftValue": "={{ $json.action }}",
+              "rightValue": "CLAIM",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "814886c7-6a49-44a1-84fe-ed89719b5861",
+      "name": "Return Existing or Conflict",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        760,
+        180
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "return $input.all();"
+      }
+    },
+    {
+      "id": "ac7c8074-21ae-4d2f-9ce7-33a4fa9d7e48",
+      "name": "Claim Directory",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        760,
+        -80
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nconst fs = require('fs');\nconst path = require('path');\nconst crypto = require('crypto');\nconst data = $input.first().json;\nconst now = new Date();\nconst root = data.root_real;\nconst storeScoped = data.store_scoped === true;\nconst packageScoped = data.package_scoped === true;\n// taskId 已包含店铺 alias；所有店铺统一进入根目录 processing/success，便于运维查看且不会同名冲突。\nconst storeBase = root;\nconst lockDir = path.join(storeBase, '.locks', 'intake', data.task_id + '.lock');\nconst ttlMs = Math.max(60, Number(data.lock_ttl_seconds || 600)) * 1000;\nconst destination = path.join(storeBase, 'processing', data.task_id);\nconst executionId = String($execution.id);\nconst ownerPath = path.join(lockDir, 'owner.json');\nconst marker = path.join(data.source_real, '.intake.json');\nconst markerTmp = marker + '.tmp-' + executionId;\nconst forwardMarker = path.join(data.source_real, '.intake-forward.json');\nconst forwardMarkerTmp = forwardMarker + '.tmp-' + executionId;\nconst staging = path.join(storeBase, 'processing', '.intake-copy-' + data.task_id + '-' + executionId.replace(/[^A-Za-z0-9_.-]/g, '_'));\nlet lockOwned = false;\nlet markerCreated = false;\nlet moved = false;\nlet copyFallback = false;\nlet fallbackCommitted = false;\nlet sourceInventory = [];\nlet inventorySignature = '';\nlet stage = 'LOCK';\nfunction coded(code, message, cause) {\n  const error = new Error(message);\n  error.code = code;\n  error.cause = cause;\n  return error;\n}\nfunction readOwner() {\n  try { return JSON.parse(fs.readFileSync(ownerPath, 'utf8')); } catch (_) { return {}; }\n}\nfunction releaseOwnedLock() {\n  try {\n    const owner = readOwner();\n    if (String(owner.executionId || '') === executionId) fs.rmSync(lockDir, { recursive: true, force: true });\n  } catch (_) {}\n  lockOwned = false;\n}\nfunction takeLock() {\n  for (let attempt = 0; attempt < 2; attempt++) {\n    try {\n      fs.mkdirSync(lockDir);\n      lockOwned = true;\n      const tmp = ownerPath + '.tmp-' + executionId;\n      fs.writeFileSync(tmp, JSON.stringify({ executionId, acquiredAt: now.toISOString() }), 'utf8');\n      fs.renameSync(tmp, ownerPath);\n      return;\n    } catch (error) {\n      if (error.code !== 'EEXIST') throw error;\n      const owner = readOwner();\n      const acquiredAt = Date.parse(String(owner.acquiredAt || ''));\n      const ageMs = Number.isFinite(acquiredAt) ? Date.now() - acquiredAt : Date.now() - fs.statSync(lockDir).mtimeMs;\n      if (ageMs <= ttlMs) throw coded('INTAKE_LOCKED', '目录正在被其他执行声明', error);\n      try { fs.rmSync(lockDir, { recursive: true, force: true }); } catch (removeError) {\n        throw coded('INTAKE_LOCKED', '过期目录锁暂时无法清理', removeError);\n      }\n    }\n  }\n  throw coded('INTAKE_LOCKED', '无法取得目录声明锁');\n}\nfunction sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }\nasync function renameWithRetry(sourcePath, destinationPath) {\n  const delays = [150, 300, 600, 1200, 2400];\n  let lastError;\n  for (let attempt = 0; attempt < delays.length; attempt++) {\n    try { await fs.promises.rename(sourcePath, destinationPath); return; }\n    catch (error) {\n      lastError = error;\n      if (!['EPERM','EBUSY','EACCES'].includes(String(error.code || '')) || attempt === delays.length - 1) break;\n      await sleep(delays[attempt]);\n    }\n  }\n  if (['EPERM','EBUSY','EACCES'].includes(String(lastError?.code || ''))) {\n    throw coded('DIRECTORY_BUSY', '商品目录正被其他程序占用，请稍后重试', lastError);\n  }\n  throw lastError;\n}\nfunction safeReferencedFile(relativePath) {\n  const raw = String(relativePath || '').trim().replace(/\\\\/g, '/');\n  if (!raw || raw.includes('\\u0000') || path.posix.isAbsolute(raw)) throw coded('MEDIA_PATH_INVALID', '商品媒体路径无效: ' + raw);\n  const parts = raw.split('/');\n  if (parts.some((part) => !part || part === '.' || part === '..')) throw coded('MEDIA_PATH_INVALID', '商品媒体路径存在逃逸风险: ' + raw);\n  const resolved = path.resolve(data.source_real, ...parts);\n  const relative = path.relative(data.source_real, resolved);\n  if (!relative || relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) {\n    throw coded('MEDIA_PATH_INVALID', '商品媒体路径逃逸产品目录: ' + raw);\n  }\n  let cursor = data.source_real;\n  for (const part of parts) {\n    cursor = path.join(cursor, part);\n    const stat = fs.lstatSync(cursor);\n    if (stat.isSymbolicLink()) throw coded('MEDIA_PATH_INVALID', '商品媒体路径不能包含符号链接: ' + raw);\n  }\n  const stat = fs.statSync(resolved);\n  if (!stat.isFile()) throw coded('MEDIA_PATH_INVALID', '商品媒体路径不是文件: ' + raw);\n  return { relativePath: parts.join('/'), sourcePath: resolved, stat };\n}\nfunction referencedPaths() {\n  const values = new Set(['product.json']);\n  for (const variant of Array.isArray(data.product?.variants) ? data.product.variants : []) {\n    for (const image of Array.isArray(variant?.images) ? variant.images : []) values.add(String(image || ''));\n    if (variant?.video) values.add(String(variant.video));\n  }\n  for (const manifest of ['variants/variant-media-manifest.json', 'variant-media-manifest.json']) {\n    if (fs.existsSync(path.resolve(data.source_real, ...manifest.split('/')))) values.add(manifest);\n  }\n  return [...values].filter(Boolean).sort();\n}\nfunction sha256File(filePath) {\n  return new Promise((resolve, reject) => {\n    const hash = crypto.createHash('sha256');\n    const stream = fs.createReadStream(filePath);\n    stream.on('error', reject);\n    stream.on('data', (chunk) => hash.update(chunk));\n    stream.on('end', () => resolve('sha256:' + hash.digest('hex')));\n  });\n}\nasync function snapshotSource() {\n  const rows = [];\n  for (const relativePath of referencedPaths()) {\n    const file = safeReferencedFile(relativePath);\n    rows.push({\n      relativePath: file.relativePath,\n      size: Number(file.stat.size),\n      mtimeMs: Number(file.stat.mtimeMs),\n      sha256: await sha256File(file.sourcePath),\n    });\n  }\n  return rows;\n}\nfunction signatureOf(rows) {\n  return 'sha256:' + crypto.createHash('sha256').update(JSON.stringify(rows), 'utf8').digest('hex');\n}\nfunction contentSignatureOf(rows) {\n  const contentRows = rows.map((row) => ({ relativePath: row.relativePath, size: Number(row.size), sha256: String(row.sha256) }));\n  return 'sha256:' + crypto.createHash('sha256').update(JSON.stringify(contentRows), 'utf8').digest('hex');\n}\nasync function copyDirectoryFallback(intake) {\n  stage = 'DIRECTORY_COPY_SNAPSHOT';\n  sourceInventory = await snapshotSource();\n  inventorySignature = signatureOf(sourceInventory);\n  if (storeScoped && contentSignatureOf(sourceInventory) !== String(data.source_content_signature || '')) {\n    throw coded('SOURCE_CONTENT_MISMATCH', '多店铺就绪凭证与当前商品源文件内容不一致');\n  }\n  if (fs.existsSync(staging)) throw coded('COPY_STAGING_EXISTS', '目录复制临时目标已存在');\n  fs.mkdirSync(staging, { recursive: false });\n  stage = 'DIRECTORY_COPY';\n  for (const row of sourceInventory) {\n    const sourcePath = path.resolve(data.source_real, ...row.relativePath.split('/'));\n    const targetPath = path.resolve(staging, ...row.relativePath.split('/'));\n    fs.mkdirSync(path.dirname(targetPath), { recursive: true });\n    await fs.promises.copyFile(sourcePath, targetPath, fs.constants.COPYFILE_FICLONE || 0);\n    const copied = fs.statSync(targetPath);\n    const copiedHash = await sha256File(targetPath);\n    if (Number(copied.size) !== row.size || copiedHash !== row.sha256) {\n      throw coded('COPY_VERIFICATION_FAILED', 'processing 临时副本校验失败: ' + row.relativePath);\n    }\n    const sourceAfter = fs.statSync(sourcePath);\n    const sourceHashAfter = await sha256File(sourcePath);\n    if (Number(sourceAfter.size) !== row.size || Number(sourceAfter.mtimeMs) !== row.mtimeMs || sourceHashAfter !== row.sha256) {\n      throw coded('SOURCE_CHANGED_DURING_CLAIM', '商品媒体在目录声明期间发生变化: ' + row.relativePath);\n    }\n  }\n  const fallbackIntake = { ...intake, claimMode: 'copy', sourceInventory, inventorySignature };\n  fs.writeFileSync(path.join(staging, '.intake.json'), JSON.stringify(fallbackIntake, null, 2), 'utf8');\n  stage = 'DIRECTORY_COPY_COMMIT';\n  await fs.promises.rename(staging, destination);\n  fallbackCommitted = true;\n  if (!storeScoped) {\n    const forward = {\n      taskId: data.task_id, executionId, payloadSignature: data.payload_signature,\n      inventorySignature, sourceInventory, destination, claimedAt: now.toISOString(), committedAt: null,\n    };\n    fs.writeFileSync(forwardMarkerTmp, JSON.stringify(forward, null, 2), 'utf8');\n    fs.renameSync(forwardMarkerTmp, forwardMarker);\n    fs.rmSync(marker, { force: true });\n    markerCreated = false;\n  }\n  copyFallback = true;\n}\n\nreturn (async () => {\n  try {\n    takeLock();\n    if (data.source !== 'recovery') {\n      stage = 'DESTINATION_CHECK';\n      if (fs.existsSync(destination)) throw coded('PROCESSING_DEST_EXISTS', 'processing 中已存在同名任务目录');\n      stage = 'MARKER_WRITE';\n      const intake = {\n        taskId: data.task_id, source: data.source, folderName: data.folder_name,\n        productCode: data.product_code, revision: data.revision,\n        storeId: data.store_id || '', storeAlias: data.store_alias || '', publicationId: data.publication_id || '',\n        generatedVersionId: data.generated_version_id || '',\n        credentialVersionId: data.credential_version_id || '', storeConfigVersion: Number(data.store_config_version || 0),\n        warehouseId: data.warehouse_id || '',\n        payloadSignature: data.payload_signature, submissionMode: data.submission_mode,\n        mediaPolicy: data.media_policy, mediaTargetVendorCodes: data.media_target_vendor_codes, automationRunId: data.automation_run_id,\n        existingCardBaseline: Array.isArray(data.existing_card_baseline) ? data.existing_card_baseline : [],\n        claimedAt: now.toISOString(), executionId,\n      };\n      if (storeScoped && !packageScoped) {\n        // 兼容部署前的共享源目录；每家店只获得经过 SHA 校验的独立任务副本。\n        await copyDirectoryFallback(intake);\n      } else {\n        fs.writeFileSync(markerTmp, JSON.stringify(intake, null, 2), 'utf8');\n        fs.renameSync(markerTmp, marker);\n        markerCreated = true;\n        stage = 'DIRECTORY_RENAME';\n        try {\n          await renameWithRetry(data.source_real, destination);\n          moved = true;\n        } catch (error) {\n          if (String(error?.code || '') !== 'DIRECTORY_BUSY') throw error;\n          try {\n            await copyDirectoryFallback(intake);\n          } catch (copyError) {\n            if (['EPERM','EBUSY','EACCES'].includes(String(copyError?.code || copyError?.cause?.code || ''))) {\n              throw coded('DIRECTORY_BUSY', '商品目录无法安全移动或复制，请稍后重试', copyError);\n            }\n            throw copyError;\n          }\n        }\n      }\n    } else if (path.resolve(data.source_real) !== path.resolve(destination)) {\n      throw coded('RECOVERY_DEST_MISMATCH', '恢复目录与 taskId 不一致');\n    }\n\n    const claimedScopeMode = String(data.scope_mode || (data.credential_version_id\n      ? 'VAULT'\n      : (data.store_id === '00000000-0000-4000-8000-000000000001' && data.store_alias === 'default' && data.publication_id\n        ? 'LEGACY_PUBLICATION'\n        : 'PURE_LEGACY')));\n    const runtime = {\n      runtimeVersion: 1, scopeMode: claimedScopeMode, product: data.product, barcodes: {}, cards: [],\n      storeSnapshot: {\n        storeId: data.store_id || '', storeAlias: data.store_alias || '', publicationId: data.publication_id || '',\n        generatedVersionId: data.generated_version_id || '',\n        credentialVersionId: data.credential_version_id || '', storeConfigVersion: Number(data.store_config_version || 0),\n        warehouseId: data.warehouse_id || '', gatewayMode: storeScoped\n          ? (data.credential_version_id ? 'MERCHROUTE_VAULT' : 'LEGACY_EXTERNAL')\n          : 'LEGACY_CREDENTIAL',\n      },\n      submissionMode: String(data.submission_mode || 'UPSERT'), mediaPolicy: String(data.media_policy || 'MISSING_ONLY'),\n      mediaTargetVendorCodes: Array.isArray(data.media_target_vendor_codes) ? data.media_target_vendor_codes : [],\n      automationRunId: String(data.automation_run_id || ''),\n      existingCardBaseline: Array.isArray(data.existing_card_baseline) ? data.existing_card_baseline : [],\n      media: { variantIndex: 0, imageIndex: 0 }, rootSyncHash: String(data.root_sync_hash || ''),\n      price: { uploadIds: [], verified: false }, stock: { verified: false },\n      intake: copyFallback ? {\n        mode: storeScoped ? 'store-copy' : 'copy', sourceRelPath: 'inbox/' + data.folder_name,\n        inventorySignature, sourceInventory,\n      } : { mode: packageScoped ? 'store-package-move' : 'move', ...(packageScoped ? { packageRelPath: data.package_rel_path } : {}) },\n      audit: [{ at: now.toISOString(), event: packageScoped ? 'STORE_PACKAGE_CLAIMED' : storeScoped ? 'STORE_PACKAGE_COPIED' : (copyFallback ? 'INTAKE_COPIED_FALLBACK' : 'INTAKE_CLAIMED'), executionId }],\n    };\n    const job = {\n      task_id: data.task_id, idempotency_key: data.idempotency_key, source: data.source,\n      store_id: data.store_id || '', store_alias: data.store_alias || '', publication_id: data.publication_id || '',\n      credential_version_id: data.credential_version_id || '', store_config_version: Number(data.store_config_version || 0),\n      warehouse_id: data.warehouse_id || '',\n      priority: data.priority, folder_name: data.folder_name,\n      work_relpath: 'processing/' + data.task_id,\n      product_code: data.product_code, revision: data.revision, payload_signature: data.payload_signature,\n      state: 'QUEUED', resume_state: '', stage_attempt: 0, total_attempt: 0, poll_count: 0,\n      next_run_at: now.toISOString(), stage_deadline_at: new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString(),\n      lease_owner: '', lease_expires_at: null, template_version: 0, config_version: data.config_version,\n      partial_effects: false, wb_request_ref: '', result_json: JSON.stringify(runtime),\n      last_error_code: '', last_error_message: '', submitted_at: null, finished_at: null,\n      created_at: now.toISOString(), updated_at: now.toISOString(),\n    };\n    return [{ json: { action: 'CLAIMED', job, claim: {\n      taskId: data.task_id, folderName: data.folder_name, sourcePath: data.source_real,\n      destination, markerName: '.intake.json', forwardMarkerName: '.intake-forward.json',\n      storeReadyMarkerPath: data.store_ready_marker_path || '',\n      generatedVersionId: data.generated_version_id || '', publicationId: data.publication_id || '',\n      lockDir, executionId, copyFallback, storeScoped, packageScoped, inventorySignature\n    } } }];\n  } catch (error) {\n    try { fs.rmSync(markerTmp, { force: true }); } catch (_) {}\n    try { fs.rmSync(forwardMarkerTmp, { force: true }); } catch (_) {}\n    try { if (fs.existsSync(staging)) fs.rmSync(staging, { recursive: true, force: true }); } catch (_) {}\n    if (fallbackCommitted) {\n      try {\n        const committedMarker = JSON.parse(fs.readFileSync(path.join(destination, '.intake.json'), 'utf8'));\n        if (String(committedMarker.taskId || '') === String(data.task_id) && String(committedMarker.executionId || '') === executionId) {\n          fs.rmSync(destination, { recursive: true, force: true });\n        }\n      } catch (_) {}\n      try { fs.rmSync(forwardMarker, { force: true }); } catch (_) {}\n    }\n    if (markerCreated && !moved) try { fs.rmSync(marker, { force: true }); } catch (_) {}\n    if (lockOwned) releaseOwnedLock();\n    const code = String(error?.code || 'INTAKE_FAILED');\n    const osCode = String(error?.cause?.code || (code === 'INTAKE_FAILED' ? error?.code || '' : ''));\n    const busy = code === 'DIRECTORY_BUSY';\n    const locked = code === 'INTAKE_LOCKED';\n    const destinationExists = code === 'PROCESSING_DEST_EXISTS';\n    const sourceChanged = code === 'SOURCE_CHANGED_DURING_CLAIM';\n    const sourceContentMismatch = code === 'SOURCE_CONTENT_MISMATCH';\n    const invalidMediaPath = code === 'MEDIA_PATH_INVALID';\n    const copyVerificationFailed = code === 'COPY_VERIFICATION_FAILED';\n    return [{ json: {\n      action: 'REJECTED', code,\n      publicError: busy ? 'directory_busy' : locked ? 'conflict' : destinationExists ? 'processing_destination_exists'\n        : sourceChanged ? 'source_changed' : sourceContentMismatch ? 'source_content_mismatch' : invalidMediaPath ? 'media_path_invalid'\n          : copyVerificationFailed ? 'copy_verification_failed' : 'intake_failed',\n      message: busy ? '商品目录正被其他程序占用，请稍后重试' : locked ? '目录正在由其他任务处理'\n        : destinationExists ? 'processing 中已存在同一幂等任务目录' : String(error?.message || '目录声明失败'),\n      httpStatus: busy ? 503 : (locked || destinationExists || sourceChanged || sourceContentMismatch) ? 409 : invalidMediaPath ? 400 : 500,\n      retryable: busy || locked || destinationExists || sourceChanged,\n      deliveryUnknown: destinationExists,\n      taskId: destinationExists ? data.task_id : null,\n      stage, osCode, sourcePath: data.source_real, destination,\n      folderName: data.folder_name, executionId,\n      internalMessage: String(error?.message || '目录声明失败').slice(0, 1000),\n    } }];\n  }\n})();\n"
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "b546660c-1a36-4888-b617-7ab86c1f6c63",
+      "name": "Claim Succeeded",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1000,
+        -80
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "b23f9106-8e49-4299-9b1c-4c99709f6524",
+              "leftValue": "={{ $json.action }}",
+              "rightValue": "CLAIMED",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "6f5eaadb-817c-4bc6-aa53-bd99e448a917",
+      "name": "Prepare Job Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1240,
+        -160
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "return [{ json: $input.first().json.job }];"
+      }
+    },
+    {
+      "id": "7b3f37a2-8767-4ee9-bb92-9e0deb414773",
+      "name": "Insert Job",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1480,
+        -160
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nasync function runtimeRequest(method, endpoint, body, timeoutMs = 30_000) {\n  const base = String($env.MERCHROUTE_RUNTIME_BASE_URL || 'http://127.0.0.1:4173').replace(/\\/+$/, '');\n  const key = String($env.MERCHROUTE_RUNTIME_KEY || '').trim();\n  if (!key) throw new Error('MERCHROUTE_RUNTIME_KEY 未配置，无法访问 MerchRoute WB runtime API');\n  const RuntimeURL = require('url').URL;\n  const target = new RuntimeURL(base + endpoint);\n  const payload = body === undefined ? '' : JSON.stringify(body);\n  const transport = target.protocol === 'https:' ? require('https') : require('http');\n  const response = await new Promise((resolve, reject) => {\n    const request = transport.request(target, {\n      method,\n      headers: {\n        'Accept': 'application/json',\n        'Content-Type': 'application/json',\n        'X-MerchRoute-Runtime-Key': key,\n        ...(payload ? { 'Content-Length': Buffer.byteLength(payload) } : {}),\n      },\n    }, (incoming) => {\n      const chunks = [];\n      let bytes = 0;\n      incoming.on('data', (chunk) => {\n        bytes += chunk.length;\n        if (bytes > 20 * 1024 * 1024) {\n          request.destroy(new Error('MerchRoute runtime API 响应超过 20 MiB 限制'));\n          return;\n        }\n        chunks.push(chunk);\n      });\n      incoming.on('end', () => resolve({\n        status: Number(incoming.statusCode || 0),\n        text: Buffer.concat(chunks).toString('utf8'),\n      }));\n    });\n    const boundedTimeoutMs = Math.max(1_000, Math.min(180_000, Number(timeoutMs) || 30_000));\n    request.setTimeout(boundedTimeoutMs, () => request.destroy(new Error('MerchRoute runtime API 请求超时')));\n    request.on('error', reject);\n    if (payload) request.write(payload);\n    request.end();\n  });\n  const text = response.text;\n  let data = {};\n  if (text) {\n    try { data = JSON.parse(text); } catch (_) { data = { raw: text }; }\n  }\n  if (response.status < 200 || response.status >= 300) {\n    const nestedError = data && typeof data.error === 'object' && data.error !== null ? data.error : {};\n    const errorValue = typeof data.error === 'string' ? data.error : '';\n    const error = new Error(String(data.message || nestedError.message || errorValue || data.code || nestedError.code || ('MerchRoute runtime API HTTP ' + response.status)));\n    error.code = String(data.code || nestedError.code || errorValue || 'RUNTIME_API_FAILED');\n    error.httpStatus = response.status;\n    error.details = data;\n    throw error;\n  }\n  return data;\n}\nfunction toItems(value) {\n  const rows = Array.isArray(value) ? value : value == null ? [] : [value];\n  return rows.map((row) => ({ json: row || {} }));\n}\nfunction migrated(name) {\n  return [{ json: { ok: false, migrated: true, error: 'MIGRATED_TO_POSTGRESQL', code: 'MIGRATED_TO_POSTGRESQL', message: name + ' 已迁移到 MerchRoute PostgreSQL runtime API' } }];\n}\nfunction runtimeFailureDetails(error) {\n  const queue = [error];\n  const seen = new Set();\n  const codes = [];\n  const messages = [];\n  const statuses = [];\n  while (queue.length && seen.size < 16) {\n    const current = queue.shift();\n    if (!current || typeof current !== 'object' || seen.has(current)) continue;\n    seen.add(current);\n    for (const key of ['code','errno','errorCode']) if (current[key] != null) codes.push(String(current[key]).toUpperCase());\n    for (const key of ['message','description']) if (current[key]) messages.push(String(current[key]));\n    for (const key of ['httpStatus','statusCode','httpCode','status']) {\n      if (current[key] == null) continue;\n      const status = Number(current[key]);\n      if (Number.isFinite(status)) statuses.push(status);\n    }\n    for (const key of ['cause','error','originalError']) {\n      if (current[key] && typeof current[key] === 'object') queue.push(current[key]);\n    }\n  }\n  return { codes, messages, statuses };\n}\nfunction isRuntimeNetworkFailure(error) {\n  const details = runtimeFailureDetails(error);\n  const retryableCodes = new Set([\n    'ETIMEDOUT','ESOCKETTIMEDOUT','ECONNRESET','ECONNABORTED','ECONNREFUSED','ENOTFOUND','EAI_AGAIN','EPIPE',\n    'UND_ERR_CONNECT_TIMEOUT','UND_ERR_HEADERS_TIMEOUT','UND_ERR_BODY_TIMEOUT','UND_ERR_SOCKET',\n  ]);\n  if (details.codes.some((code) => retryableCodes.has(code))) return true;\n  if (details.statuses.some((status) => [408, 425, 429].includes(status) || status >= 500)) return true;\n  const message = details.messages.join(' | ');\n  return /\\b(?:ETIMEDOUT|ESOCKETTIMEDOUT|ECONNRESET|ECONNABORTED|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|EPIPE|UND_ERR_CONNECT_TIMEOUT|UND_ERR_HEADERS_TIMEOUT|UND_ERR_BODY_TIMEOUT|UND_ERR_SOCKET)\\b|fetch failed|failed to fetch|timed?\\s*out|请求超时|socket hang up|temporary tls eof|network socket disconnected/i.test(message);\n}\nfunction persistentNetworkDelaySeconds(attempt) {\n  const schedule = [30, 60, 300, 900];\n  return schedule[Math.min(Math.max(1, Number(attempt || 1)), schedule.length) - 1];\n}\n\nreturn (async () => {\n  const job = $input.first()?.json || {};\n  const data = await runtimeRequest('POST', '/api/v1/wb/runtime/jobs/enqueue', { job });\n  return toItems(data.job || data);\n})();"
+      },
+      "onError": "continueErrorOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
+    },
+    {
+      "id": "8fc15d79-8fdc-4242-8674-81d3f5291876",
+      "name": "Validate Enqueued Job",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1720,
+        -160
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nconst row = $input.first().json || {};\nconst expected = $('Inspect Product Folder').first().json || {};\nconst taskId = String(row.task_id || row.taskId || '').trim();\nconst productCode = String(row.product_code || row.productCode || '').trim();\nconst revision = Number(row.revision);\nconst rowVersion = Number(row.row_version || row.rowVersion);\nif (!taskId || taskId !== String(expected.task_id || '')) {\n  const error = new Error('PostgreSQL enqueue 未持久化匹配的 taskId');\n  error.code = 'JOB_NOT_PERSISTED';\n  throw error;\n}\nif (productCode !== String(expected.product_code || '') || revision !== Number(expected.revision)) {\n  const error = new Error('PostgreSQL enqueue 回读的 productCode/revision 与请求不一致');\n  error.code = 'JOB_NOT_PERSISTED';\n  throw error;\n}\nfor (const [snake, camel] of [['store_id','storeId'],['store_alias','storeAlias'],['publication_id','publicationId'],['credential_version_id','credentialVersionId'],['warehouse_id','warehouseId']]) {\n  const actual = String(row[snake] || row[camel] || '');\n  const wanted = String(expected[snake] || '');\n  if (actual !== wanted) {\n    const error = new Error('PostgreSQL enqueue 回读的 ' + snake + ' 与请求不一致');\n    error.code = 'JOB_NOT_PERSISTED';\n    throw error;\n  }\n}\nif (!Number.isInteger(rowVersion) || rowVersion < 1) {\n  const error = new Error('PostgreSQL enqueue 未返回有效 rowVersion');\n  error.code = 'JOB_NOT_PERSISTED';\n  throw error;\n}\nreturn [{ json: {\n  ...row,\n  task_id: taskId,\n  product_code: productCode,\n  revision,\n  store_id: String(row.store_id || row.storeId || ''),\n  store_alias: String(row.store_alias || row.storeAlias || ''),\n  publication_id: String(row.publication_id || row.publicationId || ''),\n  credential_version_id: String(row.credential_version_id || row.credentialVersionId || ''),\n  store_config_version: Number(row.store_config_version || row.storeConfigVersion || 0),\n  warehouse_id: String(row.warehouse_id || row.warehouseId || ''),\n  row_version: rowVersion,\n} }];\n"
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "3f3e8c3e-acd3-4733-8a6c-96326a97845e",
+      "name": "Rollback Intake",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1960,
+        120
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nconst fs = require('fs');\nconst path = require('path');\nconst input = $input.first().json || {};\nconst claimResult = $('Claim Directory').first().json || {};\nconst claim = claimResult.claim || {};\nconst executionId = String($execution.id);\nlet rollbackSucceeded = false;\nlet rollbackError = '';\ntry {\n  const sourceExists = fs.existsSync(claim.sourcePath);\n  const destinationExists = fs.existsSync(claim.destination);\n  if (claim.copyFallback === true && destinationExists) {\n    const committedMarker = JSON.parse(fs.readFileSync(path.join(claim.destination, claim.markerName || '.intake.json'), 'utf8'));\n    if (String(committedMarker.taskId || '') !== String(claim.taskId || '') || String(committedMarker.executionId || '') !== String(claim.executionId || '')) {\n      throw new Error('processing 副本声明标记不匹配，拒绝自动删除');\n    }\n    fs.rmSync(claim.destination, { recursive: true, force: true });\n    fs.rmSync(path.join(claim.sourcePath, claim.forwardMarkerName || '.intake-forward.json'), { force: true });\n  } else if (destinationExists && !sourceExists) {\n    fs.renameSync(claim.destination, claim.sourcePath);\n  }\n  rollbackSucceeded = fs.existsSync(claim.sourcePath) && !fs.existsSync(claim.destination);\n  if (rollbackSucceeded) fs.rmSync(path.join(claim.sourcePath, claim.markerName || '.intake.json'), { force: true });\n} catch (error) {\n  rollbackError = String(error?.message || error || '回滚失败').slice(0, 1000);\n}\ntry {\n  const ownerPath = path.join(claim.lockDir, 'owner.json');\n  const owner = JSON.parse(fs.readFileSync(ownerPath, 'utf8'));\n  if (String(owner.executionId || '') === String(claim.executionId || executionId)) fs.rmSync(claim.lockDir, { recursive: true, force: true });\n} catch (_) {}\nconst raw = input.error || input;\nconst persistenceCode = String(raw.code || input.code || 'JOB_INSERT_FAILED');\nconst jobNotPersisted = persistenceCode === 'JOB_NOT_PERSISTED';\nreturn [{ json: {\n  action: 'REJECTED', code: jobNotPersisted ? 'JOB_NOT_PERSISTED' : 'JOB_INSERT_FAILED', publicError: jobNotPersisted ? 'job_not_persisted' : 'service_unavailable',\n  message: jobNotPersisted ? 'PostgreSQL 未持久化匹配任务，商品目录已安全回滚' : rollbackSucceeded ? '任务台账写入失败，商品目录已安全回滚，请稍后重试' : '任务台账写入失败，商品目录已进入恢复队列',\n  httpStatus: jobNotPersisted ? 502 : 503, retryable: true, deliveryUnknown: !rollbackSucceeded,\n  taskId: rollbackSucceeded ? null : claim.taskId,\n  stage: 'JOB_INSERT', osCode: String(raw.code || ''), sourcePath: claim.sourcePath,\n  destination: claim.destination, folderName: claim.folderName, executionId,\n  internalMessage: String(raw.message || input.message || 'Data Table 写入失败').slice(0, 1000),\n  rollbackSucceeded, rollbackError,\n} }];\n"
+      }
+    },
+    {
+      "id": "55235b58-42ef-4923-9835-56a74ae9ab87",
+      "name": "Release Intake Lock",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1960,
+        -160
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nconst fs = require('fs');\nconst path = require('path');\nconst row = $input.first().json || {};\nconst claim = $('Claim Directory').first().json.claim || {};\nlet lockReleaseWarning = '';\nlet sourceCommitWarning = '';\nif (claim.storeScoped === true && claim.packageScoped !== true && claim.storeReadyMarkerPath) {\n  try {\n    const markerPath = path.resolve(String(claim.storeReadyMarkerPath));\n    const expectedParent = path.resolve(String(claim.sourcePath), '.store-ready');\n    if (path.dirname(markerPath) !== expectedParent || path.basename(markerPath) !== String(claim.publicationId) + '.json') {\n      throw new Error('多店铺就绪凭证路径不匹配');\n    }\n    const marker = JSON.parse(fs.readFileSync(markerPath, 'utf8'));\n    if (String(marker.publicationId || '') !== String(claim.publicationId || '')\n      || String(marker.taskId || '') !== String(claim.taskId || '')\n      || String(marker.generatedVersionId || '') !== String(claim.generatedVersionId || '')) {\n      throw new Error('多店铺就绪凭证身份不匹配');\n    }\n    fs.rmSync(markerPath, { force: true });\n    if (fs.existsSync(expectedParent) && fs.readdirSync(expectedParent).length === 0) fs.rmSync(expectedParent, { recursive: true, force: true });\n  } catch (error) {\n    sourceCommitWarning = String(error?.message || '多店铺就绪凭证清理失败').slice(0, 500);\n  }\n}\nif (claim.copyFallback === true && claim.storeScoped !== true) {\n  try {\n    const forwardPath = path.join(claim.sourcePath, claim.forwardMarkerName || '.intake-forward.json');\n    const forward = JSON.parse(fs.readFileSync(forwardPath, 'utf8'));\n    if (String(forward.taskId || '') !== String(claim.taskId || '') || String(forward.executionId || '') !== String(claim.executionId || '')) {\n      throw new Error('源目录转发标记不匹配');\n    }\n    fs.rmSync(path.join(claim.sourcePath, '_READY'), { force: true });\n    const tmp = forwardPath + '.tmp-' + String(claim.executionId || 'commit');\n    fs.writeFileSync(tmp, JSON.stringify({ ...forward, committedAt: new Date().toISOString() }, null, 2), 'utf8');\n    fs.renameSync(tmp, forwardPath);\n  } catch (error) {\n    sourceCommitWarning = String(error?.message || '源目录提交标记更新失败').slice(0, 500);\n  }\n}\ntry {\n  const owner = JSON.parse(fs.readFileSync(path.join(claim.lockDir, 'owner.json'), 'utf8'));\n  if (String(owner.executionId || '') === String(claim.executionId || '')) fs.rmSync(claim.lockDir, { recursive: true, force: true });\n  else lockReleaseWarning = '锁拥有者已变化，未执行删除';\n} catch (error) {\n  if (fs.existsSync(claim.lockDir || '')) lockReleaseWarning = String(error?.message || '锁释放失败').slice(0, 500);\n}\nreturn [{ json: { ok: true, httpStatus: 202, taskId: row.task_id,\n  productCode: row.product_code, revision: row.revision, state: row.state,\n  submissionMode: (() => { try { return JSON.parse(row.result_json || '{}').submissionMode || 'UPSERT'; } catch (_) { return 'UPSERT'; } })(),\n  idempotent: false, claimMode: claim.packageScoped === true ? 'store-package-move'\n    : claim.storeScoped === true ? 'store-copy' : (claim.copyFallback === true ? 'copy' : 'move'),\n  ...(sourceCommitWarning ? { sourceCommitWarning } : {}),\n  ...(lockReleaseWarning ? { lockReleaseWarning } : {}) } }];\n"
+      }
+    },
+    {
+      "id": "a9b03f50-854a-40cb-b948-ad9e3d015c12",
+      "name": "Format Intake Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1480,
+        360
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nconst fs = require('fs');\nconst path = require('path');\nconst input = $input.first().json || {};\nconst trigger = $('When Executed by Another Workflow').first().json || {};\nconst config = $('Load Runtime Config').first().json || {};\nconst rawValue = input.error || input;\nconst raw = rawValue && typeof rawValue === 'object' ? rawValue : {};\nconst prefix = 'MERCHROUTE_INTAKE_ERROR_V1:';\nlet envelope = null;\nif (typeof rawValue === 'string' && rawValue.startsWith(prefix)) {\n  try {\n    const parsed = JSON.parse(rawValue.slice(prefix.length));\n    if (parsed && typeof parsed === 'object' && /^[A-Z][A-Z0-9_]{1,63}$/.test(String(parsed.code || ''))) envelope = parsed;\n  } catch (_) {}\n}\nconst structured = input.action === 'REJECTED';\nconst message = structured ? String(input.message || '目录声明失败') : envelope ? String(envelope.message || '目录声明失败') : '目录声明失败';\nconst code = String((structured ? input.code : envelope?.code || raw.code || input.code) || 'INTAKE_FAILED');\nconst retryable = structured ? input.retryable === true : envelope?.retryable === true;\nconst deliveryUnknown = structured ? input.deliveryUnknown === true : envelope?.deliveryUnknown === true;\nconst httpStatus = Number(input.httpStatus || envelope?.httpStatus || (code === 'INTAKE_LOCKED' ? 409 : 500));\nconst details = {\n  code, message, internalMessage: String(input.internalMessage || (typeof rawValue === 'string' ? rawValue : raw.message) || input.message || '').slice(0, 1000),\n  stage: String(input.stage || envelope?.stage || 'UNEXPECTED'), osCode: String(input.osCode || raw.code || ''),\n  sourcePath: String(input.sourcePath || ''), destination: String(input.destination || ''),\n  folderName: String(input.folderName || trigger.folderName || ''), taskId: input.taskId || null,\n  retryable, deliveryUnknown,\n  rollbackSucceeded: input.rollbackSucceeded, rollbackError: input.rollbackError,\n  executionId: String(input.executionId || $execution.id), at: new Date().toISOString(),\n};\nif (config.import_root) {\n  try {\n    const dir = path.join(path.resolve(String(config.import_root)), 'system-errors');\n    fs.mkdirSync(dir, { recursive: true });\n    const file = path.join(dir, 'intake-' + String($execution.id) + '.json');\n    const tmp = file + '.tmp';\n    fs.writeFileSync(tmp, JSON.stringify(details, null, 2), 'utf8');\n    fs.renameSync(tmp, file);\n  } catch (_) {}\n}\nreturn [{ json: { ok: false, httpStatus,\n  error: String(input.publicError || code.toLowerCase()), code, message,\n  taskId: input.taskId || null, retryable, deliveryUnknown } }];\n"
+      }
+    }
+  ],
+  "connections": {
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Load Runtime Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Runtime Config": {
+      "main": [
+        [
+          {
+            "node": "Inspect Product Folder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Inspect Product Folder": {
+      "main": [
+        [
+          {
+            "node": "Get Product Jobs",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Format Intake Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Product Jobs": {
+      "main": [
+        [
+          {
+            "node": "Evaluate Idempotency",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Format Intake Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate Idempotency": {
+      "main": [
+        [
+          {
+            "node": "Should Claim",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Format Intake Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Should Claim": {
+      "main": [
+        [
+          {
+            "node": "Claim Directory",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Existing or Conflict",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claim Directory": {
+      "main": [
+        [
+          {
+            "node": "Claim Succeeded",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Format Intake Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claim Succeeded": {
+      "main": [
+        [
+          {
+            "node": "Prepare Job Row",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Format Intake Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Job Row": {
+      "main": [
+        [
+          {
+            "node": "Insert Job",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Job": {
+      "main": [
+        [
+          {
+            "node": "Validate Enqueued Job",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Rollback Intake",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Enqueued Job": {
+      "main": [
+        [
+          {
+            "node": "Release Intake Lock",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Rollback Intake",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rollback Intake": {
+      "main": [
+        [
+          {
+            "node": "Format Intake Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Shanghai",
+    "errorWorkflow": "JcTDgNsprA7rPoMA",
+    "callerPolicy": "workflowsFromSameOwner",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "availableInMCP": false,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "none"
+  }
+}

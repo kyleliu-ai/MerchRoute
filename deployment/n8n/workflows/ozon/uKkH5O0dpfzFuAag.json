@@ -1,0 +1,1165 @@
+{
+  "id": "uKkH5O0dpfzFuAag",
+  "name": "OZON-S002-图片上传转URL适配器",
+  "active": true,
+  "nodes": [
+    {
+      "id": "d3717101-d35b-47d5-99c3-d526f82ad8d2",
+      "name": "适配器说明",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -700,
+        -480
+      ],
+      "parameters": {
+        "content": "# OZON-S002 批量媒体上传适配器\n\n图片 URL 在附加唯一 `merchroute_attempt` 后才进入校验，S001 会原样提交该 URL。校验禁止重定向并完整 GET 字节，按 1/3/8 秒重试，HTTP 200、MIME、字节数和 SHA-256 必须同时匹配。\n\n单轮公开 URL 失败时只重新上传该资源一次；第二个 URL 仍失败则返回结构化可恢复错误并禁止调用 OZON。该预算与平台异步抓图后的最多三轮完整图片修复相互独立。图片最多 7 路、视频最多 2 路。",
+        "width": 700,
+        "height": 390
+      }
+    },
+    {
+      "id": "de7ef5c2-3206-4f27-9da8-bf5131a73144",
+      "name": "When Executed by Another Workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -700,
+        0
+      ],
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "input",
+              "type": "any"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "9da924bf-41b9-4d5b-9ee5-a346512bfd8e",
+      "name": "准备上传输入",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -460,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nconst fs = require('fs');\nconst path = require('path');\nconst crypto = require('crypto');\nconst rawInputs = $input.all();\nif (!rawInputs.length) throw new Error('媒体上传适配器没有收到输入');\nconst descriptors = rawInputs.flatMap((item, originalIndex) => {\n  const value = item.json?.input ?? item.json ?? {};\n  return Array.isArray(value.inputs)\n    ? value.inputs.map((source) => ({ source, originalIndex }))\n    : [{ source: value, originalIndex, legacyBinary: item.binary?.data }];\n});\nconst platform = (value) => process.platform === 'win32' ? value.toLowerCase() : value;\nconst inside = (root, candidate) => {\n  const relative = path.relative(root, candidate);\n  return Boolean(relative) && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative);\n};\nconst hashFile = (filePath) => new Promise((resolve, reject) => {\n  const hash = crypto.createHash('sha256');\n  const stream = fs.createReadStream(filePath);\n  stream.on('error', reject);\n  stream.on('data', (chunk) => hash.update(chunk));\n  stream.on('end', () => resolve(hash.digest('hex')));\n});\nconst prepareOne = async (wrapper, fallbackIndex) => {\n  const source = wrapper.source || {};\n  const legacyBinary = wrapper.legacyBinary;\n  const startedAt = Date.now();\n  if ((!source.sourcePath || !source.taskRoot) && legacyBinary?.data) {\n    const buffer = Buffer.from(String(legacyBinary.data), 'base64');\n    const mimeType = String(legacyBinary.mimeType || source.mimeType || '').toLowerCase();\n    const mediaType = mimeType === 'video/mp4' ? 'video' : mimeType.startsWith('image/') ? 'image' : '';\n    if (!mediaType || !['image/jpeg','image/png','image/webp','video/mp4'].includes(mimeType)) throw new Error('旧版单资源输入的媒体 MIME 不受支持');\n    const validSignature = mimeType === 'video/mp4'\n      ? buffer.length >= 12 && buffer.toString('ascii',4,8) === 'ftyp'\n      : mimeType === 'image/png'\n        ? buffer.subarray(0,8).equals(Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a]))\n        : mimeType === 'image/jpeg'\n          ? buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff\n          : buffer.toString('ascii',0,4) === 'RIFF' && buffer.toString('ascii',8,12) === 'WEBP';\n    if (!validSignature) throw new Error('旧版单资源输入的文件签名与 MIME 不一致');\n    const sourceSha256 = crypto.createHash('sha256').update(buffer).digest('hex');\n    const inputIndex = Number(source.inputIndex ?? fallbackIndex);\n    return {\n      json: {\n        ...source,\n        sourceFileName: String(source.sourceFileName || legacyBinary.fileName || ('media-' + inputIndex)),\n        inputIndex,\n        mediaType,\n        mimeType,\n        sourceSha256,\n        uploadedSha256: sourceSha256,\n        sourceSizeBytes: buffer.length,\n        uploadedSizeBytes: buffer.length,\n        cacheHit: false,\n        compressionRatio: 1,\n        uploadAttempt: Number(source.uploadAttempt || 0),\n        initialUrlReused: false,\n        startedAt,\n        skipUpload: false\n      },\n      binary: { data: legacyBinary },\n      pairedItem: { item: wrapper.originalIndex ?? fallbackIndex }\n    };\n  }\n  const sourcePath = path.resolve(String(source.sourcePath || ''));\n  const taskRoot = path.resolve(String(source.taskRoot || ''));\n  if (!path.isAbsolute(sourcePath) || !path.isAbsolute(taskRoot) || !fs.existsSync(taskRoot)) throw new Error('媒体上传缺少安全的绝对 sourcePath/taskRoot');\n  const rootInfo = fs.lstatSync(taskRoot);\n  const sourceInfo = fs.lstatSync(sourcePath);\n  if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink() || !sourceInfo.isFile() || sourceInfo.isSymbolicLink()) throw new Error('媒体路径必须是任务根目录内的普通文件');\n  const rootReal = fs.realpathSync(taskRoot);\n  const sourceReal = fs.realpathSync(sourcePath);\n  if (!inside(rootReal, sourceReal)) throw new Error('媒体文件逃逸 OZON 任务根目录');\n  const expectedSha256 = String(source.expectedSha256 || source.sha256 || '').replace(/^sha256:/i,'').toLowerCase();\n  const actualUploadSha256 = await hashFile(sourceReal);\n  if (!/^[a-f0-9]{64}$/.test(expectedSha256) || actualUploadSha256 !== expectedSha256) throw new Error('媒体 SHA-256 与任务契约不一致: ' + path.basename(sourceReal));\n  if (Number(source.expectedSizeBytes || sourceInfo.size) !== sourceInfo.size) throw new Error('媒体大小与任务契约不一致: ' + path.basename(sourceReal));\n  const mediaType = String(source.mediaType || '').toLowerCase();\n  const mimeType = String(source.mimeType || '').toLowerCase();\n  if (!['image','video'].includes(mediaType) || !['image/jpeg','image/png','image/webp','video/mp4'].includes(mimeType)) throw new Error('媒体类型或 MIME 不受支持');\n  const uploadPath = sourceReal;\n  const uploadedSha256 = actualUploadSha256;\n  const uploadedSizeBytes = sourceInfo.size;\n  const cacheHit = Boolean(source.cacheHit);\n  const compressionRatio = Number(source.compressionRatio || 1);\n  const priorUrl = String(source.priorUrl || '').trim();\n  const reusedUrl = /^https?:\\/\\//i.test(priorUrl);\n  const inputIndex = Number(source.inputIndex ?? fallbackIndex);\n  const sourceFileName = String(source.sourceFileName || path.basename(sourceReal));\n  const common = {\n    ...source,\n    sourceFileName,\n    inputIndex,\n    mediaType,\n    mimeType,\n    sourcePath: sourceReal,\n    taskRoot: rootReal,\n    sourceSha256: String(source.sourceSha256 || source.originalSourceSha256 || actualUploadSha256),\n    uploadedSha256,\n    sourceSizeBytes: sourceInfo.size,\n    uploadedSizeBytes,\n    cacheHit,\n    compressionRatio,\n    uploadKey: String(source.uploadKey || ''),\n    profileKey: String(source.profileKey || ''),\n    profileVersion: String(source.profileVersion || ''),\n    assignments: Array.isArray(source.assignments) ? source.assignments : [],\n    uploadPath,\n    uploadAttempt: Number(source.uploadAttempt || 0),\n    initialUrlReused: reusedUrl,\n    startedAt,\n    skipUpload: reusedUrl,\n    url: reusedUrl ? priorUrl : undefined\n  };\n  if (reusedUrl) return { json: common, pairedItem: { item: fallbackIndex } };\n  const buffer = fs.readFileSync(uploadPath);\n  return {\n    json: common,\n    binary: { data: { data: buffer.toString('base64'), mimeType, fileName: path.basename(uploadPath), fileExtension: path.extname(uploadPath).slice(1), fileSize: String(buffer.length) } },\n    pairedItem: { item: fallbackIndex }\n  };\n};\nreturn Promise.all(descriptors.map(prepareOne));"
+      }
+    },
+    {
+      "id": "1470a02a-fc90-4cd2-b2b5-a9c525f9a256",
+      "name": "媒体类型为视频",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -260,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "d1b52f5c-6954-4020-adb5-fdd716b306e8",
+              "leftValue": "={{ $json.mediaType === 'video' }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "b98dc166-ed1c-4daa-ba1c-b6a91beaf600",
+      "name": "上传API（用户配置）",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -20,
+        120
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.siliconflow.cn/v1/files",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "multipart/form-data"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "purpose",
+              "value": "assistants"
+            },
+            {
+              "parameterType": "formBinaryData",
+              "name": "file",
+              "inputDataFieldName": "data"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 60000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          },
+          "batching": {
+            "batch": {
+              "batchSize": 7,
+              "batchInterval": 0
+            }
+          }
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "1fabafaf-fc77-4f24-b9d2-9e23fd71b397",
+      "name": "视频上传API（用户配置）",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -20,
+        -120
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.siliconflow.cn/v1/files",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "multipart/form-data"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "purpose",
+              "value": "assistants"
+            },
+            {
+              "parameterType": "formBinaryData",
+              "name": "file",
+              "inputDataFieldName": "data"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 180000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          },
+          "batching": {
+            "batch": {
+              "batchSize": 2,
+              "batchInterval": 0
+            }
+          }
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "50586ac4-2896-49e7-bdb0-b92c348b053f",
+      "name": "标准化返回URL",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        60,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nconst prepared = $('准备上传输入').all();\nreturn $input.all().map((item, index) => {\n  let source = prepared[index]?.json || {};\n  try { source = $('准备上传输入').itemMatching(index).json || source; } catch {}\n  const body = item.json?.body !== undefined ? item.json.body : item.json;\n  const candidates = [\n    body?.url, body?.object, body?.data?.url, body?.data?.object, body?.file?.url, body?.data?.file?.url,\n    body?.download_url, body?.data?.download_url\n  ];\n  const url = candidates.map((value) => String(value || '').trim()).find((value) => /^https?:\\/\\//i.test(value));\n  if (!url) return {\n    json: {\n      ...source,\n      uploadResponseReady: false,\n      urlReady: false,\n      urlVerificationAttempt: 0,\n      urlVerificationStatus: 'UPLOAD_RESPONSE_INVALID',\n      urlVerificationReasons: ['UPLOAD_RESPONSE_INVALID'],\n      verificationHttpStatus: Number(item.json?.statusCode || 0),\n      error: {\n        code: 'MEDIA_UPLOAD_RESPONSE_INVALID',\n        message: '媒体上传服务响应中没有可用公网 URL',\n        reasons: ['UPLOAD_RESPONSE_INVALID'],\n        retryable: true\n      }\n    },\n    pairedItem: { item: Number(source.inputIndex ?? index) }\n  };\n  return {\n    json: { ...source, url, skipUpload: false, uploadResponseReady: true },\n    pairedItem: { item: Number(source.inputIndex ?? index) }\n  };\n});"
+      }
+    },
+    {
+      "id": "153f4e54-b9f6-4d05-bec1-0aa0695b5ce6",
+      "name": "检查上传URL",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        320,
+        0
+      ],
+      "parameters": {
+        "method": "={{ $json.mediaType === 'image' ? 'GET' : 'HEAD' }}",
+        "url": "={{ $json.verifiedUrl || $json.url }}",
+        "options": {
+          "timeout": 20000,
+          "redirect": {
+            "redirect": {
+              "followRedirects": false
+            }
+          },
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "file",
+              "outputPropertyName": "data"
+            }
+          },
+          "batching": {
+            "batch": {
+              "batchSize": 3,
+              "batchInterval": 400
+            }
+          }
+        }
+      },
+      "retryOnFail": false,
+      "maxTries": 2,
+      "waitBetweenTries": 1500,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "b6949028-b61a-498b-b027-21b4ef35b9e2",
+      "name": "评估上传URL",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        580,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nconst crypto = require('crypto');\nconst inputs = $input.all();\nconst output = [];\nfor (let index = 0; index < inputs.length; index += 1) {\n  const item = inputs[index];\n  let source = {};\n  try { source = $(\"准备实际提交URL\").itemMatching(index).json || source; } catch {}\n  const response = item.json || {};\n  const statusCode = Number(response.statusCode || 0);\n  const headers = response.headers || {};\n  const rawContentType = String(headers['content-type'] || headers['Content-Type'] || '').trim().toLowerCase();\n  const contentType = rawContentType.split(';')[0].trim();\n  const mediaType = String(source.mediaType || '').toLowerCase();\n  const reasons = [];\n  let downloadedSizeBytes = 0;\n  let downloadedSha256 = '';\n  if (response.error) reasons.push('NETWORK_ERROR');\n  if (statusCode !== 200) reasons.push('HTTP_' + String(statusCode || 'NO_STATUS'));\n  if (mediaType === 'image') {\n    const allowedMimeTypes = new Set(['image/jpeg','image/png','image/webp']);\n    if (!allowedMimeTypes.has(contentType) || contentType !== String(source.mimeType || '').toLowerCase()) reasons.push('MIME_MISMATCH');\n    let buffer = null;\n    try { buffer = await this.helpers.getBinaryDataBuffer(index, 'data'); } catch {}\n    if (!buffer) reasons.push('BINARY_MISSING');\n    else {\n      downloadedSizeBytes = buffer.length;\n      downloadedSha256 = crypto.createHash('sha256').update(buffer).digest('hex');\n      if (downloadedSizeBytes !== Number(source.uploadedSizeBytes || source.sourceSizeBytes || 0)) reasons.push('SIZE_MISMATCH');\n      if (downloadedSha256 !== String(source.uploadedSha256 || source.sourceSha256 || '').toLowerCase()) reasons.push('SHA256_MISMATCH');\n      const declaredLength = Number(headers['content-length'] || headers['Content-Length'] || 0);\n      if (declaredLength > 0 && declaredLength !== downloadedSizeBytes) reasons.push('CONTENT_LENGTH_MISMATCH');\n    }\n  } else if (mediaType === 'video') {\n    if (!contentType.startsWith('video/')) reasons.push('MIME_MISMATCH');\n  } else {\n    reasons.push('UNSUPPORTED_MEDIA_TYPE');\n  }\n  const valid = reasons.length === 0;\n  output.push({\n    json: {\n      ...source,\n      urlReady: valid,\n      urlVerificationAttempt: 1,\n      urlVerificationStatus: valid ? 'VALID' : 'INVALID',\n      urlVerificationReasons: reasons,\n      verificationHttpStatus: statusCode,\n      verificationContentType: contentType,\n      downloadedSizeBytes,\n      downloadedSha256,\n      verifiedAt: valid ? new Date().toISOString() : undefined\n    },\n    pairedItem: { item: Number(source.inputIndex ?? index) }\n  });\n}\nreturn output;"
+      }
+    },
+    {
+      "id": "b6105974-47d8-4d15-a4e1-e9d2b94e1081",
+      "name": "URL可用",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        820,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "624821be-4449-4e77-ab7c-46abdba749eb",
+              "leftValue": "={{ $json.urlReady }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "40c3b6da-8265-4050-bc59-b8d5f0e1b04b",
+      "name": "重新准备原媒体",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        820,
+        220
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nconst fs = require('fs');\nconst path = require('path');\nconst prepared = $('准备上传输入').all();\nreturn $input.all().map((item, index) => {\n  const inputIndex = Number(item.json.inputIndex ?? index);\n  const original = prepared.find((candidate) => Number(candidate.json.inputIndex) === inputIndex);\n  let binary = original?.binary?.data;\n  if (!binary && original?.json?.uploadPath) {\n    const uploadPath = path.resolve(String(original.json.uploadPath));\n    const taskRoot = path.resolve(String(original.json.taskRoot || ''));\n    const relative = path.relative(taskRoot, uploadPath);\n    if (!relative || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) throw new Error('重新上传路径逃逸任务根目录');\n    const info = fs.lstatSync(uploadPath);\n    if (!info.isFile() || info.isSymbolicLink()) throw new Error('重新上传媒体不是普通文件');\n    const buffer = fs.readFileSync(uploadPath);\n    binary = {\n      data: buffer.toString('base64'),\n      mimeType: String(original.json.mimeType),\n      fileName: path.basename(uploadPath),\n      fileExtension: path.extname(uploadPath).slice(1),\n      fileSize: String(buffer.length)\n    };\n  }\n  if (!binary) throw new Error('无法定位重新上传所需的本地媒体: ' + item.json.sourceFileName);\n  return {\n    json: { ...item.json, url: undefined, verifiedUrl: undefined, rawUploadUrl: undefined, uploadAttempt: 1, skipUpload: false },\n    binary: { data: binary },\n    pairedItem: { item: inputIndex }\n  };\n});"
+      }
+    },
+    {
+      "id": "4ca69f32-13de-43a5-8b8a-0fe9c9db3510",
+      "name": "返回统一URL契约",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1080,
+        -80
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nreturn $input.all().map((item, index) => {\n  const value = item.json || {};\n  const durationMs = Math.max(0, Date.now() - Number(value.startedAt || Date.now()));\n  const valid = value.urlReady === true && /^https?:\\/\\//i.test(String(value.verifiedUrl || value.url || ''));\n  const verifiedUrl = String(value.verifiedUrl || value.url || '');\n  const existingError = !valid && value.error && typeof value.error === 'object' ? value.error : null;\n  const error = valid ? undefined : existingError || {\n    code: 'PUBLIC_MEDIA_URL_UNAVAILABLE',\n    message: '公网媒体 URL 完整校验在单次重新上传后仍失败',\n    reasons: Array.isArray(value.urlVerificationReasons) ? value.urlVerificationReasons : ['UNKNOWN'],\n    retryable: true\n  };\n  return { json: {\n    ok: valid,\n    retryable: valid ? false : error.retryable !== false,\n    sourceFileName: String(value.sourceFileName),\n    uploadKey: String(value.uploadKey || ''),\n    inputIndex: Number(value.inputIndex ?? index),\n    mediaType: String(value.mediaType),\n    mimeType: String(value.mimeType),\n    url: verifiedUrl,\n    verifiedUrl,\n    urlReady: valid,\n    uploadedSha256: String(value.uploadedSha256 || value.sourceSha256),\n    error,\n    audit: {\n      uploadKey: String(value.uploadKey || ''),\n      sourceFileName: String(value.sourceFileName),\n      inputIndex: Number(value.inputIndex ?? index),\n      mediaType: String(value.mediaType),\n      sourceSha256: String(value.sourceSha256),\n      uploadedSha256: String(value.uploadedSha256 || value.sourceSha256),\n      sourceSizeBytes: Number(value.sourceSizeBytes || 0),\n      uploadedSizeBytes: Number(value.uploadedSizeBytes || value.sourceSizeBytes || 0),\n      cacheHit: Boolean(value.cacheHit),\n      compressionRatio: Number(value.compressionRatio || 1),\n      reusedUrl: Boolean(value.skipUpload),\n      url: verifiedUrl,\n      durationMs\n      ,assignments: Array.isArray(value.assignments) ? value.assignments : []\n      ,uploadCount: value.skipUpload ? 0 : (value.initialUrlReused ? 1 : Number(value.uploadAttempt || 0) + 1)\n      ,uploadAttempt: Number(value.uploadAttempt || 0)\n      ,urlVerifiedAt: valid ? String(value.verifiedAt || new Date().toISOString()) : null\n      ,urlVerificationStatus: valid ? 'VALID' : 'INVALID'\n      ,urlVerificationAttempts: Number(value.urlVerificationAttempt || 0)\n      ,urlVerificationReasons: Array.isArray(value.urlVerificationReasons) ? value.urlVerificationReasons : []\n      ,verificationHttpStatus: Number(value.verificationHttpStatus || 0)\n      ,verificationContentType: String(value.verificationContentType || '')\n      ,downloadedSizeBytes: Number(value.downloadedSizeBytes || 0)\n      ,downloadedSha256: String(value.downloadedSha256 || '')\n    }\n  }, pairedItem: { item: Number(value.inputIndex ?? index) } };\n});"
+      }
+    },
+    {
+      "id": "d030dc72-fff9-43d3-84d7-ca3dce2666e0",
+      "name": "需要上传媒体",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -270,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "50b7b049-42bf-4211-b660-a1177ef96920",
+              "leftValue": "={{ !$json.skipUpload }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "e4a3bd98-0813-4f6c-a17a-a6c07c60729e",
+      "name": "上传响应包含URL",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        40,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "34698ae2-ecf0-4185-bb35-52922c2b3beb",
+              "leftValue": "={{ $json.uploadResponseReady === true }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "df1a8dbf-71bf-4807-a92d-7298f0c60193",
+      "name": "标准化上传失败",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -20,
+        -220
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nconst prepared = $('准备上传输入').all();\nconst byUploadKey = new Map(prepared\n  .map((item) => item.json || {})\n  .filter((item) => String(item.uploadKey || ''))\n  .map((item) => [String(item.uploadKey), item]));\nconst byInputIndex = new Map(prepared.map((item, index) => [Number(item.json?.inputIndex ?? index), item.json || {}]));\nconst pairedIndex = (item) => {\n  const paired = item?.pairedItem;\n  if (Array.isArray(paired)) return Number(paired[0]?.item);\n  return Number(paired?.item);\n};\nreturn $input.all().map((item, index) => {\n  const incoming = item.json || {};\n  let source = {};\n  try { source = $('准备上传输入').itemMatching(index).json || source; } catch {}\n  const incomingKey = String(incoming.uploadKey || '');\n  const incomingIndex = Number(incoming.inputIndex);\n  const lineageIndex = pairedIndex(item);\n  if (incomingKey && byUploadKey.has(incomingKey)) source = byUploadKey.get(incomingKey);\n  else if (Number.isInteger(incomingIndex) && byInputIndex.has(incomingIndex)) source = byInputIndex.get(incomingIndex);\n  else if ((!source || !String(source.uploadKey || '')) && Number.isInteger(lineageIndex) && byInputIndex.has(lineageIndex)) source = byInputIndex.get(lineageIndex);\n  const uploadKey = String(source.uploadKey || '');\n  const inputIndex = Number(source.inputIndex);\n  if (!uploadKey || !Number.isInteger(inputIndex)) throw new Error('无法按 uploadKey/inputIndex 关联媒体上传失败项');\n  const rawError = incoming.error && typeof incoming.error === 'object' ? incoming.error : {};\n  const statusCode = Number(incoming.statusCode || rawError.statusCode || rawError.httpCode || 0);\n  const reasons = ['UPLOAD_REQUEST_FAILED', statusCode > 0 ? 'HTTP_' + statusCode : 'NO_STATUS'];\n  const retryable = statusCode === 0 || statusCode === 408 || statusCode === 429 || statusCode >= 500;\n  return {\n    json: {\n      ...source,\n      url: undefined,\n      verifiedUrl: undefined,\n      uploadResponseReady: false,\n      urlReady: false,\n      urlVerificationAttempt: 0,\n      urlVerificationStatus: 'UPLOAD_FAILED',\n      urlVerificationReasons: reasons,\n      verificationHttpStatus: statusCode,\n      error: {\n        code: 'MEDIA_UPLOAD_REQUEST_FAILED',\n        message: '媒体上传服务请求失败',\n        reasons,\n        retryable\n      }\n    },\n    pairedItem: { item: inputIndex }\n  };\n});"
+      }
+    },
+    {
+      "id": "74ad0c3c-9e10-4326-971d-c25e7db46eb1",
+      "name": "准备实际提交URL",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nconst { URL } = require('url');\nreturn $input.all().map((item, index) => {\n  const source = item.json || {};\n  const rawUrl = String(source.url || '').trim();\n  if (!/^https?:\\/\\//i.test(rawUrl)) throw new Error('上传服务返回的公网 URL 无效: ' + String(source.sourceFileName || index));\n  let verifiedUrl = rawUrl;\n  if (String(source.mediaType || '').toLowerCase() === 'image') {\n    const parsed = new URL(rawUrl);\n    const executionId = String(typeof $execution !== 'undefined' && $execution?.id ? $execution.id : 'local');\n    parsed.searchParams.set('merchroute_attempt', executionId + '-' + Number(source.uploadAttempt || 0) + '-' + Number(source.inputIndex ?? index));\n    verifiedUrl = parsed.toString();\n  }\n  return {\n    json: { ...source, rawUploadUrl: rawUrl, url: verifiedUrl, verifiedUrl },\n    pairedItem: { item: Number(source.inputIndex ?? index) }\n  };\n});"
+      }
+    },
+    {
+      "id": "d45f0fec-4808-48c9-a64e-5c18f72fd295",
+      "name": "等待URL重试 1秒",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        820,
+        220
+      ],
+      "parameters": {
+        "amount": 1,
+        "unit": "seconds"
+      }
+    },
+    {
+      "id": "b3bd5233-fca9-4656-b4ad-f0b38b3cc1b7",
+      "name": "检查上传URL 2",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1040,
+        220
+      ],
+      "parameters": {
+        "method": "={{ $json.mediaType === 'image' ? 'GET' : 'HEAD' }}",
+        "url": "={{ $json.verifiedUrl || $json.url }}",
+        "options": {
+          "timeout": 20000,
+          "redirect": {
+            "redirect": {
+              "followRedirects": false
+            }
+          },
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "file",
+              "outputPropertyName": "data"
+            }
+          },
+          "batching": {
+            "batch": {
+              "batchSize": 3,
+              "batchInterval": 400
+            }
+          }
+        }
+      },
+      "retryOnFail": false,
+      "maxTries": 2,
+      "waitBetweenTries": 1500,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "8856286f-5ee7-4ab8-a842-74f7cbc1e6a0",
+      "name": "评估上传URL 2",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1260,
+        220
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nconst crypto = require('crypto');\nconst inputs = $input.all();\nconst output = [];\nfor (let index = 0; index < inputs.length; index += 1) {\n  const item = inputs[index];\n  let source = {};\n  try { source = $(\"等待URL重试 1秒\").itemMatching(index).json || source; } catch {}\n  const response = item.json || {};\n  const statusCode = Number(response.statusCode || 0);\n  const headers = response.headers || {};\n  const rawContentType = String(headers['content-type'] || headers['Content-Type'] || '').trim().toLowerCase();\n  const contentType = rawContentType.split(';')[0].trim();\n  const mediaType = String(source.mediaType || '').toLowerCase();\n  const reasons = [];\n  let downloadedSizeBytes = 0;\n  let downloadedSha256 = '';\n  if (response.error) reasons.push('NETWORK_ERROR');\n  if (statusCode !== 200) reasons.push('HTTP_' + String(statusCode || 'NO_STATUS'));\n  if (mediaType === 'image') {\n    const allowedMimeTypes = new Set(['image/jpeg','image/png','image/webp']);\n    if (!allowedMimeTypes.has(contentType) || contentType !== String(source.mimeType || '').toLowerCase()) reasons.push('MIME_MISMATCH');\n    let buffer = null;\n    try { buffer = await this.helpers.getBinaryDataBuffer(index, 'data'); } catch {}\n    if (!buffer) reasons.push('BINARY_MISSING');\n    else {\n      downloadedSizeBytes = buffer.length;\n      downloadedSha256 = crypto.createHash('sha256').update(buffer).digest('hex');\n      if (downloadedSizeBytes !== Number(source.uploadedSizeBytes || source.sourceSizeBytes || 0)) reasons.push('SIZE_MISMATCH');\n      if (downloadedSha256 !== String(source.uploadedSha256 || source.sourceSha256 || '').toLowerCase()) reasons.push('SHA256_MISMATCH');\n      const declaredLength = Number(headers['content-length'] || headers['Content-Length'] || 0);\n      if (declaredLength > 0 && declaredLength !== downloadedSizeBytes) reasons.push('CONTENT_LENGTH_MISMATCH');\n    }\n  } else if (mediaType === 'video') {\n    if (!contentType.startsWith('video/')) reasons.push('MIME_MISMATCH');\n  } else {\n    reasons.push('UNSUPPORTED_MEDIA_TYPE');\n  }\n  const valid = reasons.length === 0;\n  output.push({\n    json: {\n      ...source,\n      urlReady: valid,\n      urlVerificationAttempt: 2,\n      urlVerificationStatus: valid ? 'VALID' : 'INVALID',\n      urlVerificationReasons: reasons,\n      verificationHttpStatus: statusCode,\n      verificationContentType: contentType,\n      downloadedSizeBytes,\n      downloadedSha256,\n      verifiedAt: valid ? new Date().toISOString() : undefined\n    },\n    pairedItem: { item: Number(source.inputIndex ?? index) }\n  });\n}\nreturn output;"
+      }
+    },
+    {
+      "id": "2f95ddf2-8d4c-465a-a597-c503b5cd2198",
+      "name": "URL可用 2",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1480,
+        220
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "e0340e0f-831f-4b2a-b6bf-1c47eca1cf51",
+              "leftValue": "={{ $json.urlReady }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a4320815-d8d7-4750-acd7-adbd5363d0cc",
+      "name": "等待URL重试 3秒",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1340,
+        220
+      ],
+      "parameters": {
+        "amount": 3,
+        "unit": "seconds"
+      }
+    },
+    {
+      "id": "95b4c5e0-4f1d-42c8-a30b-4b18be83ecad",
+      "name": "检查上传URL 3",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1560,
+        220
+      ],
+      "parameters": {
+        "method": "={{ $json.mediaType === 'image' ? 'GET' : 'HEAD' }}",
+        "url": "={{ $json.verifiedUrl || $json.url }}",
+        "options": {
+          "timeout": 20000,
+          "redirect": {
+            "redirect": {
+              "followRedirects": false
+            }
+          },
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "file",
+              "outputPropertyName": "data"
+            }
+          },
+          "batching": {
+            "batch": {
+              "batchSize": 3,
+              "batchInterval": 400
+            }
+          }
+        }
+      },
+      "retryOnFail": false,
+      "maxTries": 2,
+      "waitBetweenTries": 1500,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "dbab73c1-d80b-4b4f-803b-70d165baa373",
+      "name": "评估上传URL 3",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1780,
+        220
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nconst crypto = require('crypto');\nconst inputs = $input.all();\nconst output = [];\nfor (let index = 0; index < inputs.length; index += 1) {\n  const item = inputs[index];\n  let source = {};\n  try { source = $(\"等待URL重试 3秒\").itemMatching(index).json || source; } catch {}\n  const response = item.json || {};\n  const statusCode = Number(response.statusCode || 0);\n  const headers = response.headers || {};\n  const rawContentType = String(headers['content-type'] || headers['Content-Type'] || '').trim().toLowerCase();\n  const contentType = rawContentType.split(';')[0].trim();\n  const mediaType = String(source.mediaType || '').toLowerCase();\n  const reasons = [];\n  let downloadedSizeBytes = 0;\n  let downloadedSha256 = '';\n  if (response.error) reasons.push('NETWORK_ERROR');\n  if (statusCode !== 200) reasons.push('HTTP_' + String(statusCode || 'NO_STATUS'));\n  if (mediaType === 'image') {\n    const allowedMimeTypes = new Set(['image/jpeg','image/png','image/webp']);\n    if (!allowedMimeTypes.has(contentType) || contentType !== String(source.mimeType || '').toLowerCase()) reasons.push('MIME_MISMATCH');\n    let buffer = null;\n    try { buffer = await this.helpers.getBinaryDataBuffer(index, 'data'); } catch {}\n    if (!buffer) reasons.push('BINARY_MISSING');\n    else {\n      downloadedSizeBytes = buffer.length;\n      downloadedSha256 = crypto.createHash('sha256').update(buffer).digest('hex');\n      if (downloadedSizeBytes !== Number(source.uploadedSizeBytes || source.sourceSizeBytes || 0)) reasons.push('SIZE_MISMATCH');\n      if (downloadedSha256 !== String(source.uploadedSha256 || source.sourceSha256 || '').toLowerCase()) reasons.push('SHA256_MISMATCH');\n      const declaredLength = Number(headers['content-length'] || headers['Content-Length'] || 0);\n      if (declaredLength > 0 && declaredLength !== downloadedSizeBytes) reasons.push('CONTENT_LENGTH_MISMATCH');\n    }\n  } else if (mediaType === 'video') {\n    if (!contentType.startsWith('video/')) reasons.push('MIME_MISMATCH');\n  } else {\n    reasons.push('UNSUPPORTED_MEDIA_TYPE');\n  }\n  const valid = reasons.length === 0;\n  output.push({\n    json: {\n      ...source,\n      urlReady: valid,\n      urlVerificationAttempt: 3,\n      urlVerificationStatus: valid ? 'VALID' : 'INVALID',\n      urlVerificationReasons: reasons,\n      verificationHttpStatus: statusCode,\n      verificationContentType: contentType,\n      downloadedSizeBytes,\n      downloadedSha256,\n      verifiedAt: valid ? new Date().toISOString() : undefined\n    },\n    pairedItem: { item: Number(source.inputIndex ?? index) }\n  });\n}\nreturn output;"
+      }
+    },
+    {
+      "id": "f3fdce34-1859-46c7-acb9-a57414f5a314",
+      "name": "URL可用 3",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2000,
+        220
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "8419c542-e669-4b94-ab6a-a1397d8b028f",
+              "leftValue": "={{ $json.urlReady }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "02d01081-5f6f-4d01-8a0f-c2041b88407a",
+      "name": "等待URL重试 8秒",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1860,
+        220
+      ],
+      "parameters": {
+        "amount": 8,
+        "unit": "seconds"
+      }
+    },
+    {
+      "id": "c15de137-8967-47fc-bbf5-769410ed24dd",
+      "name": "检查上传URL 4",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2080,
+        220
+      ],
+      "parameters": {
+        "method": "={{ $json.mediaType === 'image' ? 'GET' : 'HEAD' }}",
+        "url": "={{ $json.verifiedUrl || $json.url }}",
+        "options": {
+          "timeout": 20000,
+          "redirect": {
+            "redirect": {
+              "followRedirects": false
+            }
+          },
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "file",
+              "outputPropertyName": "data"
+            }
+          },
+          "batching": {
+            "batch": {
+              "batchSize": 3,
+              "batchInterval": 400
+            }
+          }
+        }
+      },
+      "retryOnFail": false,
+      "maxTries": 2,
+      "waitBetweenTries": 1500,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "0ee828d3-e822-45fd-98c1-b727747b5160",
+      "name": "评估上传URL 4",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2300,
+        220
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nconst crypto = require('crypto');\nconst inputs = $input.all();\nconst output = [];\nfor (let index = 0; index < inputs.length; index += 1) {\n  const item = inputs[index];\n  let source = {};\n  try { source = $(\"等待URL重试 8秒\").itemMatching(index).json || source; } catch {}\n  const response = item.json || {};\n  const statusCode = Number(response.statusCode || 0);\n  const headers = response.headers || {};\n  const rawContentType = String(headers['content-type'] || headers['Content-Type'] || '').trim().toLowerCase();\n  const contentType = rawContentType.split(';')[0].trim();\n  const mediaType = String(source.mediaType || '').toLowerCase();\n  const reasons = [];\n  let downloadedSizeBytes = 0;\n  let downloadedSha256 = '';\n  if (response.error) reasons.push('NETWORK_ERROR');\n  if (statusCode !== 200) reasons.push('HTTP_' + String(statusCode || 'NO_STATUS'));\n  if (mediaType === 'image') {\n    const allowedMimeTypes = new Set(['image/jpeg','image/png','image/webp']);\n    if (!allowedMimeTypes.has(contentType) || contentType !== String(source.mimeType || '').toLowerCase()) reasons.push('MIME_MISMATCH');\n    let buffer = null;\n    try { buffer = await this.helpers.getBinaryDataBuffer(index, 'data'); } catch {}\n    if (!buffer) reasons.push('BINARY_MISSING');\n    else {\n      downloadedSizeBytes = buffer.length;\n      downloadedSha256 = crypto.createHash('sha256').update(buffer).digest('hex');\n      if (downloadedSizeBytes !== Number(source.uploadedSizeBytes || source.sourceSizeBytes || 0)) reasons.push('SIZE_MISMATCH');\n      if (downloadedSha256 !== String(source.uploadedSha256 || source.sourceSha256 || '').toLowerCase()) reasons.push('SHA256_MISMATCH');\n      const declaredLength = Number(headers['content-length'] || headers['Content-Length'] || 0);\n      if (declaredLength > 0 && declaredLength !== downloadedSizeBytes) reasons.push('CONTENT_LENGTH_MISMATCH');\n    }\n  } else if (mediaType === 'video') {\n    if (!contentType.startsWith('video/')) reasons.push('MIME_MISMATCH');\n  } else {\n    reasons.push('UNSUPPORTED_MEDIA_TYPE');\n  }\n  const valid = reasons.length === 0;\n  output.push({\n    json: {\n      ...source,\n      urlReady: valid,\n      urlVerificationAttempt: 4,\n      urlVerificationStatus: valid ? 'VALID' : 'INVALID',\n      urlVerificationReasons: reasons,\n      verificationHttpStatus: statusCode,\n      verificationContentType: contentType,\n      downloadedSizeBytes,\n      downloadedSha256,\n      verifiedAt: valid ? new Date().toISOString() : undefined\n    },\n    pairedItem: { item: Number(source.inputIndex ?? index) }\n  });\n}\nreturn output;"
+      }
+    },
+    {
+      "id": "e6377a91-7431-4593-b38f-7ed4f642f2fc",
+      "name": "URL可用 4",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2520,
+        220
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "922b9bd1-9223-40e8-85a4-47aa3630d438",
+              "leftValue": "={{ $json.urlReady }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "5b846205-e93b-412e-aaa8-a718813a9e58",
+      "name": "允许单次重新上传",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        3140,
+        220
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "4cc50101-f9a9-40dc-b52e-52dfb43c9787",
+              "leftValue": "={{ Number($json.uploadAttempt || 0) < 1 }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "准备上传输入",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "准备上传输入": {
+      "main": [
+        [
+          {
+            "node": "需要上传媒体",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "需要上传媒体": {
+      "main": [
+        [
+          {
+            "node": "媒体类型为视频",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "准备实际提交URL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "媒体类型为视频": {
+      "main": [
+        [
+          {
+            "node": "视频上传API（用户配置）",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "上传API（用户配置）",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "上传API（用户配置）": {
+      "main": [
+        [
+          {
+            "node": "标准化返回URL",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "标准化上传失败",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "视频上传API（用户配置）": {
+      "main": [
+        [
+          {
+            "node": "标准化返回URL",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "标准化上传失败",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "标准化返回URL": {
+      "main": [
+        [
+          {
+            "node": "上传响应包含URL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "上传响应包含URL": {
+      "main": [
+        [
+          {
+            "node": "准备实际提交URL",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "返回统一URL契约",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "标准化上传失败": {
+      "main": [
+        [
+          {
+            "node": "返回统一URL契约",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "准备实际提交URL": {
+      "main": [
+        [
+          {
+            "node": "检查上传URL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "检查上传URL": {
+      "main": [
+        [
+          {
+            "node": "评估上传URL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "评估上传URL": {
+      "main": [
+        [
+          {
+            "node": "URL可用",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "URL可用": {
+      "main": [
+        [
+          {
+            "node": "返回统一URL契约",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "等待URL重试 1秒",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "等待URL重试 1秒": {
+      "main": [
+        [
+          {
+            "node": "检查上传URL 2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "检查上传URL 2": {
+      "main": [
+        [
+          {
+            "node": "评估上传URL 2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "评估上传URL 2": {
+      "main": [
+        [
+          {
+            "node": "URL可用 2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "URL可用 2": {
+      "main": [
+        [
+          {
+            "node": "返回统一URL契约",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "等待URL重试 3秒",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "等待URL重试 3秒": {
+      "main": [
+        [
+          {
+            "node": "检查上传URL 3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "检查上传URL 3": {
+      "main": [
+        [
+          {
+            "node": "评估上传URL 3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "评估上传URL 3": {
+      "main": [
+        [
+          {
+            "node": "URL可用 3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "URL可用 3": {
+      "main": [
+        [
+          {
+            "node": "返回统一URL契约",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "等待URL重试 8秒",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "等待URL重试 8秒": {
+      "main": [
+        [
+          {
+            "node": "检查上传URL 4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "检查上传URL 4": {
+      "main": [
+        [
+          {
+            "node": "评估上传URL 4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "评估上传URL 4": {
+      "main": [
+        [
+          {
+            "node": "URL可用 4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "URL可用 4": {
+      "main": [
+        [
+          {
+            "node": "返回统一URL契约",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "允许单次重新上传",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "允许单次重新上传": {
+      "main": [
+        [
+          {
+            "node": "重新准备原媒体",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "返回统一URL契约",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "重新准备原媒体": {
+      "main": [
+        [
+          {
+            "node": "媒体类型为视频",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": false,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "none",
+    "errorWorkflow": "kU8XxFLUign9LiQC",
+    "binaryMode": "separate"
+  }
+}

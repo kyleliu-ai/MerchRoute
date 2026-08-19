@@ -1,0 +1,18 @@
+name: merchroute-jimeng
+services:
+  jimeng:
+    image: merchroute/jimeng-free-api-all:0.9.1-e002-20260813
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      IMAGE_TASK_STORE_DIR: /app/data
+    volumes:
+      - jimeng-image-task-store:/app/data
+
+volumes:
+  jimeng-image-task-store:
+    name: merchroute-jimeng-image-task-store

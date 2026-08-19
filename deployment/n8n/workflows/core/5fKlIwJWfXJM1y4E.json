@@ -1,0 +1,226 @@
+{
+  "id": "5fKlIwJWfXJM1y4E",
+  "name": "S005-v05-文件上传-转URL-硅基API",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "filePath"
+            },
+            {
+              "name": "folderPath"
+            },
+            {
+              "name": "filePaths",
+              "type": "array"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -416,
+        -16
+      ],
+      "id": "f29dde38-a46e-447d-a69a-c38ce5cf3f0d",
+      "name": "ExecutedbyWorkflow"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nfunction normalizePath(value) {\n  return String(value ?? '').trim().replace(/\\\\/g, '/');\n}\n\nfunction stripTrailingSlashes(value) {\n  let result = value;\n  while (result.length > 1 && result.endsWith('/')) {\n    result = result.slice(0, -1);\n  }\n  return result;\n}\n\nfunction hasGlobPattern(value) {\n  return ['*', '?', '[', ']', '{', '}'].some((char) => value.includes(char));\n}\n\nfunction fileNameFromPath(value) {\n  const parts = value.split('/').filter(Boolean);\n  return parts[parts.length - 1] || '';\n}\n\nfunction extensionOf(fileName) {\n  const dotIndex = fileName.lastIndexOf('.');\n  return dotIndex > 0 && dotIndex < fileName.length - 1\n    ? fileName.slice(dotIndex + 1).toLowerCase()\n    : '';\n}\n\nconst legacyAllowedExtensions = new Set(['jpg', 'png', 'txt']);\nconst batchAllowedExtensions = new Set(['jpg', 'jpeg', 'png', 'webp']);\nconst output = [];\nlet batchInputIndex = 0;\nconst seenBatchPaths = new Set();\n\nfor (const [itemIndex, item] of items.entries()) {\n  const input = item.json || {};\n  const filePath = normalizePath(input.filePath);\n  const folderPath = stripTrailingSlashes(normalizePath(input.folderPath));\n  const hasFilePath = filePath !== '';\n  const hasFolderPath = folderPath !== '';\n  const hasFilePathsField = Object.prototype.hasOwnProperty.call(input, 'filePaths') && input.filePaths != null;\n\n  if (hasFilePathsField && !Array.isArray(input.filePaths)) {\n    throw new Error('filePaths must be an array for item ' + (itemIndex + 1));\n  }\n\n  const filePaths = Array.isArray(input.filePaths)\n    ? input.filePaths.map(normalizePath).filter(Boolean)\n    : [];\n  const hasFilePaths = filePaths.length > 0;\n  const modeCount = Number(hasFilePath) + Number(hasFolderPath) + Number(hasFilePaths);\n\n  if (modeCount === 0) {\n    throw new Error('Exactly one of filePath, folderPath, or a non-empty filePaths array is required for item ' + (itemIndex + 1));\n  }\n\n  if (modeCount > 1) {\n    throw new Error('Only one of filePath, folderPath, or filePaths can be provided for item ' + (itemIndex + 1));\n  }\n\n  if (hasFilePaths) {\n    for (const currentPath of filePaths) {\n      if (hasGlobPattern(currentPath)) {\n        throw new Error('filePaths entries must point to concrete files, not glob patterns: ' + currentPath);\n      }\n      const fileName = fileNameFromPath(currentPath);\n      const fileExtension = extensionOf(fileName);\n      if (!batchAllowedExtensions.has(fileExtension)) {\n        throw new Error('Unsupported batch file extension \"' + (fileExtension || 'none') + '\" for ' + currentPath + '. Supported: .jpg, .jpeg, .png, .webp');\n      }\n      const dedupeKey = currentPath.toLowerCase();\n      if (seenBatchPaths.has(dedupeKey)) {\n        throw new Error('Duplicate path in filePaths: ' + currentPath);\n      }\n      seenBatchPaths.add(dedupeKey);\n      output.push({\n        json: {\n          filePath: currentPath,\n          folderPath: '',\n          fileSelector: currentPath,\n          inputMode: 'batch',\n          fileName,\n          fileExtension,\n          inputIndex: batchInputIndex,\n        },\n      });\n      batchInputIndex += 1;\n    }\n    continue;\n  }\n\n  if (hasFilePath) {\n    if (hasGlobPattern(filePath)) {\n      throw new Error('filePath must point to one concrete file, not a glob pattern, for item ' + (itemIndex + 1));\n    }\n\n    const fileName = fileNameFromPath(filePath);\n    const fileExtension = extensionOf(fileName);\n\n    if (!legacyAllowedExtensions.has(fileExtension)) {\n      throw new Error('Unsupported file extension \"' + (fileExtension || 'none') + '\" for item ' + (itemIndex + 1) + '. Supported: .jpg, .png, .txt');\n    }\n\n    output.push({\n      json: {\n        filePath,\n        folderPath: '',\n        fileSelector: filePath,\n        inputMode: 'file',\n        fileName,\n        fileExtension,\n        inputIndex: itemIndex,\n      },\n    });\n    continue;\n  }\n\n  output.push({\n    json: {\n      filePath: '',\n      folderPath,\n      fileSelector: folderPath + '/*.{jpg,JPG,png,PNG,txt,TXT}',\n      inputMode: 'folder',\n      allowedFileTypes: ['jpg', 'png', 'txt'],\n      sortRule: 'jpg,png,txt; natural filename order inside each type',\n      inputIndex: itemIndex,\n    },\n  });\n}\n\nreturn output;"
+      },
+      "id": "7544efb3-cda0-49c7-ba3a-6bbdd526538a",
+      "name": "Prepare Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -192,
+        -16
+      ]
+    },
+    {
+      "parameters": {
+        "fileSelector": "={{ $json.fileSelector }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        32,
+        -16
+      ],
+      "id": "ea1763d3-e155-44b5-b522-f30306a0a11a",
+      "name": "Read/Write Files from Disk"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.siliconflow.cn/v1/files",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "multipart/form-data"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "purpose",
+              "value": "assistants"
+            },
+            {
+              "parameterType": "formBinaryData",
+              "name": "file",
+              "inputDataFieldName": "data"
+            }
+          ]
+        },
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": "={{ $json.inputMode === 'batch' ? 5 : 1 }}"
+            }
+          }
+        }
+      },
+      "id": "4c33c919-cc4c-46f7-b245-5a558d463364",
+      "name": "Upload Image",
+      "position": [
+        -144,
+        176
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4
+    },
+    {
+      "parameters": {
+        "jsCode": "const uploadItems = $input.all();\nconst sortedItems = $('Sort Files').all();\n\nfunction cleanString(value) {\n  return String(value ?? '').trim();\n}\n\nfunction isHttpUrl(value) {\n  return /^https?:\\/\\//i.test(cleanString(value));\n}\n\nif (uploadItems.length !== sortedItems.length) {\n  throw new Error('SiliconFlow upload result count mismatch: expected ' + sortedItems.length + ', received ' + uploadItems.length);\n}\n\nconst records = uploadItems.map((item, index) => {\n  const response = item.json || {};\n  const data = response.data || {};\n  const sorted = sortedItems[index]?.json || {};\n  const sourceFileName = cleanString(sorted.fileName || sorted.filePath || 'item ' + (index + 1));\n  const inputMode = cleanString(sorted.inputMode) || 'file';\n\n  if (response.status === false) {\n    throw new Error('SiliconFlow upload failed for ' + sourceFileName + ': ' + (response.message || 'unknown error'));\n  }\n\n  if (response.code && Number(response.code) !== 20000) {\n    throw new Error('SiliconFlow upload returned code ' + response.code + ' for ' + sourceFileName + ': ' + (response.message || 'unknown error'));\n  }\n\n  const url = cleanString(data.object || data.url || response.url);\n  if (!url) {\n    throw new Error('SiliconFlow upload response is missing URL for ' + sourceFileName);\n  }\n  if (!isHttpUrl(url)) {\n    throw new Error('SiliconFlow upload returned a non-HTTP URL for ' + sourceFileName);\n  }\n\n  return {\n    fileName: cleanString(data.filename || sorted.fileName || 'file_' + (index + 1)),\n    sourceFileName,\n    inputMode,\n    inputIndex: Number(sorted.inputIndex),\n    url,\n  };\n});\n\nreturn records.map((record, index) => ({\n  json: record.inputMode === 'batch'\n    ? {\n        ['\\u6587\\u4ef6\\u540d']: record.fileName,\n        url: record.url,\n        sourceFileName: record.sourceFileName,\n        inputIndex: record.inputIndex,\n      }\n    : {\n        ['\\u6587\\u4ef6\\u540d']: record.fileName,\n        url: record.url,\n      },\n  pairedItem: { item: index },\n}));"
+      },
+      "id": "ab536959-0fdc-4ec3-adb9-5dd9d4102be6",
+      "name": "Return Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        80,
+        176
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst preparedItems = $('Prepare Input').all();\nconst collator = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' });\n\nfunction cleanString(value) {\n  return String(value ?? '').trim();\n}\n\nfunction extensionOf(fileName, fallback = '') {\n  const name = cleanString(fileName);\n  const dotIndex = name.lastIndexOf('.');\n  const ext = dotIndex > 0 && dotIndex < name.length - 1 ? name.slice(dotIndex + 1) : fallback;\n  return cleanString(ext).toLowerCase();\n}\n\nfunction fileTypeRank(extension) {\n  if (extension === 'jpg') return 1;\n  if (extension === 'png') return 2;\n  if (extension === 'txt') return 3;\n  return 99;\n}\n\nfunction pairedInputIndex(item, fallback) {\n  const paired = Array.isArray(item.pairedItem) ? item.pairedItem[0] : item.pairedItem;\n  const value = Number(paired?.item);\n  return Number.isInteger(value) && value >= 0 ? value : fallback;\n}\n\nconst prepared = items.map((item, originalIndex) => {\n  const sourceIndex = pairedInputIndex(item, originalIndex);\n  const sourceJson = preparedItems[sourceIndex]?.json || {};\n  const json = { ...sourceJson, ...(item.json || {}) };\n  const binaryData = item.binary?.data || {};\n  const inputMode = cleanString(json.inputMode) || 'file';\n  const fileName = cleanString(json.fileName || binaryData.fileName || 'file_' + (originalIndex + 1));\n  const fileExtension = extensionOf(fileName, json.fileExtension || binaryData.fileExtension);\n  const allowed = inputMode === 'batch'\n    ? ['jpg', 'jpeg', 'png', 'webp'].includes(fileExtension)\n    : ['jpg', 'png', 'txt'].includes(fileExtension);\n  return {\n    item,\n    originalIndex,\n    inputMode,\n    inputIndex: Number.isInteger(Number(json.inputIndex)) ? Number(json.inputIndex) : originalIndex,\n    fileName,\n    fileExtension,\n    typeRank: fileTypeRank(fileExtension),\n    allowed,\n  };\n}).filter((entry) => entry.allowed);\n\nprepared.sort((a, b) => {\n  if (a.inputMode === 'batch' && b.inputMode === 'batch') {\n    return a.inputIndex - b.inputIndex;\n  }\n  if (a.inputMode === 'batch') return 1;\n  if (b.inputMode === 'batch') return -1;\n  if (a.typeRank !== b.typeRank) return a.typeRank - b.typeRank;\n  const byName = collator.compare(a.fileName, b.fileName);\n  if (byName !== 0) return byName;\n  return a.originalIndex - b.originalIndex;\n});\n\nreturn prepared.map((entry, sortedIndex) => ({\n  json: {\n    ...entry.item.json,\n    inputMode: entry.inputMode,\n    inputIndex: entry.inputIndex,\n    fileName: entry.fileName,\n    fileExtension: entry.fileExtension,\n    sortIndex: sortedIndex + 1,\n    originalIndex: entry.originalIndex + 1,\n  },\n  binary: entry.item.binary,\n  pairedItem: entry.item.pairedItem,\n}));"
+      },
+      "id": "9fd32ce7-59c7-42d1-a392-3d966d392bce",
+      "name": "Sort Files",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -368,
+        176
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## S005-文件-转-URL-硅基API-v4\n\n### 主要功能\n作为文件转 URL 子流程，读取本地文件并上传到 SiliconFlow 文件接口，返回每个文件对应的可用 HTTP(S) URL。\n\n### 输入模式（三选一）\n- `filePath`：单文件路径，支持 .jpg、.png、.txt。\n- `folderPath`：文件夹路径，读取其中的 jpg、png、txt 文件。\n- `filePaths`：批量图片路径数组，支持 .jpg、.jpeg、.png、.webp，保持数组输入顺序。\n\n### 兼容规则\n- 旧 `filePath/folderPath` 模式保持原后缀、jpg→png→txt 排序、并发 1 和逐 item 输出。\n- 新 `filePaths` 模式上传并发为 5；任一图片上传失败、URL 为空或不是 HTTP(S) URL 时整批报错。\n- 上传接口、SiliconFlow 凭证、multipart 字段保持不变。\n\n### 输出\n- 旧模式：每个文件返回 `文件名`、`url`。\n- 批量模式：在上述字段外增加 `sourceFileName`、`inputIndex`，用于父流程精确回配任务。",
+        "height": 600,
+        "width": 660,
+        "color": 4
+      },
+      "id": "8759b164-e754-419e-a4dc-d29d5da8782c",
+      "name": "工作流说明便签",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -1104,
+        -192
+      ]
+    },
+    {
+      "parameters": {
+        "content": "",
+        "height": 608,
+        "width": 768
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -448,
+        -192
+      ],
+      "typeVersion": 1,
+      "id": "09de3bd5-87a0-482d-9335-4fa54548a7ca",
+      "name": "Sticky Note"
+    }
+  ],
+  "connections": {
+    "ExecutedbyWorkflow": {
+      "main": [
+        [
+          {
+            "node": "Prepare Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Input": {
+      "main": [
+        [
+          {
+            "node": "Read/Write Files from Disk",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read/Write Files from Disk": {
+      "main": [
+        [
+          {
+            "node": "Sort Files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload Image": {
+      "main": [
+        [
+          {
+            "node": "Return Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sort Files": {
+      "main": [
+        [
+          {
+            "node": "Upload Image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  }
+}

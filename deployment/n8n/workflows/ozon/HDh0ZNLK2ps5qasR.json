@@ -1,0 +1,609 @@
+{
+  "id": "HDh0ZNLK2ps5qasR",
+  "name": "OZON-T001-标题翻译工作流",
+  "active": true,
+  "nodes": [
+    {
+      "id": "c5f100bf-5e04-43c8-8570-608be629fb36",
+      "name": "工作流说明",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -980,
+        -420
+      ],
+      "parameters": {
+        "content": "## OZON-T001 标题翻译工作流\n\n接收 `content`、`language`、`maxLength`，以及可选 `requestId`、`productTypeRu`、`brand`、`model`、`importantCharacteristics`。\n\n- `maxLength` 合同为 1..200 Unicode code points。\n- 首次结果超长时只调用一次 S007 进行定向缩短，不形成循环。\n- 请求校验和输出合同失败返回 400/422 且 `retryable=false`；真实网络、429、5xx 才可重试。\n- 不调用任何 OZON/WB 商品写接口。"
+      }
+    },
+    {
+      "id": "66c11028-6e8a-4935-b0c7-24b4a263462e",
+      "name": "Translation Title Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -980,
+        0
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ozon/translation-title",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "a8684d70-dfc9-4eb0-9f73-994c95184cec",
+      "name": "Validate Translation Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -740,
+        0
+      ],
+      "onError": "continueErrorOutput",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const input = $input.first()?.json || {};\nconst body = input.body;\n\nfunction fail(message) {\n  throw new Error('VALIDATION_ERROR: ' + message);\n}\nfunction codePointLength(value) {\n  return [...String(value)].length;\n}\nfunction optionalSingleLine(name, maxLength = 256) {\n  const raw = body[name];\n  if (raw === undefined || raw === null || raw === '') return '';\n  if (typeof raw !== 'string') fail(name + ' 必须是字符串');\n  const value = raw.trim().replace(/[ \\t]+/g, ' ');\n  if (!value || /[\\r\\n]/.test(value) || /\\\\n/.test(value) || codePointLength(value) > maxLength) {\n    fail(name + ' 必须是最多 ' + maxLength + ' 个 Unicode 字符的非空单行文本');\n  }\n  return value;\n}\n\nif (!body || typeof body !== 'object' || Array.isArray(body)) fail('请求体必须是 JSON 对象');\nconst contentPolicyVersion = String(body.contentPolicyVersion || body.policyVersion || '').trim();\nif (!['merchroute-ozon-content-v2','merchroute-ozon-content-v3'].includes(contentPolicyVersion)) fail('contentPolicyVersion 必须是显式且受支持的冻结版本');\nif (typeof body.content !== 'string') fail('content 必须是字符串');\nconst content = body.content.trim().replace(/[ \\t]+/g, ' ');\nif (!content) fail('content 不能为空');\nif (/[\\r\\n]/.test(content) || /\\\\n/.test(content)) fail('content 必须是单行文本');\nif (codePointLength(content) > 1000) fail('content 最多 1000 个 Unicode 字符');\nif (typeof body.language !== 'string') fail('language 必须是字符串');\nconst language = body.language.trim().replace(/[ \\t]+/g, ' ');\nif (!language) fail('language 不能为空');\nif (/[\\r\\n]/.test(language) || /\\\\n/.test(language) || codePointLength(language) > 64) {\n  fail('language 必须是最多 64 个 Unicode 字符的单行文本');\n}\nconst maxLength = Number(body.maxLength);\nif (!Number.isInteger(maxLength) || maxLength < 1 || maxLength > 200) {\n  fail('maxLength 必须是 1 到 200 的整数');\n}\nlet requestId = '';\nif (body.requestId !== undefined && body.requestId !== null) {\n  if (typeof body.requestId !== 'string') fail('requestId 必须是字符串');\n  requestId = body.requestId.trim();\n  if (!requestId || /[\\r\\n]/.test(requestId) || /\\\\n/.test(requestId) || codePointLength(requestId) > 128) {\n    fail('requestId 必须是最多 128 个 Unicode 字符的非空单行文本');\n  }\n}\nconst productTypeRu = optionalSingleLine('productTypeRu');\nconst brand = optionalSingleLine('brand');\nconst model = optionalSingleLine('model');\nlet importantCharacteristics = [];\nif (body.importantCharacteristics !== undefined && body.importantCharacteristics !== null && body.importantCharacteristics !== '') {\n  const rawValues = Array.isArray(body.importantCharacteristics) ? body.importantCharacteristics : [body.importantCharacteristics];\n  if (rawValues.length > 20) fail('importantCharacteristics 最多包含 20 项');\n  importantCharacteristics = rawValues.map((raw, index) => {\n    if (typeof raw !== 'string') fail('importantCharacteristics[' + index + '] 必须是字符串');\n    const value = raw.trim().replace(/[ \\t]+/g, ' ');\n    if (!value || /[\\r\\n]/.test(value) || /\\\\n/.test(value) || codePointLength(value) > 256) {\n      fail('importantCharacteristics[' + index + '] 必须是最多 256 个 Unicode 字符的非空单行文本');\n    }\n    return value;\n  });\n}\n\nconst context = {\n  ...(productTypeRu ? { productTypeRu } : {}),\n  ...(brand ? { brand } : {}),\n  ...(model ? { model } : {}),\n  ...(importantCharacteristics.length ? { importantCharacteristics } : {})\n};\nconst sysPrompt = [\n  '你是一名专业的 OZON 俄文商品标题翻译助手。',\n  '准确、自然地把原文翻译为用户指定语言；优先保留品类、品牌、型号及重要特征，不得添加输入中不存在的事实。',\n  '翻译标题必须是单行文本，不得包含回车、换行、Markdown、解释、前后缀或引号。',\n  'contentTranslate 的 Unicode 字符总数不得超过 maxLength；必要时精简修饰语，但必须保留核心品类。',\n  '必须只输出一个合法 JSON 对象。调用方 S007 要求外层字段 messageContent；messageContent 必须是一个 JSON 字符串，解析后只能包含字符串字段 contentTranslate。',\n  '外层格式必须精确类似：{\"messageContent\":\"{\\\\\"contentTranslate\\\\\":\\\\\"翻译结果\\\\\"}\"}。禁止输出代码块或任何额外内容。'\n].join('\\n');\nconst userPrompt = '请翻译以下 JSON 数据中的 content，并严格遵守 language、maxLength、contentPolicyVersion 和可选商品上下文：\\n' + JSON.stringify({ content, language, maxLength, contentPolicyVersion, ...context });\n\nreturn [{ json: {\n  content,\n  language,\n  maxLength,\n  requestId,\n  contentPolicyVersion,\n  productTypeRu,\n  brand,\n  model,\n  importantCharacteristics,\n  sysPrompt,\n  userPrompt\n} }];"
+      }
+    },
+    {
+      "id": "5efdeca0-ea95-4033-87b1-0aa6c87580b3",
+      "name": "Call S007 Initial Translation",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        -500,
+        -80
+      ],
+      "onError": "continueErrorOutput",
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "pLoryDijfFiNwKiI",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/pLoryDijfFiNwKiI",
+          "cachedResultName": "S007-v02-百炼Qwen-图文对话"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "userPrompt": "={{ $json.userPrompt }}",
+            "sysPrompt": "={{ $json.sysPrompt }}",
+            "temperature": "0.2",
+            "top_p": "0.8"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "userPrompt",
+              "displayName": "userPrompt",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "sysPrompt",
+              "displayName": "sysPrompt",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "imageAdd1",
+              "displayName": "imageAdd1",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "imageAdd2",
+              "displayName": "imageAdd2",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "imageAdd3",
+              "displayName": "imageAdd3",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "temperature",
+              "displayName": "temperature",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "top_p",
+              "displayName": "top_p",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "75da180b-c92b-4456-8c00-4ddfb44325bd",
+      "name": "Parse Initial Translation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -260,
+        -80
+      ],
+      "onError": "continueErrorOutput",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const response = $input.first()?.json || {};\nconst request = $('Validate Translation Request').first()?.json || {};\nconst contentPolicyVersion = String(request.contentPolicyVersion || '').trim();\nif (!['merchroute-ozon-content-v2','merchroute-ozon-content-v3'].includes(contentPolicyVersion)) throw new Error('OUTPUT_INVALID: 标题翻译缺少受支持的冻结内容策略版本');\nconst raw = response.messageContent;\n\nconst titleCjk = /[\\p{Script=Han}\\p{Script=Hiragana}\\p{Script=Katakana}\\p{Script=Hangul}]/u;\nconst titleInvalidPlatformText = /[\\p{Extended_Pictographic}\\p{Private_Use}\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F]/u;\nconst titleHiddenFormat = /[\\u00A0\\p{Cf}]/u;\nconst titleAllowedCharacters = /^[A-Za-zА-Яа-яЁё0-9 .,:;()\\-/&\"!?]+$/u;\nconst titleForbiddenSymbol = /[™©®\\[\\]=\\\\«»]/u;\nconst titleUrl = /(?:https?:\\/\\/|www\\.)\\S+|\\b[a-z0-9-]+\\.(?:ru|com|net|org|io|shop|store)\\b/iu;\nconst titleAdvertising = /(?:^|[^\\p{L}])(?:акци[яи]|распродаж\\p{L}*|скидк\\p{L}*|выгодн(?:ое|ые)\\s+предложени\\p{L}*|лучший\\s+(?:товар|выбор)|сам(?:ый|ая|ое|ые)\\s+лучший|топ(?:[- ]?товар)?|хит продаж|sale|discount|best price)(?=$|[^\\p{L}])/iu;\nconst titlePrice = /(?:^|[^\\p{L}\\p{N}])(?:цен[аы]|(?:от\\s+)?\\d[\\d\\s.,]*\\s*(?:₽|руб\\.?|р\\.?|usd|eur))(?=$|[^\\p{L}\\p{N}])|[$€]/iu;\nconst titleImitationV2 = /(?:^|[^\\p{L}\\p{N}])(?:аналог\\p{L}*|реплик\\p{L}*|копи[яи]\\p{L}*|подделк\\p{L}*|имитац\\p{L}*|1\\s*:\\s*1|replica|imitation|counterfeit)(?=$|[^\\p{L}\\p{N}])/iu;\nconst titleImitationV3 = /(?:^|[^\\p{L}\\p{N}])(?:аналог(?:а|у|ом|е|и|ов|ам|ами|ах)?|реплик\\p{L}*|копи[яи]\\p{L}*|подделк\\p{L}*|имитац\\p{L}*|1\\s*:\\s*1|replica|imitation|counterfeit)(?=$|[^\\p{L}\\p{N}])/iu;\nconst titleImitation = contentPolicyVersion === 'merchroute-ozon-content-v3' ? titleImitationV3 : titleImitationV2;\nconst titleIssues = (value) => {\n  const text = String(value ?? '');\n  const issues = [];\n  if (!text) issues.push('EMPTY');\n  if ([...text].length > 200) issues.push('TOO_LONG');\n  if (/[\\r\\n]/.test(text) || /\\\\n/.test(text)) issues.push('MULTILINE');\n  if (titleCjk.test(text)) issues.push('CJK');\n  if (titleInvalidPlatformText.test(text)) issues.push('INVALID_CHARACTER');\n  if (titleHiddenFormat.test(text)) issues.push('HIDDEN_CHARACTER');\n  if (/<[^>]*>/.test(text)) issues.push('UNSUPPORTED_HTML');\n  if (titleUrl.test(text)) issues.push('EXTERNAL_LINK');\n  if (titleAdvertising.test(text)) issues.push('ADVERTISING');\n  if (titlePrice.test(text)) issues.push('PRICE_INFORMATION');\n  if (titleImitation.test(text)) issues.push('IMITATION_CLAIM');\n  if (titleForbiddenSymbol.test(text)) issues.push('FORBIDDEN_SYMBOL');\n  if (!titleAllowedCharacters.test(text)) issues.push('INVALID_TITLE_CHARACTER');\n  if (text && !/^[A-ZА-ЯЁ]/u.test(text)) issues.push('TITLE_INITIAL_NOT_UPPERCASE');\n  if (text.split(' ').some((word) => [...word].length > 27)) issues.push('TITLE_WORD_TOO_LONG');\n  const counts = new Map();\n  for (const word of text.toLocaleLowerCase('ru-RU').match(/[a-zа-яё]{4,}/giu) || []) {\n    const count = (counts.get(word) || 0) + 1;\n    counts.set(word, count);\n    if (count >= 3) issues.push('KEYWORD_STUFFING');\n  }\n  return [...new Set(issues)];\n};\n\nfunction invalid(message) {\n  throw new Error('OUTPUT_INVALID: ' + message);\n}\nif (typeof raw !== 'string' || !raw.trim()) invalid('S007 未返回非空字符串 messageContent');\nlet parsed;\ntry { parsed = JSON.parse(raw.trim()); } catch (_) { invalid('S007 messageContent 不是合法的 contentTranslate JSON'); }\nif (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) invalid('翻译结果必须是 JSON 对象');\nconst keys = Object.keys(parsed);\nif (keys.length !== 1 || keys[0] !== 'contentTranslate' || typeof parsed.contentTranslate !== 'string') {\n  invalid('翻译结果必须且只能包含字符串字段 contentTranslate');\n}\nconst contentTranslate = parsed.contentTranslate;\nconst policyIssues = titleIssues(contentTranslate);\nconst blockingIssues = policyIssues.filter((issue) => issue !== 'TOO_LONG');\nif (blockingIssues.length) invalid('contentTranslate 不符合 OZON 标题合同 [' + blockingIssues.join(', ') + ']');\nconst translatedLength = [...contentTranslate].length;\nconst maxLength = Number(request.maxLength);\nreturn [{ json: {\n  contentTranslate,\n  model: response.model || null,\n  usage: response.usage || null,\n  finishReason: response.finishReason || null,\n  requestId: request.requestId || null,\n  contentPolicyVersion,\n  translatedLength,\n  originalTranslatedLength: translatedLength,\n  maxLength,\n  needsShortening: policyIssues.includes('TOO_LONG') || translatedLength > maxLength,\n  shorteningAttempted: false\n} }];"
+      }
+    },
+    {
+      "id": "c28aa9f7-eeb3-4d89-9e47-f52388887592",
+      "name": "Translation Needs Shortening",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -20,
+        -80
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "9da3b3f9-ab8d-4f3e-88e5-80700d9fa986",
+              "leftValue": "={{ $json.needsShortening === true }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "5c434756-8116-41a1-8bb4-30085ec8daaf",
+      "name": "Build Single Shortening Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        -180
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const initial = $input.first()?.json || {};\nconst request = $('Validate Translation Request').first()?.json || {};\nif (initial.needsShortening !== true || initial.shorteningAttempted === true) throw new Error('OUTPUT_INVALID: 非法的标题缩短状态');\nconst sysPrompt = [\n  '你正在执行唯一一次 OZON 标题长度纠偏。',\n  '只缩短给定的俄文标题，不重新翻译、不添加新事实。',\n  '必须保留核心商品品类，并尽量保留品牌、型号和重要特征。',\n  'contentTranslate 必须是单行，Unicode 字符数不得超过 maxLength。',\n  '只输出 S007 所需 JSON：{\"messageContent\":\"{\\\\\"contentTranslate\\\\\":\\\\\"缩短后的标题\\\\\"}\"}。'\n].join('\\n');\nconst userPrompt = '请将下列俄文标题缩短到上限内；这是唯一一次纠偏：\\n' + JSON.stringify({\n  contentTranslate: initial.contentTranslate,\n  actualLength: Number(initial.translatedLength),\n  maxLength: Number(request.maxLength),\n  productTypeRu: request.productTypeRu || undefined,\n  brand: request.brand || undefined,\n  model: request.model || undefined,\n  importantCharacteristics: request.importantCharacteristics?.length ? request.importantCharacteristics : undefined\n});\nreturn [{ json: { ...initial, sysPrompt, userPrompt, shorteningAttempted: true } }];"
+      }
+    },
+    {
+      "id": "4f0996f5-1ac1-48ee-b048-14d7e255b24e",
+      "name": "Call S007 Single Shortening",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        460,
+        -180
+      ],
+      "onError": "continueErrorOutput",
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "pLoryDijfFiNwKiI",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/pLoryDijfFiNwKiI",
+          "cachedResultName": "S007-v02-百炼Qwen-图文对话"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "userPrompt": "={{ $json.userPrompt }}",
+            "sysPrompt": "={{ $json.sysPrompt }}",
+            "temperature": "0.2",
+            "top_p": "0.8"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "userPrompt",
+              "displayName": "userPrompt",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "sysPrompt",
+              "displayName": "sysPrompt",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "imageAdd1",
+              "displayName": "imageAdd1",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "imageAdd2",
+              "displayName": "imageAdd2",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "imageAdd3",
+              "displayName": "imageAdd3",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "temperature",
+              "displayName": "temperature",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "top_p",
+              "displayName": "top_p",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "60740cda-9b54-497e-bc2b-ce4e0c4744d4",
+      "name": "Parse Shortened Translation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        700,
+        -180
+      ],
+      "onError": "continueErrorOutput",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const response = $input.first()?.json || {};\nconst initial = $('Parse Initial Translation').first()?.json || {};\nconst request = $('Validate Translation Request').first()?.json || {};\nconst contentPolicyVersion = String(request.contentPolicyVersion || '').trim();\nif (!['merchroute-ozon-content-v2','merchroute-ozon-content-v3'].includes(contentPolicyVersion)) throw new Error('OUTPUT_INVALID: 标题翻译缺少受支持的冻结内容策略版本');\nconst raw = response.messageContent;\n\nconst titleCjk = /[\\p{Script=Han}\\p{Script=Hiragana}\\p{Script=Katakana}\\p{Script=Hangul}]/u;\nconst titleInvalidPlatformText = /[\\p{Extended_Pictographic}\\p{Private_Use}\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F]/u;\nconst titleHiddenFormat = /[\\u00A0\\p{Cf}]/u;\nconst titleAllowedCharacters = /^[A-Za-zА-Яа-яЁё0-9 .,:;()\\-/&\"!?]+$/u;\nconst titleForbiddenSymbol = /[™©®\\[\\]=\\\\«»]/u;\nconst titleUrl = /(?:https?:\\/\\/|www\\.)\\S+|\\b[a-z0-9-]+\\.(?:ru|com|net|org|io|shop|store)\\b/iu;\nconst titleAdvertising = /(?:^|[^\\p{L}])(?:акци[яи]|распродаж\\p{L}*|скидк\\p{L}*|выгодн(?:ое|ые)\\s+предложени\\p{L}*|лучший\\s+(?:товар|выбор)|сам(?:ый|ая|ое|ые)\\s+лучший|топ(?:[- ]?товар)?|хит продаж|sale|discount|best price)(?=$|[^\\p{L}])/iu;\nconst titlePrice = /(?:^|[^\\p{L}\\p{N}])(?:цен[аы]|(?:от\\s+)?\\d[\\d\\s.,]*\\s*(?:₽|руб\\.?|р\\.?|usd|eur))(?=$|[^\\p{L}\\p{N}])|[$€]/iu;\nconst titleImitationV2 = /(?:^|[^\\p{L}\\p{N}])(?:аналог\\p{L}*|реплик\\p{L}*|копи[яи]\\p{L}*|подделк\\p{L}*|имитац\\p{L}*|1\\s*:\\s*1|replica|imitation|counterfeit)(?=$|[^\\p{L}\\p{N}])/iu;\nconst titleImitationV3 = /(?:^|[^\\p{L}\\p{N}])(?:аналог(?:а|у|ом|е|и|ов|ам|ами|ах)?|реплик\\p{L}*|копи[яи]\\p{L}*|подделк\\p{L}*|имитац\\p{L}*|1\\s*:\\s*1|replica|imitation|counterfeit)(?=$|[^\\p{L}\\p{N}])/iu;\nconst titleImitation = contentPolicyVersion === 'merchroute-ozon-content-v3' ? titleImitationV3 : titleImitationV2;\nconst titleIssues = (value) => {\n  const text = String(value ?? '');\n  const issues = [];\n  if (!text) issues.push('EMPTY');\n  if ([...text].length > 200) issues.push('TOO_LONG');\n  if (/[\\r\\n]/.test(text) || /\\\\n/.test(text)) issues.push('MULTILINE');\n  if (titleCjk.test(text)) issues.push('CJK');\n  if (titleInvalidPlatformText.test(text)) issues.push('INVALID_CHARACTER');\n  if (titleHiddenFormat.test(text)) issues.push('HIDDEN_CHARACTER');\n  if (/<[^>]*>/.test(text)) issues.push('UNSUPPORTED_HTML');\n  if (titleUrl.test(text)) issues.push('EXTERNAL_LINK');\n  if (titleAdvertising.test(text)) issues.push('ADVERTISING');\n  if (titlePrice.test(text)) issues.push('PRICE_INFORMATION');\n  if (titleImitation.test(text)) issues.push('IMITATION_CLAIM');\n  if (titleForbiddenSymbol.test(text)) issues.push('FORBIDDEN_SYMBOL');\n  if (!titleAllowedCharacters.test(text)) issues.push('INVALID_TITLE_CHARACTER');\n  if (text && !/^[A-ZА-ЯЁ]/u.test(text)) issues.push('TITLE_INITIAL_NOT_UPPERCASE');\n  if (text.split(' ').some((word) => [...word].length > 27)) issues.push('TITLE_WORD_TOO_LONG');\n  const counts = new Map();\n  for (const word of text.toLocaleLowerCase('ru-RU').match(/[a-zа-яё]{4,}/giu) || []) {\n    const count = (counts.get(word) || 0) + 1;\n    counts.set(word, count);\n    if (count >= 3) issues.push('KEYWORD_STUFFING');\n  }\n  return [...new Set(issues)];\n};\n\nfunction invalid(message) {\n  throw new Error('OUTPUT_INVALID: ' + message);\n}\nif (typeof raw !== 'string' || !raw.trim()) invalid('缩短纠偏未返回非空字符串 messageContent');\nlet parsed;\ntry { parsed = JSON.parse(raw.trim()); } catch (_) { invalid('缩短纠偏 messageContent 不是合法 JSON'); }\nif (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) invalid('缩短纠偏结果必须是 JSON 对象');\nconst keys = Object.keys(parsed);\nif (keys.length !== 1 || keys[0] !== 'contentTranslate' || typeof parsed.contentTranslate !== 'string') {\n  invalid('缩短纠偏结果必须且只能包含字符串字段 contentTranslate');\n}\nconst contentTranslate = parsed.contentTranslate;\nconst policyIssues = titleIssues(contentTranslate);\nif (policyIssues.length) invalid('缩短后的 contentTranslate 不符合 OZON 标题合同 [' + policyIssues.join(', ') + ']');\nconst translatedLength = [...contentTranslate].length;\nif (translatedLength > Number(request.maxLength)) {\n  invalid('唯一一次缩短纠偏后长度 ' + translatedLength + ' 仍超过 maxLength ' + Number(request.maxLength));\n}\nreturn [{ json: {\n  contentTranslate,\n  model: response.model || initial.model || null,\n  usage: { initial: initial.usage || null, shortening: response.usage || null },\n  finishReason: response.finishReason || null,\n  requestId: request.requestId || null,\n  contentPolicyVersion,\n  translatedLength,\n  originalTranslatedLength: Number(initial.originalTranslatedLength || initial.translatedLength || 0),\n  maxLength: Number(request.maxLength),\n  shortened: true,\n  shorteningAttempted: true\n} }];"
+      }
+    },
+    {
+      "id": "d4d174ef-db22-4dae-963a-e95b5ff59ab1",
+      "name": "Respond Translation Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        940,
+        0
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json; charset=utf-8"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "b9cf7915-94cb-4ae7-b782-5ce247c1424c",
+      "name": "Build Validation Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -500,
+        220
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const input = $input.first()?.json || {};\nconst rawMessage = String(input.error?.message || input.error || input.message || '请求参数无效');\nconst message = rawMessage.replace(/^VALIDATION_ERROR:\\s*/, '').replace(/\\s*\\[line \\d+\\]\\s*$/, '').trim() || '请求参数无效';\nlet requestId = null;\ntry {\n  const candidate = $('Translation Title Webhook').first()?.json?.body?.requestId;\n  if (typeof candidate === 'string' && candidate.trim()) requestId = candidate.trim();\n} catch (_) {}\nreturn [{ json: { error: 'VALIDATION_ERROR', message, requestId, retryable: false, httpStatus: 400 } }];"
+      }
+    },
+    {
+      "id": "536233f4-48d2-43c9-80c2-69df3ea3dff7",
+      "name": "Build Upstream Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const input = $input.first()?.json || {};\nconst rawError = input.error && typeof input.error === 'object' ? input.error : {};\nconst rawMessage = String(rawError.message || input.error || input.message || '标题翻译上游调用失败');\nconst statusCandidates = [input.statusCode, input.httpCode, rawError.statusCode, rawError.httpCode, rawError.status];\nconst statusCode = statusCandidates.map(Number).find((value) => Number.isInteger(value) && value >= 100 && value <= 599)\n  || Number(rawMessage.match(/(?:HTTP\\s*)?([45]\\d\\d)/i)?.[1] || 0);\nconst upper = rawMessage.toUpperCase();\nconst retryAfterMs = Math.max(0, Number(input.retryAfterMs || rawError.retryAfterMs || 0));\nlet httpStatus = 502;\nlet error = 'TRANSLATION_FAILED';\nlet message = '标题翻译失败，请检查错误详情后再决定是否重试';\nlet retryable = false;\nif (statusCode >= 400 && statusCode <= 499 && statusCode !== 408 && statusCode !== 429) {\n  httpStatus = statusCode === 400 || statusCode === 422 ? 422 : statusCode;\n  error = 'TRANSLATION_UPSTREAM_REJECTED';\n  message = '翻译模型拒绝了本次标题请求';\n} else if (statusCode === 408 || /ETIMEDOUT|ESOCKETTIMEDOUT|TIMEOUT|超时/.test(upper)) {\n  httpStatus = 504;\n  error = 'TRANSLATION_UPSTREAM_TIMEOUT';\n  message = '标题翻译上游超时，请稍后重试';\n  retryable = true;\n} else if (statusCode === 429 || /RATE.?LIMIT|TOO MANY REQUESTS/.test(upper)) {\n  httpStatus = 429;\n  error = 'TRANSLATION_RATE_LIMITED';\n  message = '标题翻译上游限流，请稍后重试';\n  retryable = true;\n} else if (statusCode >= 500 && statusCode <= 599) {\n  httpStatus = 502;\n  error = 'TRANSLATION_UPSTREAM_5XX';\n  message = '标题翻译上游暂时不可用，请稍后重试';\n  retryable = true;\n} else if (/ENOTFOUND|EAI_AGAIN|ECONNRESET|ECONNREFUSED|ECONNABORTED|EHOSTUNREACH|ENETUNREACH|SOCKET HANG UP|NETWORK (?:ERROR|FAIL)|FETCH FAILED|连接(?:中断|失败|重置)|断网/.test(upper)) {\n  httpStatus = 502;\n  error = 'TRANSLATION_NETWORK_ERROR';\n  message = '标题翻译网络暂时不可用，请稍后重试';\n  retryable = true;\n}\nlet requestId = null;\ntry { requestId = $('Validate Translation Request').first()?.json?.requestId || null; } catch (_) {}\nreturn [{ json: { error, message, requestId, retryable, retryAfterMs: retryAfterMs || undefined, httpStatus, auditMessage: rawMessage.slice(0, 500) } }];"
+      }
+    },
+    {
+      "id": "b2b8f098-ad56-49db-9aa7-68e4fb794d18",
+      "name": "Build Output Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        180
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const input = $input.first()?.json || {};\nconst rawMessage = String(input.error?.message || input.error || input.message || '翻译模型输出不符合标题合同');\nlet requestId = null;\nlet initial = {};\ntry { requestId = $('Validate Translation Request').first()?.json?.requestId || null; } catch (_) {}\ntry { initial = $('Parse Initial Translation').first()?.json || {}; } catch (_) {}\nreturn [{ json: {\n  error: 'TRANSLATION_OUTPUT_INVALID',\n  message: '翻译模型返回内容不符合 OZON 标题合同',\n  requestId,\n  retryable: false,\n  httpStatus: 422,\n  actualLength: Number(initial.translatedLength || 0) || undefined,\n  maxLength: Number(initial.maxLength || 0) || undefined,\n  shorteningAttempted: Boolean(initial.needsShortening),\n  auditMessage: rawMessage.slice(0, 500)\n} }];"
+      }
+    },
+    {
+      "id": "201b91cd-d1ac-4fb3-962c-f0bf6c2bb218",
+      "name": "Respond Translation Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        940,
+        300
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $json.error, message: $json.message, requestId: $json.requestId, retryable: $json.retryable, retryAfterMs: $json.retryAfterMs, actualLength: $json.actualLength, maxLength: $json.maxLength, shorteningAttempted: $json.shorteningAttempted } }}",
+        "options": {
+          "responseCode": "={{ Number($json.httpStatus || 502) }}",
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json; charset=utf-8"
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Translation Title Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate Translation Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Translation Request": {
+      "main": [
+        [
+          {
+            "node": "Call S007 Initial Translation",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Validation Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call S007 Initial Translation": {
+      "main": [
+        [
+          {
+            "node": "Parse Initial Translation",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Upstream Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Initial Translation": {
+      "main": [
+        [
+          {
+            "node": "Translation Needs Shortening",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Output Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Translation Needs Shortening": {
+      "main": [
+        [
+          {
+            "node": "Build Single Shortening Request",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Translation Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Single Shortening Request": {
+      "main": [
+        [
+          {
+            "node": "Call S007 Single Shortening",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call S007 Single Shortening": {
+      "main": [
+        [
+          {
+            "node": "Parse Shortened Translation",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Upstream Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Shortened Translation": {
+      "main": [
+        [
+          {
+            "node": "Respond Translation Success",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Output Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Validation Error": {
+      "main": [
+        [
+          {
+            "node": "Respond Translation Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Upstream Error": {
+      "main": [
+        [
+          {
+            "node": "Respond Translation Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Output Error": {
+      "main": [
+        [
+          {
+            "node": "Respond Translation Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  }
+}

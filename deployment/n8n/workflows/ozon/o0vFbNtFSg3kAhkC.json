@@ -1,0 +1,410 @@
+{
+  "id": "o0vFbNtFSg3kAhkC",
+  "name": "OZON-P001-任务接口",
+  "active": true,
+  "nodes": [
+    {
+      "id": "acb3afed-0d2a-4f12-95fe-ccefbd644087",
+      "name": "任务接口说明",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -700,
+        -480
+      ],
+      "parameters": {
+        "content": "# OZON-P001 store-aware intake\n\n仅接受带 `X-MerchRoute-Runtime-Key` 的内部请求。新任务必须携带不可变 store/publication/credential/config/warehouse/rowVersion/lease/Offer 合同快照，再交由 S000 验证 `stores/<alias>` package。\n\n默认店历史任务仅可进入服务端判定的 `LEGACY_PUBLICATION/PURE_LEGACY` 分支，非 default 缺凭据版本时 fail closed。",
+        "width": 700,
+        "height": 390
+      }
+    },
+    {
+      "id": "a12260c4-4bf8-46f6-9375-262404141c7e",
+      "name": "OZON 任务 Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -700,
+        0
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "merchroute-ozon-tasks",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "47e52921-928e-44e2-a103-b85b86abdbe9",
+      "name": "校验任务请求",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -460,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nconst body = $json.body && typeof $json.body === 'object' ? $json.body : ($json || {});\nconst headers = $json.headers && typeof $json.headers === 'object' ? $json.headers : {};\nconst expectedRuntimeKey = String($env.MERCHROUTE_RUNTIME_KEY || '').trim();\nconst suppliedRuntimeKey = String(headers['x-merchroute-runtime-key'] || headers['X-MerchRoute-Runtime-Key'] || '').trim();\nif (!expectedRuntimeKey || suppliedRuntimeKey !== expectedRuntimeKey) return [{ json: { valid: false, ok: false, httpStatus: 401, message: 'OZON intake runtime 认证失败' } }];\nconst uuid = (value) => /^[0-9a-f-]{36}$/i.test(String(value || ''));\nconst jobId = String(body.jobId || body.id || '').trim();\nconst taskId = String(body.taskId || jobId).trim();\nconst sku = String(body.sku || '').trim();\nconst productJsonPath = String(body.productJsonPath || '').trim();\nconst revision = Number(body.revision || 0);\nconst signature = String(body.signature || '').trim();\nconst storeId = String(body.storeId || '').trim();\nconst storeAlias = String(body.storeAlias || '').trim().toLowerCase();\nconst publicationId = String(body.publicationId || '').trim();\nconst credentialVersionId = String(body.credentialVersionId || '').trim();\nconst credentialBindingMode = String(body.credentialBindingMode || (credentialVersionId ? 'VAULT' : storeId ? 'LEGACY_PUBLICATION' : 'PURE_LEGACY')).trim().toUpperCase();\nconst storeConfigVersion = Number(body.storeConfigVersion || 0);\nconst warehouseId = String(body.warehouseId || '').trim();\nconst rowVersion = Number(body.rowVersion || 0);\nconst leaseOwner = String(body.leaseOwner || '').trim();\nconst leaseToken = String(body.leaseToken || '').trim();\nconst offerContractHash = String(body.offerContractHash || '').trim();\nconst materializationHash = String(body.materializationHash || '').trim();\nconst storeScoped = Boolean(storeId || storeAlias || publicationId || credentialVersionId);\nif (!uuid(jobId) || !taskId || !/^[A-Za-z0-9._-]{1,100}$/.test(sku) || !productJsonPath) return [{ json: { valid: false, ok: false, httpStatus: 400, message: 'jobId/taskId、sku、productJsonPath 无效' } }];\nif (!Number.isInteger(revision) || revision < 1) return [{ json: { valid: false, ok: false, httpStatus: 400, message: 'revision 必须是正整数' } }];\nif (signature && !/^sha256:[a-f0-9]{64}$/i.test(signature)) return [{ json: { valid: false, ok: false, httpStatus: 400, message: 'signature 格式无效' } }];\nif (storeScoped) {\n  if (!uuid(storeId) || !/^[a-z0-9][a-z0-9-]{1,31}$/.test(storeAlias) || !uuid(publicationId)) return [{ json: { valid: false, ok: false, httpStatus: 400, message: '店铺/publication 快照无效' } }];\n  if (!['VAULT','LEGACY_PUBLICATION'].includes(credentialBindingMode)) return [{ json: { valid: false, ok: false, httpStatus: 400, message: '店铺任务 credentialBindingMode 无效' } }];\n  if (credentialBindingMode === 'VAULT' && !uuid(credentialVersionId)) return [{ json: { valid: false, ok: false, httpStatus: 400, message: 'VAULT 任务缺少 credentialVersionId' } }];\n  if (credentialBindingMode === 'VAULT' && taskId !== storeAlias + '__' + sku + '__r' + revision) return [{ json: { valid: false, ok: false, httpStatus: 400, message: 'VAULT taskId 必须是 <alias>__<sku>__rN' } }];\n  if (credentialBindingMode === 'LEGACY_PUBLICATION' && !(storeId === '00000000-0000-4000-8000-000000000002' && storeAlias === 'default' && !credentialVersionId)) return [{ json: { valid: false, ok: false, httpStatus: 400, message: '仅 default 店铺允许 LEGACY_PUBLICATION' } }];\n  if (!Number.isInteger(storeConfigVersion) || storeConfigVersion < 1 || !warehouseId || !Number.isInteger(rowVersion) || rowVersion < 1 || !leaseOwner || !leaseToken) return [{ json: { valid: false, ok: false, httpStatus: 400, message: '店铺任务缺少 config/warehouse/rowVersion/lease 快照' } }];\n  if (!/^(?:sha256:)?[a-f0-9]{64}$/i.test(offerContractHash) || !/^(?:sha256:)?[a-f0-9]{64}$/i.test(materializationHash)) return [{ json: { valid: false, ok: false, httpStatus: 400, message: 'Offer/materialization 合同哈希无效' } }];\n}\nreturn [{ json: {\n  valid: true,\n  jobId,\n  taskId,\n  sku,\n  productJsonPath,\n  revision,\n  signature,\n  storeId,\n  storeAlias,\n  publicationId,\n  credentialVersionId,\n  credentialBindingMode,\n  storeConfigVersion,\n  warehouseId,\n  rowVersion,\n  leaseOwner,\n  leaseToken,\n  offerContractHash,\n  materializationHash\n} }];"
+      }
+    },
+    {
+      "id": "80bfceb7-b47d-4d64-b7fc-7272b3739bce",
+      "name": "请求有效",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -220,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "606cb7ce-0228-47b1-9ef4-b6b069443b83",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ad365a13-23ba-42c9-9b0d-55c3bc880328",
+      "name": "调用 OZON-S000",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        40,
+        -100
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "0FqozLuQ7vuabT8V",
+          "mode": "list",
+          "cachedResultName": "OZON-S000-任务目录认领"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "jobId": "={{ $json.jobId }}",
+            "taskId": "={{ $json.taskId }}",
+            "sku": "={{ $json.sku }}",
+            "productJsonPath": "={{ $json.productJsonPath }}",
+            "revision": "={{ $json.revision }}",
+            "signature": "={{ $json.signature }}",
+            "storeId": "={{ $json.storeId }}",
+            "storeAlias": "={{ $json.storeAlias }}",
+            "publicationId": "={{ $json.publicationId }}",
+            "credentialVersionId": "={{ $json.credentialVersionId }}",
+            "credentialBindingMode": "={{ $json.credentialBindingMode }}",
+            "storeConfigVersion": "={{ $json.storeConfigVersion }}",
+            "warehouseId": "={{ $json.warehouseId }}",
+            "rowVersion": "={{ $json.rowVersion }}",
+            "leaseOwner": "={{ $json.leaseOwner }}",
+            "leaseToken": "={{ $json.leaseToken }}",
+            "offerContractHash": "={{ $json.offerContractHash }}",
+            "materializationHash": "={{ $json.materializationHash }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "jobId",
+              "displayName": "jobId",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "taskId",
+              "displayName": "taskId",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "sku",
+              "displayName": "sku",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "productJsonPath",
+              "displayName": "productJsonPath",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "revision",
+              "displayName": "revision",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "number"
+            },
+            {
+              "id": "signature",
+              "displayName": "signature",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "storeId",
+              "displayName": "storeId",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "storeAlias",
+              "displayName": "storeAlias",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "publicationId",
+              "displayName": "publicationId",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "credentialVersionId",
+              "displayName": "credentialVersionId",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "credentialBindingMode",
+              "displayName": "credentialBindingMode",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "storeConfigVersion",
+              "displayName": "storeConfigVersion",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "number"
+            },
+            {
+              "id": "warehouseId",
+              "displayName": "warehouseId",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "rowVersion",
+              "displayName": "rowVersion",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "number"
+            },
+            {
+              "id": "leaseOwner",
+              "displayName": "leaseOwner",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "leaseToken",
+              "displayName": "leaseToken",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "offerContractHash",
+              "displayName": "offerContractHash",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "materializationHash",
+              "displayName": "materializationHash",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "mode": "each",
+        "options": {}
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "98139922-c4cb-4039-9bee-d0064a4dcbcc",
+      "name": "格式化任务响应",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        300,
+        -100
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nconst request = $('校验任务请求').first().json || {};\nconst claimed = $input.first().json || {};\nif (claimed.ok !== true) return [{ json: { ...claimed, httpStatus: Number(claimed.httpStatus || 409) } }];\nreturn [{ json: {\n  accepted: true,\n  ok: true,\n  httpStatus: 202,\n  jobId: request.jobId,\n  taskId: request.taskId,\n  storeId: request.storeId || undefined,\n  publicationId: request.publicationId || undefined,\n  rowVersion: request.rowVersion || undefined,\n  sku: claimed.sku,\n  revision: Number(claimed.revision || request.revision),\n  offerIds: claimed.offerIds || [],\n  taskFolder: claimed.taskFolder,\n  productJsonPath: claimed.productJsonPath,\n  workDirectory: claimed.workDirectory,\n  workRelPath: claimed.workRelPath,\n  directoryStage: claimed.directoryStage,\n  signature: claimed.signature,\n  productContentHash: claimed.productContentHash,\n  materializationHash: claimed.materializationHash,\n  message: '店铺不可变上品 package 已认领'\n} }];"
+      }
+    },
+    {
+      "id": "841310d8-0725-41b4-b9d7-1b5b1d646059",
+      "name": "返回任务响应",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        560,
+        -20
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseCode": "={{ Number($json.httpStatus || 200) }}"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "OZON 任务 Webhook": {
+      "main": [
+        [
+          {
+            "node": "校验任务请求",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "校验任务请求": {
+      "main": [
+        [
+          {
+            "node": "请求有效",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "请求有效": {
+      "main": [
+        [
+          {
+            "node": "调用 OZON-S000",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "返回任务响应",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "调用 OZON-S000": {
+      "main": [
+        [
+          {
+            "node": "格式化任务响应",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "格式化任务响应",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "格式化任务响应": {
+      "main": [
+        [
+          {
+            "node": "返回任务响应",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "errorWorkflow": "kU8XxFLUign9LiQC"
+  }
+}

@@ -1,0 +1,614 @@
+{
+  "id": "ieWnRGeC7KdeS1GT",
+  "name": "S003-v8-即梦4.5-5图生7图",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 即梦4.5 图生图子工作流\n\n### 输入\n- image-1 至 image-5：每个任务必须统一使用本地图片路径，或统一使用 SiliconFlow HTTP(S) 图片 URL。\n- batchItems：批量任务数组；同一批次不能混用 URL 模式和本地路径模式。\n- prompt：图生图提示词（String）。\n- negativePrompt：负面提示词（String）。\n- model：默认 jimeng-4.5。\n- resolution：默认 2k。\n- ratio：默认 1:1。\n\n### 处理模式\n- URL 模式：跳过 Read Image 和 Base64 转换，直接把 URL 数组提交给即梦。\n- 旧本地路径模式：继续通过 5 个 Read Image 分支读取文件并生成 Base64 Data URL，保持旧调用兼容。\n- 即梦失败任务只重试一次；重试沿用该任务原来的 images。\n\n### 输出\n- 按原任务顺序返回即梦生成的图片 URL、成功状态、重试状态和任务元数据。",
+        "height": 432
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -400,
+        256
+      ],
+      "typeVersion": 1,
+      "id": "538a4445-b6ab-4641-a0f0-3d45e61527df",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "image-1"
+            },
+            {
+              "name": "image-2"
+            },
+            {
+              "name": "image-3"
+            },
+            {
+              "name": "image-4"
+            },
+            {
+              "name": "image-5"
+            },
+            {
+              "name": "prompt"
+            },
+            {
+              "name": "negativePrompt"
+            },
+            {
+              "name": "model"
+            },
+            {
+              "name": "image_count"
+            },
+            {
+              "name": "resolution"
+            },
+            {
+              "name": "ratio"
+            },
+            {
+              "name": "batchItems",
+              "type": "array"
+            },
+            {
+              "name": "generationConcurrency",
+              "type": "number"
+            }
+          ]
+        }
+      },
+      "id": "ec33948c-68e4-46d7-a29e-6a6e98aeb45b",
+      "name": "ExecutedbyWorkflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -128,
+        544
+      ]
+    },
+    {
+      "parameters": {
+        "fileSelector": "={{ $json[\"image-1\"] }}",
+        "options": {
+          "dataPropertyName": "image_1"
+        }
+      },
+      "id": "aa910cdc-af86-46db-a8d9-5f5f9c8de74b",
+      "name": "Read Image 1",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        768,
+        64
+      ]
+    },
+    {
+      "parameters": {
+        "fileSelector": "={{ $json[\"image-2\"] }}",
+        "options": {
+          "dataPropertyName": "image_2"
+        }
+      },
+      "id": "0e40d1d7-544f-447a-86ac-5e19aa14b5ae",
+      "name": "Read Image 2",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        768,
+        256
+      ]
+    },
+    {
+      "parameters": {
+        "fileSelector": "={{ $json[\"image-3\"] }}",
+        "options": {
+          "dataPropertyName": "image_3"
+        }
+      },
+      "id": "d7a74b10-fa8c-4ac1-b66a-a542872725ec",
+      "name": "Read Image 3",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        768,
+        448
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "numberInputs": 5,
+        "options": {}
+      },
+      "id": "65a821b6-da85-4c25-abbb-3440241cfcf1",
+      "name": "Merge Images",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        992,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "fileSelector": "={{ $json[\"image-4\"] }}",
+        "options": {
+          "dataPropertyName": "image_4"
+        }
+      },
+      "id": "ded7e21b-2dce-41ce-a19f-2de0847e76f1",
+      "name": "Read Image ",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        768,
+        784
+      ]
+    },
+    {
+      "parameters": {
+        "fileSelector": "={{ $json[\"image-5\"] }}",
+        "options": {
+          "dataPropertyName": "image_5"
+        }
+      },
+      "id": "c922d2de-de3d-477a-8e8a-df5180b54015",
+      "name": "Read Image 4",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        768,
+        976
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const inputItems = $input.all();\nconst normalizedItems = $('Classify Image Input Mode').all();\nconst outputItems = [];\n\nconst passthroughKeys = [\n  'taskIndex', 'sceneIndex', 'sceneKey', 'sceneTitle', 'title', 'titleDescription',\n  'taskDir', 'promptFileName', 'promptFilePath', 'productDetailFileName',\n  'productDetailFilePath', 'rootOutputDir', 'productName', 'productDescription',\n  'productAppearance', 'targetPlatform', 'targetMarket', 'ratio', 'timestamp',\n  'workflowId', 'batchIndex', 'generationConcurrency', 'originalIndex', 'imageInputMode'\n];\n\nfunction text(value) {\n  return value === undefined || value === null ? '' : String(value);\n}\n\nfunction isHttpUrl(value) {\n  return /^https?:\\/\\//i.test(text(value).trim());\n}\n\nfor (let itemIndex = 0; itemIndex < inputItems.length; itemIndex++) {\n  const item = inputItems[itemIndex];\n  const binary = item.binary || {};\n  const source = normalizedItems[itemIndex]?.json || {};\n  const prompt = text(source.prompt).trim();\n  const negativePrompt = text(source.negativePrompt).trim();\n\n  if (!prompt) {\n    throw new Error(\n      'Prepare Jimeng Image Input: missing prompt for itemIndex=' + itemIndex +\n      ', taskIndex=' + text(source.taskIndex) +\n      ', sceneKey=' + text(source.sceneKey) +\n      ', originalIndex=' + text(source.originalIndex)\n    );\n  }\n\n  const images = [];\n  const images_base64 = [];\n  const image_meta = [];\n\n  if (source.imageInputMode === 'url') {\n    for (let i = 1; i <= 5; i++) {\n      const key = 'image-' + i;\n      const url = text(source[key]).trim();\n      if (!url) continue;\n      if (!isHttpUrl(url)) throw new Error('Invalid HTTP image URL in ' + key + ' for itemIndex=' + itemIndex);\n      images.push(url);\n      image_meta.push({ key: 'image_' + i, source: 'siliconflow-url', url });\n    }\n  } else {\n    for (let i = 1; i <= 5; i++) {\n      const key = 'image_' + i;\n      const bin = binary[key];\n      if (!bin) continue;\n\n      const mimeType = bin.mimeType || 'image/png';\n      let buffer;\n      try {\n        buffer = await this.helpers.getBinaryDataBuffer(itemIndex, key);\n      } catch (error) {\n        if (bin.data && typeof bin.data === 'string') {\n          const rawBase64 = bin.data.replace(/^data:[^;]+;base64,/, '');\n          buffer = Buffer.from(rawBase64, 'base64');\n        } else {\n          throw new Error('Cannot read binary field ' + key + ': ' + error.message);\n        }\n      }\n\n      const base64 = buffer.toString('base64');\n      images.push('data:' + mimeType + ';base64,' + base64);\n      images_base64.push(base64);\n      image_meta.push({\n        key,\n        source: 'local-base64',\n        mimeType,\n        fileName: bin.fileName || (key + '.' + (bin.fileExtension || 'png')),\n        fileExtension: bin.fileExtension || '',\n        fileSize: buffer.length,\n      });\n    }\n  }\n\n  if (!images.length) {\n    throw new Error(\n      'No images were prepared for itemIndex=' + itemIndex +\n      ', taskIndex=' + text(source.taskIndex) +\n      ', sceneKey=' + text(source.sceneKey) +\n      ', imageInputMode=' + text(source.imageInputMode)\n    );\n  }\n\n  const passthrough = {};\n  for (const key of passthroughKeys) {\n    if (source[key] !== undefined) passthrough[key] = source[key];\n  }\n\n  outputItems.push({\n    json: {\n      ...passthrough,\n      prompt,\n      negativePrompt,\n      model: source.model || 'jimeng-4.5',\n      resolution: source.resolution || '2k',\n      ratio: source.ratio || '1:1',\n      images,\n      images_base64,\n      image_count: images.length,\n      image_meta,\n    },\n    pairedItem: { item: itemIndex },\n  });\n}\n\nreturn outputItems;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1216,
+        544
+      ],
+      "id": "f1e3390e-a4c3-4f0e-8f44-6eedb37c3556",
+      "name": "Generate Base64 Image"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:8000/v1/images/compositions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{\n  {\n    \"model\": $json.model || \"jimeng-4.5\",\n    \"prompt\": $json.prompt,\n    \"negativePrompt\": $json.negativePrompt || \"\",\n    \"images\": $json.images,\n    \"ratio\": $json.ratio || \"1:1\",\n    \"resolution\": $json.resolution || \"2k\",\n    \"sample_strength\": 0.5,\n    \"response_format\": \"url\"\n  }\n}}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "5e4cc2a8-5b57-4bd3-bb82-0b9a127f7fe4",
+      "name": "HTTP Request Jimeng4.5",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        1440,
+        544
+      ],
+      "typeVersion": 4.3,
+      "alwaysOutputData": true,
+      "continueOnFail": true,
+      "notes": "即梦4.5调用"
+    },
+    {
+      "parameters": {
+        "jsCode": "const inputItems = $input.all();\nconst plan = $('Build Retry Plan').first().json || {};\nconst finalResults = Array.isArray(plan.finalResults) ? plan.finalResults.slice() : [];\nlet retrySourceItems = [];\ntry {\n  retrySourceItems = $('Expand Retry Items').all();\n} catch (error) {\n  retrySourceItems = [];\n}\n\nfunction extractUrls(body) {\n  const imageUrls = [];\n  const add = (value) => {\n    if (!value) return;\n    if (typeof value === 'string') {\n      if (!value.startsWith('data:image/')) imageUrls.push(value);\n    } else if (typeof value === 'object') {\n      if (value.url) add(value.url);\n      if (value.image_url) add(value.image_url);\n      if (value.imageUrl) add(value.imageUrl);\n      if (value.remoteUrl) add(value.remoteUrl);\n      if (value.b64_json) imageUrls.push('data:image/png;base64,' + value.b64_json);\n    }\n  };\n  const data = Array.isArray(body?.data) ? body.data : [];\n  for (const row of data) add(row);\n  if (Array.isArray(body?.urls)) for (const row of body.urls) add(row);\n  if (Array.isArray(body?.images)) for (const row of body.images) add(row);\n  return [...new Set(imageUrls.filter(Boolean))];\n}\n\nfunction sanitizeRaw(body) {\n  if (!body || typeof body !== 'object') return body || {};\n  const raw = { ...body };\n  if (Array.isArray(raw.images)) raw.images = '[omitted ' + raw.images.length + ' input image(s)]';\n  if (Array.isArray(raw.images_base64)) raw.images_base64 = '[omitted ' + raw.images_base64.length + ' raw Base64 image(s)]';\n  return raw;\n}\n\nconst metaKeys = [\n  'taskIndex', 'sceneIndex', 'sceneKey', 'sceneTitle', 'title', 'titleDescription',\n  'taskDir', 'promptFileName', 'promptFilePath', 'productDetailFileName',\n  'productDetailFilePath', 'rootOutputDir', 'productName', 'productDescription',\n  'productAppearance', 'targetPlatform', 'targetMarket', 'ratio', 'timestamp',\n  'workflowId', 'batchIndex', 'generationConcurrency', 'originalIndex'\n];\n\nfunction buildMeta(source) {\n  const meta = {};\n  for (const key of metaKeys) {\n    if (source[key] !== undefined) meta[key] = source[key];\n  }\n  return meta;\n}\n\nfunction readMessage(body) {\n  return String(\n    body?.message ||\n    body?.errorMessage ||\n    body?.error?.message ||\n    body?.error?.errorMessage ||\n    body?.cause?.message ||\n    ''\n  );\n}\n\nfunction buildRetryResult(body, retrySource) {\n  const urls = extractUrls(body);\n  const hasBusinessError = body?.code !== undefined && body.code !== 0;\n  const success = !hasBusinessError && urls.length > 0;\n  const previous = retrySource.firstRaw || {};\n  const message = readMessage(body);\n  return {\n    ...buildMeta(retrySource),\n    originalIndex: retrySource.originalIndex,\n    success,\n    ok: success,\n    code: body?.code ?? (success ? 0 : previous.code ?? -1),\n    message: message || (success ? '' : readMessage(previous) || 'Retry finished without image URLs'),\n    count: urls.length,\n    image_urls: urls,\n    urls,\n    retryAttempt: 1,\n    retryReason: retrySource.retryReason || '',\n    firstRaw: previous,\n    raw: sanitizeRaw(body),\n  };\n}\n\nfor (let i = 0; i < inputItems.length; i++) {\n  const retrySource = retrySourceItems[i]?.json;\n  if (!retrySource || retrySource.originalIndex === undefined) continue;\n  const retryBody = inputItems[i]?.json || {};\n  finalResults[retrySource.originalIndex] = buildRetryResult(retryBody, retrySource);\n}\n\nreturn finalResults\n  .map((result, index) => ({ result, index }))\n  .filter((row) => row.result)\n  .sort((a, b) => a.index - b.index)\n  .map((row) => ({\n    json: row.result,\n    pairedItem: { item: row.index },\n  }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2560,
+        544
+      ],
+      "id": "d30f9cba-9151-4e8c-b056-bb4de7519648",
+      "name": "Return Image URLs"
+    },
+    {
+      "parameters": {
+        "jsCode": "const root = $input.first()?.json || {};\nconst sourceItems = Array.isArray(root.batchItems) && root.batchItems.length ? root.batchItems : [root];\nconst hardLimit = 7;\nconst requestedLimit = Number(root.generationConcurrency ?? hardLimit);\nconst limit = Math.max(1, Math.min(sourceItems.length, hardLimit, Number.isFinite(requestedLimit) ? requestedLimit : hardLimit));\n\nfunction pick(task, names, fallback = '') {\n  for (const name of names) {\n    const value = task?.[name];\n    if (value !== undefined && value !== null && String(value).trim() !== '') return value;\n  }\n  return fallback;\n}\n\nconst rootPrompt = pick(root, ['prompt', 'imagePrompt', 'mainPrompt'], '');\nconst rootNegativePrompt = pick(root, ['negativePrompt', 'negative_prompt', 'negative'], '');\nconst rootModel = pick(root, ['model'], 'jimeng-4.5');\nconst rootResolution = pick(root, ['resolution'], '2k');\nconst rootRatio = pick(root, ['ratio'], '1:1');\n\nreturn sourceItems.slice(0, limit).map((task, index) => {\n  const imageCount = Number(task.image_count ?? task.imageCount ?? task.viewImages?.length ?? 5);\n  const incomingOriginalIndex = Number(task.originalIndex);\n  const originalIndex = Number.isFinite(incomingOriginalIndex) ? incomingOriginalIndex : index;\n\n  return {\n    json: {\n      ...task,\n      originalIndex,\n      'image-1': pick(task, ['image-1', 'viewImageAdd1']),\n      'image-2': pick(task, ['image-2', 'viewImageAdd2']),\n      'image-3': pick(task, ['image-3', 'viewImageAdd3']),\n      'image-4': pick(task, ['image-4', 'viewImageAdd4']),\n      'image-5': pick(task, ['image-5', 'viewImageAdd5']),\n      prompt: pick(task, ['prompt', 'imagePrompt', 'mainPrompt', 'scenePrompt'], rootPrompt),\n      negativePrompt: pick(task, ['negativePrompt', 'negative_prompt', 'negative'], rootNegativePrompt),\n      model: pick(task, ['model'], rootModel),\n      resolution: pick(task, ['resolution'], rootResolution),\n      ratio: pick(task, ['ratio'], rootRatio),\n      image_count: Number.isFinite(imageCount) ? imageCount : 5,\n      batchIndex: index,\n      generationConcurrency: limit,\n    },\n    pairedItem: { item: 0 },\n  };\n});"
+      },
+      "id": "148fb825-18ee-49d4-a579-39a73629acee",
+      "name": "Normalize Batch Or Single Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        96,
+        544
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst sourceItems = $('Generate Base64 Image').all();\n\nfunction extractUrls(body) {\n  const imageUrls = [];\n  const add = (value) => {\n    if (!value) return;\n    if (typeof value === 'string') {\n      if (!value.startsWith('data:image/')) imageUrls.push(value);\n    } else if (typeof value === 'object') {\n      if (value.url) add(value.url);\n      if (value.image_url) add(value.image_url);\n      if (value.imageUrl) add(value.imageUrl);\n      if (value.remoteUrl) add(value.remoteUrl);\n      if (value.b64_json) imageUrls.push('data:image/png;base64,' + value.b64_json);\n    }\n  };\n  const data = Array.isArray(body?.data) ? body.data : [];\n  for (const row of data) add(row);\n  if (Array.isArray(body?.urls)) for (const row of body.urls) add(row);\n  if (Array.isArray(body?.images)) for (const row of body.images) add(row);\n  return [...new Set(imageUrls.filter(Boolean))];\n}\n\nfunction sanitizeRaw(body) {\n  if (!body || typeof body !== 'object') return body || {};\n  const raw = { ...body };\n  if (Array.isArray(raw.images)) raw.images = '[omitted ' + raw.images.length + ' input image(s)]';\n  if (Array.isArray(raw.images_base64)) raw.images_base64 = '[omitted ' + raw.images_base64.length + ' raw Base64 image(s)]';\n  return raw;\n}\n\nconst metaKeys = [\n  'taskIndex', 'sceneIndex', 'sceneKey', 'sceneTitle', 'title', 'titleDescription',\n  'taskDir', 'promptFileName', 'promptFilePath', 'productDetailFileName',\n  'productDetailFilePath', 'rootOutputDir', 'productName', 'productDescription',\n  'productAppearance', 'targetPlatform', 'targetMarket', 'ratio', 'timestamp',\n  'workflowId', 'batchIndex', 'generationConcurrency', 'originalIndex'\n];\nconst finalResults = [];\nconst retryItems = [];\n\nfunction buildMeta(source) {\n  const meta = {};\n  for (const key of metaKeys) {\n    if (source[key] !== undefined) meta[key] = source[key];\n  }\n  return meta;\n}\n\nfunction readMessage(body) {\n  return String(\n    body?.message ||\n    body?.errorMessage ||\n    body?.error?.message ||\n    body?.error?.errorMessage ||\n    body?.cause?.message ||\n    ''\n  );\n}\n\nfunction buildResult(body, source, fallbackIndex, retryInfo) {\n  const urls = extractUrls(body);\n  const originalIndex = Number.isFinite(Number(source.originalIndex)) ? Number(source.originalIndex) : fallbackIndex;\n  const hasBusinessError = body?.code !== undefined && body.code !== 0;\n  const success = !hasBusinessError && urls.length > 0;\n  const message = readMessage(body);\n  return {\n    ...buildMeta(source),\n    originalIndex,\n    success,\n    ok: success,\n    code: body?.code ?? (success ? 0 : -1),\n    message: message || (success ? '' : 'Generation finished without image URLs'),\n    count: urls.length,\n    image_urls: urls,\n    urls,\n    retryAttempt: retryInfo?.retryAttempt || 0,\n    retryReason: retryInfo?.retryReason || '',\n    raw: sanitizeRaw(body),\n  };\n}\n\nfunction getRetryReason(body, urls) {\n  const message = readMessage(body);\n  if (body?.code !== undefined && body.code !== 0) return 'business_error_code_' + body.code;\n  if (body?.data === null) return 'empty_data';\n  if (/upload|上传|bad gateway|gateway|timeout|timed out|ECONN|fetch failed|socket|network|ETIMEDOUT|ECONNRESET|ECONNREFUSED/i.test(message)) return 'request_failed';\n  if (!urls.length) return 'empty_image_urls';\n  return '';\n}\n\nfor (let index = 0; index < items.length; index++) {\n  const body = items[index]?.json || {};\n  const source = sourceItems[index]?.json || {};\n  const originalIndex = Number.isFinite(Number(source.originalIndex)) ? Number(source.originalIndex) : index;\n  const urls = extractUrls(body);\n  const reason = getRetryReason(body, urls);\n\n  if (reason) {\n    finalResults[originalIndex] = buildResult(body, source, originalIndex, { retryAttempt: 0, retryReason: reason });\n    retryItems.push({\n      ...source,\n      originalIndex,\n      retryAttempt: 1,\n      retryReason: reason,\n      firstRaw: sanitizeRaw(body),\n    });\n  } else {\n    finalResults[originalIndex] = buildResult(body, source, originalIndex);\n  }\n}\n\nreturn [{\n  json: {\n    totalCount: items.length,\n    retryCount: retryItems.length,\n    hasRetryItems: retryItems.length > 0,\n    finalResults,\n    retryItems,\n  },\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1664,
+        544
+      ],
+      "id": "3f300d7e-d77d-4f07-8df1-aa37b06ac0ea",
+      "name": "Build Retry Plan"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "retry-items-present",
+              "leftValue": "={{ $json.hasRetryItems }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1888,
+        544
+      ],
+      "id": "883ef27e-9841-479a-a252-bcbab1d5d01b",
+      "name": "Has Retry Items"
+    },
+    {
+      "parameters": {
+        "jsCode": "const root = $input.first()?.json || {};\nconst retryItems = Array.isArray(root.retryItems) ? root.retryItems : [];\nreturn retryItems.map((item, index) => ({\n  json: item,\n  pairedItem: { item: index },\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2112,
+        480
+      ],
+      "id": "9915ea0e-d28f-4d72-8573-ce7bc2bee2fa",
+      "name": "Expand Retry Items"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:8000/v1/images/compositions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{\n  {\n    \"model\": $json.model || \"jimeng-4.5\",\n    \"prompt\": $json.prompt,\n    \"negativePrompt\": $json.negativePrompt || \"\",\n    \"images\": $json.images,\n    \"ratio\": $json.ratio || \"1:1\",\n    \"resolution\": $json.resolution || \"2k\",\n    \"sample_strength\": 0.5,\n    \"response_format\": \"url\"\n  }\n}}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "ecb49914-616f-4178-982c-3fa76d98cdba",
+      "name": "HTTP Request Jimeng4.5 Retry Once",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        2336,
+        480
+      ],
+      "typeVersion": 4.3,
+      "alwaysOutputData": true,
+      "continueOnFail": true,
+      "notes": "即梦4.5调用"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nfunction cleanString(value) {\n  return String(value ?? '').trim();\n}\n\nfunction isHttpUrl(value) {\n  return /^https?:\\/\\//i.test(cleanString(value));\n}\n\nconst classified = items.map((item, index) => {\n  const json = item.json || {};\n  const values = [];\n  for (let imageIndex = 1; imageIndex <= 5; imageIndex++) {\n    const value = cleanString(json['image-' + imageIndex]);\n    if (value) values.push(value);\n  }\n  if (!values.length) {\n    throw new Error('No image inputs found for item ' + (index + 1));\n  }\n  const urlCount = values.filter(isHttpUrl).length;\n  if (urlCount > 0 && urlCount !== values.length) {\n    throw new Error('Mixed local paths and HTTP image URLs are not supported within one task at item ' + (index + 1));\n  }\n  return {\n    json: {\n      ...json,\n      imageInputMode: urlCount === values.length ? 'url' : 'file',\n    },\n    pairedItem: item.pairedItem || { item: index },\n  };\n});\n\nconst modes = [...new Set(classified.map((item) => item.json.imageInputMode))];\nif (modes.length !== 1) {\n  throw new Error('A single S003 batch cannot mix URL-mode tasks and local-file tasks.');\n}\n\nreturn classified;"
+      },
+      "id": "7c91ad69-775c-4cc7-a4a7-0e9ea10c2d84",
+      "name": "Classify Image Input Mode",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        320,
+        544
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "siliconflow-url-mode",
+              "leftValue": "={{ $json.imageInputMode }}",
+              "rightValue": "url",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "e4e4d3c2-3313-4679-bb3f-1d4ef0a8f062",
+      "name": "Uses SiliconFlow Image URLs",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        544,
+        544
+      ]
+    }
+  ],
+  "connections": {
+    "ExecutedbyWorkflow": {
+      "main": [
+        [
+          {
+            "node": "Normalize Batch Or Single Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Batch Or Single Input": {
+      "main": [
+        [
+          {
+            "node": "Classify Image Input Mode",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Image 1": {
+      "main": [
+        [
+          {
+            "node": "Merge Images",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Image 2": {
+      "main": [
+        [
+          {
+            "node": "Merge Images",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Read Image 3": {
+      "main": [
+        [
+          {
+            "node": "Merge Images",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Read Image ": {
+      "main": [
+        [
+          {
+            "node": "Merge Images",
+            "type": "main",
+            "index": 3
+          }
+        ]
+      ]
+    },
+    "Read Image 4": {
+      "main": [
+        [
+          {
+            "node": "Merge Images",
+            "type": "main",
+            "index": 4
+          }
+        ]
+      ]
+    },
+    "Merge Images": {
+      "main": [
+        [
+          {
+            "node": "Generate Base64 Image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Base64 Image": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request Jimeng4.5",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request Jimeng4.5": {
+      "main": [
+        [
+          {
+            "node": "Build Retry Plan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Retry Plan": {
+      "main": [
+        [
+          {
+            "node": "Has Retry Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Retry Items": {
+      "main": [
+        [
+          {
+            "node": "Expand Retry Items",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Image URLs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Expand Retry Items": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request Jimeng4.5 Retry Once",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request Jimeng4.5 Retry Once": {
+      "main": [
+        [
+          {
+            "node": "Return Image URLs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify Image Input Mode": {
+      "main": [
+        [
+          {
+            "node": "Uses SiliconFlow Image URLs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Uses SiliconFlow Image URLs": {
+      "main": [
+        [
+          {
+            "node": "Generate Base64 Image",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Read Image 1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Read Image 2",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Read Image 3",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Read Image ",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Read Image 4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  }
+}

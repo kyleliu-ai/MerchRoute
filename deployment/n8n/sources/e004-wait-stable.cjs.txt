@@ -1,0 +1,267 @@
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+
+const payload = JSON.parse(Buffer.from(process.argv[2] || '', 'base64').toString('utf8'));
+const folder = path.resolve(String(payload.folder || ''));
+const intervalMs = boundedInteger(payload.intervalMs ?? 1000, 'intervalMs', 200, 5000);
+const started = Date.now();
+let maxWaitMs = boundedInteger(payload.defaultMaxWaitSeconds ?? 120, 'defaultMaxWaitSeconds', 2, 600) * 1000;
+let stableMs = 5000;
+let lastSignature = '';
+let stableSince = 0;
+let checks = 0;
+let lastReason = 'not_checked';
+
+class PackageError extends Error {
+  constructor(code, transient, details = {}) {
+    super(code);
+    this.code = code;
+    this.transient = transient;
+    this.details = details;
+  }
+}
+
+const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+const normalize = (value) => String(value || '').replace(/\\/g, '/');
+
+function boundedInteger(value, label, minimum, maximum) {
+  const number = Number(value);
+  if (!Number.isInteger(number) || number < minimum || number > maximum) {
+    throw new PackageError(`${label}_out_of_range`, false, { value, minimum, maximum });
+  }
+  return number;
+}
+
+function fail(code, transient = false, details = {}) {
+  throw new PackageError(code, transient, details);
+}
+
+function sameText(left, right) {
+  return String(left ?? '').trim() === String(right ?? '').trim();
+}
+
+function inside(root, target) {
+  const relative = path.relative(root, target);
+  return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
+function assertDirectoryWithoutSymlink(directory) {
+  if (!fs.existsSync(directory)) fail('folder_missing', true);
+  const stats = fs.lstatSync(directory);
+  if (stats.isSymbolicLink()) fail('folder_symlink_forbidden');
+  if (!stats.isDirectory()) fail('folder_not_directory');
+  return fs.realpathSync(directory);
+}
+
+function assertRegularFile(root, rootReal, file, label, missingIsTransient = false) {
+  const absolute = path.resolve(file);
+  if (!inside(root, absolute)) fail(`${label}_outside_folder`, false, { file: normalize(file) });
+  const relative = path.relative(root, absolute);
+  let current = root;
+  for (const segment of relative.split(path.sep).filter(Boolean)) {
+    current = path.join(current, segment);
+    if (!fs.existsSync(current)) fail(`${label}_missing`, missingIsTransient, { file: normalize(file) });
+    const stats = fs.lstatSync(current);
+    if (stats.isSymbolicLink()) fail(`${label}_symlink_forbidden`, false, { file: normalize(current) });
+  }
+  const stats = fs.lstatSync(absolute);
+  if (!stats.isFile()) fail(`${label}_not_regular_file`, false, { file: normalize(file) });
+  const real = fs.realpathSync(absolute);
+  if (!inside(rootReal, real)) fail(`${label}_realpath_outside_folder`, false, { file: normalize(file) });
+  return { absolute, real, stats };
+}
+
+function readJsonFile(root, rootReal, file, label, missingIsTransient = false) {
+  const checked = assertRegularFile(root, rootReal, file, label, missingIsTransient);
+  try {
+    return { checked, value: JSON.parse(fs.readFileSync(checked.absolute, 'utf8')) };
+  } catch (error) {
+    fail(`${label}_json_invalid`, false, { message: String(error?.message || error) });
+  }
+}
+
+function sha256File(file) {
+  return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+}
+
+function normalizeRelativePath(value, label) {
+  const text = normalize(value).replace(/^\.\/+/, '');
+  if (!text || text.startsWith('/') || /^[A-Za-z]:\//.test(text)) fail(`${label}_invalid`);
+  const segments = text.split('/');
+  if (segments.some((segment) => !segment || segment === '.' || segment === '..')) fail(`${label}_invalid`, false, { value: text });
+  return segments.join('/');
+}
+
+function walkFiles(root, rootReal) {
+  const files = [];
+  const visit = (directory) => {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const full = path.join(directory, entry.name);
+      const stats = fs.lstatSync(full);
+      if (stats.isSymbolicLink()) fail('package_symlink_forbidden', false, { file: normalize(full) });
+      if (stats.isDirectory()) {
+        visit(full);
+        continue;
+      }
+      if (!stats.isFile()) fail('package_special_file_forbidden', false, { file: normalize(full) });
+      const real = fs.realpathSync(full);
+      if (!inside(rootReal, real)) fail('package_realpath_outside_folder', false, { file: normalize(full) });
+      files.push({ absolute: full, relative: normalize(path.relative(root, full)), stats });
+    }
+  };
+  visit(root);
+  return files;
+}
+
+function result(extra = {}) {
+  return {
+    stable: false,
+    folder: normalize(folder),
+    waitedSeconds: Number(((Date.now() - started) / 1000).toFixed(3)),
+    checks,
+    ...extra,
+  };
+}
+
+function emitFailure(error, exitCode) {
+  const normalized = error instanceof PackageError
+    ? error
+    : new PackageError('package_wait_internal_error', false, { message: String(error?.message || error) });
+  console.error(JSON.stringify(result({
+    error: normalized.code,
+    reason: normalized.code,
+    transient: normalized.transient,
+    details: normalized.details,
+  })));
+  process.exit(exitCode);
+}
+
+async function main() {
+  const rootReal = assertDirectoryWithoutSymlink(folder);
+  while (Date.now() - started <= maxWaitMs) {
+    checks += 1;
+    try {
+      const readyPath = path.join(folder, '_READY.json');
+      const manifestPath = path.join(folder, 'selection-manifest.json');
+      const taskContextPath = path.join(folder, 'task-context.json');
+      const readyRecord = readJsonFile(folder, rootReal, readyPath, 'ready_file', true);
+      const ready = readyRecord.value;
+      if (ready.ready !== true) fail('ready_flag_not_true', true);
+
+      const manifestRecord = readJsonFile(folder, rootReal, manifestPath, 'manifest_file', true);
+      const manifest = manifestRecord.value;
+      if (!Array.isArray(manifest.selectedFiles) || manifest.selectedFiles.length === 0) fail('manifest_selectedFiles_invalid');
+
+      const parameterFileName = path.basename(String(ready.n8nParameterFileName || ''));
+      if (!parameterFileName || parameterFileName !== String(ready.n8nParameterFileName || '') || !parameterFileName.toLowerCase().endsWith('.json')) {
+        fail('parameter_file_name_invalid');
+      }
+      const parameterPath = path.join(folder, parameterFileName);
+      const parameterRecord = readJsonFile(folder, rootReal, parameterPath, 'parameter_file', true);
+      const config = parameterRecord.value;
+      const taskContextRecord = readJsonFile(folder, rootReal, taskContextPath, 'task_context_file', true);
+      const taskContext = taskContextRecord.value;
+
+      const configuredMax = boundedInteger(config.maxWaitSeconds, 'maxWaitSeconds', 2, 600);
+      const configuredStable = boundedInteger(config.waitStableSeconds, 'waitStableSeconds', 1, 60);
+      if (configuredStable >= configuredMax) fail('stable_window_must_be_less_than_max_wait');
+      maxWaitMs = configuredMax * 1000;
+      stableMs = configuredStable * 1000;
+
+      const submissionId = String(ready.submissionId || '').trim();
+      if (!submissionId) fail('ready_submissionId_missing');
+      const expected = boundedInteger(ready.imageCount, 'ready_imageCount', 1, 100);
+      if (!sameText(ready.targetStageId, 'E004')) fail('ready_targetStageId_mismatch', false, { actual: ready.targetStageId });
+      if (!sameText(manifest.targetStageId, ready.targetStageId)) fail('manifest_targetStageId_mismatch');
+      if (!sameText(manifest.taskId, ready.taskId)) fail('manifest_taskId_mismatch');
+      if (!sameText(manifest.sourceStageId, ready.sourceStageId)) fail('manifest_sourceStageId_mismatch');
+      if (!sameText(manifest.n8nParameterFileName, parameterFileName)) fail('manifest_parameter_file_mismatch');
+      if (boundedInteger(manifest.selectedImageCount, 'manifest_selectedImageCount', 1, 100) !== expected) fail('manifest_selectedImageCount_mismatch');
+      if (manifest.selectedFiles.length !== expected) fail('manifest_count_mismatch', false, { expected, actual: manifest.selectedFiles.length });
+      if (!sameText(taskContext.workflowCode, 'E004')) fail('task_context_workflowCode_mismatch');
+      if (!sameText(taskContext.sourceSubmissionId, submissionId)) fail('task_context_submissionId_mismatch');
+      if (!sameText(taskContext.SKU, manifest.productSku) || !sameText(taskContext.SKU, config.SKU)) fail('package_SKU_mismatch');
+      if (!sameText(taskContext.productName, manifest.productName) || !sameText(taskContext.productName, config.productName)) fail('package_productName_mismatch');
+      if (taskContext.variants != null && manifest.variantName != null && !sameText(taskContext.variants, manifest.variantName)) fail('package_variants_mismatch');
+
+      const allowed = new Set((Array.isArray(config.allowedImageExtensions) ? config.allowedImageExtensions : [])
+        .map((value) => String(value).trim().toLowerCase())
+        .filter((value) => /^\.[a-z0-9]+$/.test(value)));
+      if (allowed.size === 0) fail('allowed_image_extensions_invalid');
+
+      const packageFiles = walkFiles(folder, rootReal);
+      const temporaryFiles = packageFiles.filter((file) => /\.(tmp|part|crdownload|download)$/i.test(file.relative));
+      if (temporaryFiles.length) fail('temporary_files_present', true, { files: temporaryFiles.map((file) => file.relative) });
+      const actualImages = packageFiles.filter((file) => allowed.has(path.extname(file.relative).toLowerCase()));
+      const actualByRelative = new Map(actualImages.map((file) => [file.relative, file]));
+
+      const rows = [];
+      const imageFiles = [];
+      const manifestPaths = new Set();
+      for (const [index, item] of manifest.selectedFiles.entries()) {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) fail('manifest_item_invalid', false, { index });
+        const relative = normalizeRelativePath(item.targetRelativePath, 'manifest_target_path');
+        if (manifestPaths.has(relative)) fail('manifest_target_path_duplicate', false, { relative });
+        manifestPaths.add(relative);
+        if (!allowed.has(path.extname(relative).toLowerCase())) fail('image_extension_not_allowed', false, { relative });
+        const expectedSize = boundedInteger(item.sizeBytes, 'manifest_sizeBytes', 0, Number.MAX_SAFE_INTEGER);
+        const actual = actualByRelative.get(relative);
+        if (!actual) fail('image_missing', true, { relative });
+        if (actual.stats.size !== expectedSize) fail('image_size_mismatch', true, { relative, expected: expectedSize, actual: actual.stats.size });
+        const digest = sha256File(actual.absolute);
+        rows.push(`image:${relative}:${actual.stats.size}:${digest}`);
+        imageFiles.push(normalize(actual.absolute));
+      }
+      const unregistered = [...actualByRelative.keys()].filter((relative) => !manifestPaths.has(relative));
+      if (unregistered.length) fail('unregistered_images_present', false, { files: unregistered });
+      if (actualByRelative.size !== expected) fail('actual_image_count_mismatch', false, { expected, actual: actualByRelative.size });
+
+      for (const record of [readyRecord, manifestRecord, parameterRecord, taskContextRecord]) {
+        rows.push(`control:${normalize(path.relative(folder, record.checked.absolute))}:${record.checked.stats.size}:${sha256File(record.checked.absolute)}`);
+      }
+      const signature = crypto.createHash('sha256').update(rows.sort().join('|')).digest('hex');
+      if (signature === lastSignature) {
+        if (!stableSince) stableSince = Date.now();
+      } else {
+        lastSignature = signature;
+        stableSince = Date.now();
+      }
+      if (Date.now() - stableSince >= stableMs) {
+        console.log(JSON.stringify(result({
+          stable: true,
+          submissionId,
+          taskId: String(ready.taskId || ''),
+          targetStageId: String(ready.targetStageId || ''),
+          parameterFileName,
+          expectedImageCount: expected,
+          imageCount: imageFiles.length,
+          imageFiles,
+          totalBytes: actualImages.reduce((sum, file) => sum + file.stats.size, 0),
+          contentSha256: signature,
+          stableSeconds: configuredStable,
+          readyFile: normalize(readyPath),
+          manifestFile: normalize(manifestPath),
+          taskContextFile: normalize(taskContextPath),
+        })));
+        return;
+      }
+      lastReason = 'waiting_for_stable_window';
+    } catch (error) {
+      const normalized = error instanceof PackageError
+        ? error
+        : new PackageError('package_wait_internal_error', false, { message: String(error?.message || error) });
+      if (!normalized.transient) emitFailure(normalized, 2);
+      lastReason = normalized.code;
+      lastSignature = '';
+      stableSince = 0;
+    }
+    await sleep(intervalMs);
+  }
+  emitFailure(new PackageError('package_not_ready_before_timeout', false, {
+    reason: lastReason,
+    maxWaitSeconds: maxWaitMs / 1000,
+  }), 3);
+}
+
+main().catch((error) => emitFailure(error, 4));

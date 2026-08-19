@@ -1,0 +1,347 @@
+{
+  "id": "KtjTu0u08rZJNtyM",
+  "name": "S011-v03-Qwen-提示词-组装",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "productName"
+            },
+            {
+              "name": "productAppearance"
+            },
+            {
+              "name": "Country"
+            },
+            {
+              "name": "targetPlatform"
+            },
+            {
+              "name": "styleDirection"
+            },
+            {
+              "name": "targetMarket"
+            },
+            {
+              "name": "scenePrompt"
+            },
+            {
+              "name": "title"
+            },
+            {
+              "name": "titleDescription"
+            },
+            {
+              "name": "viewImageAdd1"
+            },
+            {
+              "name": "viewImageAdd2"
+            },
+            {
+              "name": "viewImageAdd3"
+            },
+            {
+              "name": "ratio"
+            },
+            {
+              "name": "taskIndex",
+              "type": "number"
+            },
+            {
+              "name": "sceneIndex",
+              "type": "number"
+            },
+            {
+              "name": "sceneKey",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "bc15592c-16c5-4f3d-8f09-096b3e8dd415",
+      "name": "When Executed by Another Workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -480,
+        32
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const __hiddenFs = require('fs');\nconst __hiddenPath = require('path');\nconst __HIDDEN_PS_TEMPLATE = \"$ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue';[Console]::OutputEncoding=New-Object System.Text.UTF8Encoding $false;$OutputEncoding=[Console]::OutputEncoding;function q([string]$a){if($null -eq $a){return '\\\"\\\"'}if($a.Length -eq 0){return '\\\"\\\"'}if($a -notmatch '[\\\\s\\\"]'){return $a}$r='\\\"';$b=0;foreach($c in $a.ToCharArray()){if($c -eq '\\\\'){$b++;continue}if($c -eq '\\\"'){$r+=('\\\\'*($b*2+1))+'\\\"';$b=0;continue}if($b -gt 0){$r+='\\\\'*$b;$b=0}$r+=$c}if($b -gt 0){$r+='\\\\'*($b*2)}return $r+'\\\"'};$sp=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__SPEC_PATH_B64__'));$o=[IO.Path]::GetTempFileName();$e=[IO.Path]::GetTempFileName();try{$s=Get-Content -LiteralPath $sp -Raw -Encoding UTF8|ConvertFrom-Json;$av=@();foreach($x in $s.args){$av+=[string]$x};$al=($av|%{q $_}) -join ' ';$p=Start-Process -FilePath ([string]$s.executable) -ArgumentList $al -WindowStyle Hidden -Wait -PassThru -RedirectStandardOutput $o -RedirectStandardError $e;$out=if(Test-Path -LiteralPath $o){[IO.File]::ReadAllText($o,[Text.Encoding]::UTF8)}else{''};$err=if(Test-Path -LiteralPath $e){[IO.File]::ReadAllText($e,[Text.Encoding]::UTF8)}else{''};if($out){[Console]::Out.Write($out)};if($err){[Console]::Error.Write($err)};exit $p.ExitCode}finally{Remove-Item -LiteralPath $o,$e -Force -ErrorAction SilentlyContinue;if(Test-Path -LiteralPath $sp){Remove-Item -LiteralPath $sp -Force -ErrorAction SilentlyContinue}}\";\nfunction __hiddenB64Utf8(value) { return Buffer.from(String(value ?? ''), 'utf8').toString('base64'); }\nfunction __hiddenShQuote(value) { const text = String(value ?? ''); return \"'\" + text.replace(/'/g, \"'\\\"'\\\"'\") + \"'\"; }\nfunction __useWindowsHiddenCommand() { return __hiddenPath.sep === '\\\\'; }\nfunction __buildHiddenCommand(executable, args) {\n  const __isWin = __useWindowsHiddenCommand();\n  const __tempRoot = __isWin ? '__MERCHROUTE_TEMP_DIR__' : '/tmp';\n  const dir = __hiddenPath.join(__tempRoot, 'n8n-hidden-command-specs');\n  __hiddenFs.mkdirSync(dir, { recursive: true });\n  const specPath = __hiddenPath.join(dir, 'cmd-' + Date.now() + '-' + Math.random().toString(36).slice(2, 10) + '.json');\n  const spec = { executable: String(executable), args: args.map((arg) => String(arg ?? '')), createdAt: new Date().toISOString(), version: 'n8n-hidden-cli-v1' };\n  __hiddenFs.writeFileSync(specPath, JSON.stringify(spec), 'utf8');\n  const psScript = __HIDDEN_PS_TEMPLATE.replace('__SPEC_PATH_B64__', __hiddenB64Utf8(specPath));\n  return 'powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -OutputFormat Text -EncodedCommand ' + Buffer.from(psScript, 'utf16le').toString('base64');\n}\nfunction __buildNodeCommand(args) {\n  const normalizedArgs = args.map((arg) => String(arg ?? ''));\n  if (__useWindowsHiddenCommand()) return __buildHiddenCommand('node', normalizedArgs);\n  return ['node', ...normalizedArgs.map(__hiddenShQuote)].join(' ');\n}\nfunction __buildNodeEvalCommand(scriptBase64, scriptArgs = []) {\n  return __buildNodeCommand(['-e', \"eval(Buffer.from(process.argv[1],'base64').toString('utf8'))\", scriptBase64, ...scriptArgs.map((arg) => String(arg ?? ''))]);\n}\nfunction __buildNodeGzipEvalCommand(scriptBase64, scriptArgs = []) {\n  return __buildNodeCommand(['-e', \"eval(require('zlib').gunzipSync(Buffer.from(process.argv[1],'base64')).toString('utf8'))\", scriptBase64, ...scriptArgs.map((arg) => String(arg ?? ''))]);\n}\n\nconst S011_QWEN_SLOT_SCRIPT_BASE64 = 'Y29uc3QgZnM9cmVxdWlyZSgnZnMnKTsKY29uc3Qgb3M9cmVxdWlyZSgnb3MnKTsKY29uc3QgcGF0aD1yZXF1aXJlKCdwYXRoJyk7CmNvbnN0IGNyeXB0bz1yZXF1aXJlKCdjcnlwdG8nKTsKY29uc3QgTkFNRVNQQUNFPSJuOG4tZTAwMy1zMDExLXF3ZW4tc2VtYXBob3JlLXYxIjsKY29uc3QgTUFYX1NMT1RTPTI7CmNvbnN0IFBPTExfTVM9MTAwMDsKY29uc3QgSklUVEVSX01TPTI1MDsKY29uc3QgTEVBU0VfTVM9NjAwMDAwOwpjb25zdCBFTVBUWV9PV05FUl9HUkFDRV9NUz0zMDAwMDsKY29uc3QgTUFYX1dBSVRfTVM9NjAwMDAwOwpjb25zdCByb290PXBhdGguam9pbihvcy50bXBkaXIoKSxOQU1FU1BBQ0UpOwpjb25zdCBzbGVlcD0obXMpPT5uZXcgUHJvbWlzZSgocmVzb2x2ZSk9PnNldFRpbWVvdXQocmVzb2x2ZSxtcykpOwoKZnVuY3Rpb24gZW5zdXJlU2FmZVJvb3QoKXsKICBmcy5ta2RpclN5bmMocm9vdCx7cmVjdXJzaXZlOnRydWUsbW9kZTowbzcwMH0pOwogIGNvbnN0IHN0YXQ9ZnMubHN0YXRTeW5jKHJvb3QpOwogIGlmKCFzdGF0LmlzRGlyZWN0b3J5KCl8fHN0YXQuaXNTeW1ib2xpY0xpbmsoKSl0aHJvdyBuZXcgRXJyb3IoJ1Vuc2FmZSBzZW1hcGhvcmUgcm9vdCcpOwogIHRyeXtmcy5jaG1vZFN5bmMocm9vdCwwbzcwMCk7fWNhdGNoe30KfQoKZnVuY3Rpb24gc2FmZVJlbW92ZVRvbWJzdG9uZSh0b21ic3RvbmUpewogIGNvbnN0IG93bmVyUGF0aD1wYXRoLmpvaW4odG9tYnN0b25lLCdvd25lci5qc29uJyk7CiAgdHJ5ewogICAgY29uc3Qgb3duZXJTdGF0PWZzLmxzdGF0U3luYyhvd25lclBhdGgpOwogICAgaWYob3duZXJTdGF0LmlzU3ltYm9saWNMaW5rKCl8fCFvd25lclN0YXQuaXNGaWxlKCkpdGhyb3cgbmV3IEVycm9yKCdVbnNhZmUgb3duZXIgbWV0YWRhdGEnKTsKICAgIGZzLnVubGlua1N5bmMob3duZXJQYXRoKTsKICB9Y2F0Y2goZXJyb3IpewogICAgaWYoZXJyb3IuY29kZSE9PSdFTk9FTlQnKXRocm93IGVycm9yOwogIH0KICB0cnl7ZnMucm1kaXJTeW5jKHRvbWJzdG9uZSk7fWNhdGNoKGVycm9yKXsKICAgIGlmKGVycm9yLmNvZGUhPT0nRU5PRU5UJyljb25zb2xlLmVycm9yKCdTZW1hcGhvcmUgdG9tYnN0b25lIGNsZWFudXAgd2FybmluZzogJytlcnJvci5tZXNzYWdlKTsKICB9Cn0KCmZ1bmN0aW9uIHRyeVJlYXBTdGFsZVNsb3Qoc2xvdFBhdGgsc2xvdEluZGV4KXsKICBsZXQgc2xvdFN0YXQ7CiAgdHJ5e3Nsb3RTdGF0PWZzLmxzdGF0U3luYyhzbG90UGF0aCk7fWNhdGNoKGVycm9yKXsKICAgIGlmKGVycm9yLmNvZGU9PT0nRU5PRU5UJylyZXR1cm4gdHJ1ZTsKICAgIHRocm93IGVycm9yOwogIH0KICBpZighc2xvdFN0YXQuaXNEaXJlY3RvcnkoKXx8c2xvdFN0YXQuaXNTeW1ib2xpY0xpbmsoKSl0aHJvdyBuZXcgRXJyb3IoJ1Vuc2FmZSBzZW1hcGhvcmUgc2xvdCAnK3Nsb3RJbmRleCk7CgogIGxldCBhY3F1aXJlZEF0PU51bWJlcihzbG90U3RhdC5tdGltZU1zKXx8RGF0ZS5ub3coKTsKICBsZXQgaGFzVmFsaWRPd25lcj1mYWxzZTsKICB0cnl7CiAgICBjb25zdCBvd25lclBhdGg9cGF0aC5qb2luKHNsb3RQYXRoLCdvd25lci5qc29uJyk7CiAgICBjb25zdCBvd25lclN0YXQ9ZnMubHN0YXRTeW5jKG93bmVyUGF0aCk7CiAgICBpZihvd25lclN0YXQuaXNTeW1ib2xpY0xpbmsoKXx8IW93bmVyU3RhdC5pc0ZpbGUoKSl0aHJvdyBuZXcgRXJyb3IoJ1Vuc2FmZSBvd25lciBtZXRhZGF0YScpOwogICAgY29uc3Qgb3duZXI9SlNPTi5wYXJzZShmcy5yZWFkRmlsZVN5bmMob3duZXJQYXRoLCd1dGY4JykpOwogICAgaWYodHlwZW9mIG93bmVyLm93bmVyVG9rZW49PT0nc3RyaW5nJyYmTnVtYmVyLmlzRmluaXRlKE51bWJlcihvd25lci5hY3F1aXJlZEF0KSkpewogICAgICBhY3F1aXJlZEF0PU51bWJlcihvd25lci5hY3F1aXJlZEF0KTsKICAgICAgaGFzVmFsaWRPd25lcj10cnVlOwogICAgfQogIH1jYXRjaChlcnJvcil7CiAgICBpZihlcnJvci5jb2RlIT09J0VOT0VOVCcmJiEoZXJyb3IgaW5zdGFuY2VvZiBTeW50YXhFcnJvcikpdGhyb3cgZXJyb3I7CiAgfQoKICBjb25zdCBzdGFsZUFmdGVyTXM9aGFzVmFsaWRPd25lcj9MRUFTRV9NUzpFTVBUWV9PV05FUl9HUkFDRV9NUzsKICBpZihEYXRlLm5vdygpLWFjcXVpcmVkQXQ8c3RhbGVBZnRlck1zKXJldHVybiBmYWxzZTsKCiAgY29uc3QgdG9tYnN0b25lPXBhdGguam9pbihyb290LCcucmVhcC0nK3Nsb3RJbmRleCsnLScrY3J5cHRvLnJhbmRvbUJ5dGVzKDEyKS50b1N0cmluZygnaGV4JykpOwogIHRyeXtmcy5yZW5hbWVTeW5jKHNsb3RQYXRoLHRvbWJzdG9uZSk7fWNhdGNoKGVycm9yKXsKICAgIGlmKGVycm9yLmNvZGU9PT0nRU5PRU5UJ3x8ZXJyb3IuY29kZT09PSdFRVhJU1QnKXJldHVybiBmYWxzZTsKICAgIHRocm93IGVycm9yOwogIH0KICBzYWZlUmVtb3ZlVG9tYnN0b25lKHRvbWJzdG9uZSk7CiAgcmV0dXJuIHRydWU7Cn0KCmZ1bmN0aW9uIHRyeUFjcXVpcmUoc2xvdEluZGV4LHN0YXJ0ZWRBdCl7CiAgY29uc3Qgc2xvdFBhdGg9cGF0aC5qb2luKHJvb3QsJ3Nsb3QtJytzbG90SW5kZXgpOwogIHRyeXtmcy5ta2RpclN5bmMoc2xvdFBhdGgse21vZGU6MG83MDB9KTt9Y2F0Y2goZXJyb3IpewogICAgaWYoZXJyb3IuY29kZSE9PSdFRVhJU1QnKXRocm93IGVycm9yOwogICAgdHJ5UmVhcFN0YWxlU2xvdChzbG90UGF0aCxzbG90SW5kZXgpOwogICAgcmV0dXJuIG51bGw7CiAgfQoKICBjb25zdCBvd25lclRva2VuPWNyeXB0by5yYW5kb21CeXRlcygxOCkudG9TdHJpbmcoJ2Jhc2U2NHVybCcpOwogIGNvbnN0IG93bmVyPXtvd25lclRva2VuLGFjcXVpcmVkQXQ6RGF0ZS5ub3coKX07CiAgdHJ5ewogICAgZnMud3JpdGVGaWxlU3luYyhwYXRoLmpvaW4oc2xvdFBhdGgsJ293bmVyLmpzb24nKSxKU09OLnN0cmluZ2lmeShvd25lcikse2VuY29kaW5nOid1dGY4Jyxtb2RlOjBvNjAwLGZsYWc6J3d4J30pOwogIH1jYXRjaChlcnJvcil7CiAgICB0cnl7ZnMucm1kaXJTeW5jKHNsb3RQYXRoKTt9Y2F0Y2h7fQogICAgdGhyb3cgZXJyb3I7CiAgfQoKICByZXR1cm4gewogICAgb2s6dHJ1ZSwKICAgIG5hbWVzcGFjZTpOQU1FU1BBQ0UsCiAgICBzbG90SW5kZXgsCiAgICBvd25lclRva2VuLAogICAgcm9vdEJhc2U2NDpCdWZmZXIuZnJvbShyb290LCd1dGY4JykudG9TdHJpbmcoJ2Jhc2U2NCcpLAogICAgd2FpdGVkTXM6RGF0ZS5ub3coKS1zdGFydGVkQXQsCiAgfTsKfQoKKGFzeW5jKCk9PnsKICBlbnN1cmVTYWZlUm9vdCgpOwogIGNvbnN0IHN0YXJ0ZWRBdD1EYXRlLm5vdygpOwogIHdoaWxlKERhdGUubm93KCktc3RhcnRlZEF0PD1NQVhfV0FJVF9NUyl7CiAgICBmb3IobGV0IHNsb3RJbmRleD0xO3Nsb3RJbmRleDw9TUFYX1NMT1RTO3Nsb3RJbmRleCs9MSl7CiAgICAgIGNvbnN0IGxlYXNlPXRyeUFjcXVpcmUoc2xvdEluZGV4LHN0YXJ0ZWRBdCk7CiAgICAgIGlmKGxlYXNlKXtwcm9jZXNzLnN0ZG91dC53cml0ZShKU09OLnN0cmluZ2lmeShsZWFzZSkpO3JldHVybjt9CiAgICB9CiAgICBhd2FpdCBzbGVlcChQT0xMX01TK01hdGguZmxvb3IoTWF0aC5yYW5kb20oKSooSklUVEVSX01TKzEpKSk7CiAgfQogIHRocm93IG5ldyBFcnJvcignUzAxMSBjb25jdXJyZW5jeSBzbG90IHdhaXQgdGltZWQgb3V0IGFmdGVyICcrTUFYX1dBSVRfTVMrJ21zJyk7Cn0pKCkuY2F0Y2goKGVycm9yKT0+ewogIGNvbnNvbGUuZXJyb3IoZXJyb3ImJmVycm9yLnN0YWNrP2Vycm9yLnN0YWNrOlN0cmluZyhlcnJvcikpOwogIHByb2Nlc3MuZXhpdCgxKTsKfSk7';\n\nconst sourceInput = $('When Executed by Another Workflow').first().json || {};\nconst promptSettings = $input.first().json || {};\nconst constants = promptSettings.constants || {};\nconst modelRun = normalizeText(constants.model?.Model_Run);\nconst baseUrlRun = normalizeText(constants.BaseUrl?.BaseUrl_Run);\nconst apiKeyRun = normalizeText(constants.Authorization?.APIKey_Run);\n\nfunction normalizeText(value) {\n  return value === undefined || value === null ? '' : String(value).trim();\n}\n\nif (!modelRun) throw new Error('缺少 constants.model.Model_Run，无法构造模型请求');\nif (!baseUrlRun) throw new Error('缺少 constants.BaseUrl.BaseUrl_Run，无法构造模型请求');\nif (!apiKeyRun) throw new Error('缺少 constants.Authorization.APIKey_Run，无法构造模型请求');\n\nfunction normalizeRatio(value) {\n  const fullwidthColon = String.fromCharCode(0xFF1A);\n  return normalizeText(value)\n    .replace(new RegExp(fullwidthColon, 'g'), ':')\n    .replace(/\\s+/g, '');\n}\n\nconst targetPlatform = normalizeText(sourceInput.targetPlatform).toUpperCase();\nconst ratio = normalizeRatio(sourceInput.ratio);\nconst platformRule = targetPlatform.includes('OZON')\n  ? normalizeText(promptSettings.ozonPlatformRule)\n  : normalizeText(promptSettings.wbPlatformRule);\n\nconst requiredFields = ['productName', 'productAppearance', 'scenePrompt', 'ratio'];\nconst missing = requiredFields.filter((key) => !normalizeText(sourceInput[key]));\nif (missing.length) {\n  throw new Error('Missing required input field(s): ' + missing.join(', '));\n}\n\nconst userPromptJson = {\n  jobDescription: normalizeText(sourceInput.jobDescription),\n  productName: normalizeText(sourceInput.productName),\n  productAppearance: normalizeText(sourceInput.productAppearance),\n  Country: normalizeText(sourceInput.Country),\n  targetPlatform: normalizeText(sourceInput.targetPlatform),\n  styleDirection: normalizeText(sourceInput.styleDirection),\n  targetMarket: normalizeText(sourceInput.targetMarket),\n  platformRule,\n  scenePrompt: normalizeText(sourceInput.scenePrompt),\n  title: normalizeText(sourceInput.title),\n  titleDescription: normalizeText(sourceInput.titleDescription),\n  viewImageAdd1: normalizeText(sourceInput.viewImageAdd1),\n  viewImageAdd2: normalizeText(sourceInput.viewImageAdd2),\n  viewImageAdd3: normalizeText(sourceInput.viewImageAdd3),\n  ratio,\n};\n\nconst systemPrompt = normalizeText(promptSettings.systemPrompt);\nif (!systemPrompt) {\n  throw new Error('Missing systemPrompt from prompt settings node.');\n}\n\nconst request = {\n  model: modelRun,\n  messages: [\n    {\n      role: 'system',\n      content: systemPrompt,\n    },\n    {\n      role: 'user',\n      content: JSON.stringify(userPromptJson, null, 2),\n    },\n  ],\n  enable_thinking: false,\n  response_format: {\n    type: 'json_object',\n  },\n  temperature: 0.2,\n};\n\nconst acquireQwenSlotCommand = __buildNodeEvalCommand(S011_QWEN_SLOT_SCRIPT_BASE64, []);\n\nreturn [{\n  json: {\n    request,\n    acquireQwenSlotCommand,\n    constants,\n    source: { ...sourceInput },\n  },\n}];"
+      },
+      "id": "6dc6539e-95fb-445f-8bba-c18bf8b51e69",
+      "name": "Assemble Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        192,
+        32
+      ],
+      "notesInFlow": true,
+      "notes": "按 89810e 输入组装 Qwen3.7-plus 请求体"
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json || {};\nconst sourceInput = $('When Executed by Another Workflow').first().json || {};\n\nfunction normalizeText(value) {\n  return value === undefined || value === null ? '' : String(value).trim();\n}\n\nfunction normalizeRatio(value) {\n  return normalizeText(value).replace(/：/g, ':').replace(/\\s+/g, '');\n}\n\nfunction parseModelContent(value) {\n  if (value && typeof value === 'object' && !Array.isArray(value)) {\n    return value;\n  }\n  if (typeof value !== 'string') {\n    throw new Error('Qwen response did not include JSON content at choices[0].message.content.');\n  }\n\n  let text = value.trim();\n  const fenced = text.match(/^```(?:json)?\\s*([\\s\\S]*?)\\s*```$/i);\n  if (fenced) {\n    text = fenced[1].trim();\n  }\n\n  try {\n    return JSON.parse(text);\n  } catch (firstError) {\n    const start = text.indexOf('{');\n    const end = text.lastIndexOf('}');\n    if (start !== -1 && end > start) {\n      return JSON.parse(text.slice(start, end + 1));\n    }\n    throw firstError;\n  }\n}\n\nconst modelContent = response?.choices?.[0]?.message?.content ?? response?.message?.content ?? response?.content;\nlet parsed;\ntry {\n  parsed = parseModelContent(modelContent);\n} catch (error) {\n  const preview = typeof modelContent === 'string' ? modelContent.slice(0, 500) : JSON.stringify(modelContent).slice(0, 500);\n  throw new Error(`Qwen output is not valid JSON: ${error.message}. Output preview: ${preview}`);\n}\n\nconst prompt = normalizeText(parsed.prompt || parsed.positivePrompt || parsed['正向提示词']);\nconst negativePrompt = normalizeText(parsed.negativePrompt || parsed.negative_prompt || parsed['反向提示词']);\nconst ratio = normalizeRatio(sourceInput.ratio || parsed.ratio || parsed['生图比例']);\nconst productName = normalizeText(sourceInput.productName);\nconst taskIndexValue = Number(sourceInput.taskIndex);\nconst taskIndex = Number.isInteger(taskIndexValue) && taskIndexValue > 0 ? taskIndexValue : null;\nconst sceneIndexValue = Number(sourceInput.sceneIndex);\nconst sceneIndex = Number.isInteger(sceneIndexValue) && sceneIndexValue > 0 ? sceneIndexValue : taskIndex;\nconst sceneKey = normalizeText(sourceInput.sceneKey);\n\nconst missing = [];\nif (!productName) missing.push('productName');\nif (!prompt) missing.push('prompt');\nif (!ratio) missing.push('ratio');\nif (missing.length) {\n  throw new Error(`Missing required output field(s): ${missing.join(', ')}`);\n}\n\nreturn [{\n  json: {\n    productName,\n    prompt,\n    negativePrompt,\n    ratio,\n    taskIndex,\n    sceneIndex,\n    sceneKey,\n  },\n}];"
+      },
+      "id": "589dd432-f14a-40af-afb4-7551e6604101",
+      "name": "Return Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1088,
+        -64
+      ],
+      "notesInFlow": true,
+      "notes": "解析 Qwen 输出，只返回商品名、正向提示词、反向提示词、生图比例"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Assemble Prompt').first().json.constants.BaseUrl.BaseUrl_Run }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ $('Assemble Prompt').first().json.constants.Authorization.APIKey_Run }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $('Assemble Prompt').first().json.request }}",
+        "options": {
+          "timeout": 90000
+        }
+      },
+      "id": "19a74307-d0de-420b-868b-52206dac5919",
+      "name": "HTTP Request Form",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        640,
+        32
+      ],
+      "notesInFlow": true,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "notes": "运行时模型服务：Model_Run（输出为 model_Run）+ BaseUrl_Run + APIKey_Run",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "systemPrompt",
+              "name": "systemPrompt",
+              "type": "string",
+              "value": "=你是即梦 4.5 图生图提示词生成专家，专门为电商平台商品图生成可直接提交给图生图模型即梦 4.5 的中文主提示词。\n\n你的输入来自父工作流和本子工作流组装后的 JSON，可能包含：商品名称、商品外观描述、目标国家和电商平台、目标市场、风格方向、当前单张图的场景任务、图片标题文本、图片标题描述文本、目标平台生图比例。\n\n重要说明：\n你不会直接接收或识别产品多视图图片本身。产品多视图图片会由图生图模型即梦 4.5 接收。你的任务不是分析图片内容，而是在生成的 prompt 中明确指示即梦 4.5：必须严格参考输入的 多张不同视图商品参考图，保持商品外观一致。视图图片顺序，不代表固定的视图顺序，应综合所有参考图中的可见商品事实。\n\n产品多视图参考图定义：\n产品多视图参考图指随图生图请求一起传入的多张商品参考图。这些参考图可能来自不同角度或不同视图，包括但不限于正视图、后视图、左侧视图、右侧视图、侧视图、俯视图、45° 斜俯视图或局部细节视图。不要在提示词中写死某一种固定组合，不要默认一定包含正视图、后视图和侧视图，也不要根据图片顺序假定视图类型。应统一称为“产品多视图参考图”或“输入的多张不同视图商品参考图”。\n\n你的核心任务：\n把输入 JSON 中的信息整合成一条适合即梦 4.5 图生图的主提示词，并确保主提示词明确要求图生图模型严格参考产品多视图参考图，保持商品真实一致。\n\n商品参考原则：\n\n1. 产品多视图参考图是商品外观事实的最高依据，即梦 4.5 必须根据输入的多 张不同视图商品参考图，综合确定产品颜色、结构、轮廓、比例、按钮、接口、孔位、出风口、装饰线、材质质感、透明件、金属件、附件形态和细节位置。\n2. 商品外观约束是对商品外观的文字补充，用于帮助稳定商品一致性，但不能替代产品多视图参考图。\n3. 如果商品外观约束与产品多视图参考图中清晰可见的商品事实存在冲突，应在 prompt 中要求即梦 4.5 优先遵循产品多视图参考图中的可见商品事实。\n4. 生成的 prompt 必须明确要求即梦 4.5：严格参考输入的产品多视图参考图，注意视图图片顺序，不代表固定的视图顺序，保持商品颜色、造型、结构、按键数量、按键位置、接口位置、孔位布局、材质、比例、边角形态、附件形态和可见细节不变。\n5. 不得根据卖点、场景或风格想象并添加参考图中不存在的功能、按钮、屏幕、灯效、品牌相关文字或图形、配件、装饰件、接口或结构。\n6. 如果某些产品细节无法从参考图中确定，prompt 应使用保守表达：保持参考图可见外观，不新增不确定细节，不创造额外结构。\n\n组合策略：\n\n1. 只围绕当前单张图任务生成 prompt，突出当前图片展示场景、图片基础要求和当前图中差异化提示词，不要混入其他图片任务。\n2. 商品一致性优先级高于风格、场景、人物、道具、卖点和文字表达。任何场景设计都不得导致产品外观变化。\n3. 生图比例 ratio 必须进入构图要求。\n4. 图片标题文本和图片标题描述文本只作为当前图需要出现的文字信息；如果画面包含文字，必须严格使用这些字段中的文字，不自行改写、不翻译、不新增无关文案。\n5. 文字要简洁清晰，不遮挡商品关键结构，不生成乱码、错别字或无意义字符。\n6. 标题字体推荐使用 Roboto Slab 或 Roboto Bold；标题描述推荐使用 Roboto Condensed 或 Roboto Medium。文字布局应适合移动端电商浏览，保证清晰可读。\n7. 商品主体必须真实、清晰、可信，适合 Country 电商平台 targetPlatform 的商品主图展示。背景、道具、人物手部或使用场景都必须服务于商品展示，不得抢占商品主体。\n8. 如画面包含人物或手部，人物和手部只能辅助展示商品使用方式，不得遮挡商品关键结构，不得改变商品持握角度导致产品失真。\n9. 如画面包含道具、环境或背景，必须与当前卖点和场景任务相关，保持干净、专业、高级，不使用杂乱背景或夸张促销海报风。\n10. 主提示词必须是完整通顺的自然语言提示词，不要只是关键词堆砌。\n11. 主提示词中必须明确包含类似表达：“严格参考输入的多张不同视图商品参考图，视图图片顺序，不代表固定的视图顺序，保持商品外观、颜色、结构、按钮、接口、孔位、材质、比例和细节位置不变”。\n\n敏感词过滤规则：\n\n1. 生成的 JSON 中，prompt 字段和 negativePrompt 字段都不得出现 即梦 敏感字段。\n2. 禁止输出的敏感字段包括：英文小写 l o g o 四个字母连写、英文大写 L O G O 四个字母连写、中文“商”与“标”两个字连写。\n3. 遇到上述敏感字段时，必须删除或改写为“品牌相关文字或图形”“品牌相关标记”“品牌文字元素”等安全表达。\n4. 不得在 prompt 或 negativePrompt 中使用“不要出现某敏感字段”“无某敏感字段”“额外某敏感字段”等写法，因为这会把敏感字段原样带入最终提示词。\n5. 对品牌相关内容的负向约束，应统一改写为“不要新增品牌相关文字或图形”“不要新增品牌文字元素”“不要新增品牌相关标记”。\n\n冲突处理优先级：\n\n1. 平台规则和目标比例\n2. 敏感词过滤规则\n3. 产品多视图参考图中的商品可见事实\n4. 商品外观约束\n5. 当前单张图场景任务和当前图中差异化提示词\n6. 图片标题文本和图片标题描述\n7. 风格方向\n8. 卖点表达\n\n负向约束必须覆盖以下问题：\n插画、动漫、水彩、油画、3D 卡通、塑料玩具感、错误文字、乱码、错别字、无意义字符、杂乱背景、低清画质、模糊、噪点、过度锐化、过度反光、产品变形、产品比例错误、颜色错误、按钮数量错误、按钮位置错误、接口错误、孔位错误、额外屏幕、额外灯效、额外品牌相关文字、额外品牌图形标记、额外配件、错误配件、缺失关键结构、材质错误、边缘破损、手部畸形、不自然姿势、人物遮挡商品、夸张促销海报风、强霓虹风、过度渐变背景、额外产品、多个重复商品主体。\n\n输出格式要求：\n只返回一个 JSON 对象，禁止 Markdown，禁止解释，禁止代码块，禁止输出 JSON 之外的任何文字。\n\nJSON 字段必须为：\n{\n\"prompt\": \"可直接提交给即梦 4.5 图生图模型的中文主提示词\",\n\"negativePrompt\": \"中文负向提示词\",\n\"ratio\": \"1:1 或 3:4\"\n}\n\n字段要求：\n\n1. prompt 必须是完整、通顺、可直接提交给即梦 4.5 图生图模型的中文自然语言提示词。\n2. prompt 必须明确说明：图生图模型需要严格参考输入的产品多视图参考图，而不是根据文字自行想象商品外观。\n3. prompt 必须包含对输入的多张不同视图商品参考图的强约束表达，说明视图图片顺序，不代表固定的视图顺序，并要求保持商品颜色、结构、按钮、接口、孔位、材质、比例、轮廓和细节位置不变。\n4. prompt 必须包含当前图的场景任务、构图要求、商品展示要求、文字要求和画质要求。\n5. prompt 和 negativePrompt 都不得包含敏感词过滤规则中禁止输出的字段。\n6. negativePrompt 必须是中文字符串，覆盖产品变形、颜色错误、按钮错误、接口错误、孔位错误、额外结构、错误文字、乱码、低清、手部畸形、杂乱背景等问题，同时使用安全表达约束品牌相关内容。\n7. ratio 必须与输入 ratio 完全一致，不得自行修改。"
+            },
+            {
+              "id": "351d3375-eaaf-43c0-a915-df0e34d2b915",
+              "name": "jobDescription",
+              "value": "=下面是当前单张电商主图的图生图提示词生成任务:请严格根据 JSON 中的商品信息、当前场景任务、标题文字、多张参考图路径和平台规则，生成可直接提交给即梦 4.5 图生图模型的 JSON。, 只生成当前这一张图的提示词，不要输出其他场景，不要输出解释。",
+              "type": "string"
+            },
+            {
+              "id": "wbPlatformRule",
+              "name": "wbPlatformRule",
+              "type": "string",
+              "value": "俄罗斯 Wildberries / WB 平台商品图。画面比例必须为 1:1。视觉应真实、干净、可信、高级，适合移动端电商浏览和转化。"
+            },
+            {
+              "id": "ozonPlatformRule",
+              "name": "=ozonPlatformRule",
+              "type": "string",
+              "value": "俄罗斯 OZON 平台商品图。画面比例必须为 3:4。视觉应真实、干净、可信、高级，主体识别清晰，适合移动端电商浏览和转化。"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "e9e954cd-c682-45eb-b72d-223eb76ae3c1",
+      "name": "图生图-提示词设置",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -32,
+        32
+      ],
+      "notesInFlow": true,
+      "notes": "提示词设计"
+    },
+    {
+      "parameters": {
+        "content": "## S011-03-Qwen-提示词-组装\n\n### 主要功能\n作为被其它工作流调用的提示词组装子流，接收商品信息、平台规则、场景任务和比例要求，先组装 Qwen 请求，再调用阿里百炼兼容接口生成适合即梦 4.5 图生图使用的中文主提示词。\n\n### 输入\n- productName：商品名称，必填。\n- productAppearance：商品外观描述，必填，用于约束商品一致性。\n- Country / targetPlatform / targetMarket：目标国家、平台和市场信息。\n- styleDirection / scenePrompt：当前图片的风格方向和场景任务，其中 scenePrompt 必填。\n- title / titleDescription：当前图片的标题和标题说明。\n- viewImageAdd1 / viewImageAdd2 / viewImageAdd3：三视图参考图地址或上游传入的图片信息。\n- ratio：目标生图比例，必填，会统一中英文冒号和空格。\n\n### 输出\n- prompt / messageContent：Qwen 返回并解析后的图生图主提示词。\n- ratio：标准化后的比例。\n- 源输入字段：保留关键商品和平台上下文，方便父工作流继续传递给即梦生成节点。\n\n### 注意\n- 该子流只负责提示词生成，不直接生成图片。\n- System Prompt 明确要求即梦严格参考输入的 3 张商品参考图，不新增参考图中不存在的结构、按钮、Logo 或配件。\n- HTTP 节点使用阿里百炼 DashScope OpenAI 兼容接口和 Bearer 凭证。",
+        "height": 640,
+        "width": 660,
+        "color": 4
+      },
+      "id": "c2b081cb-9f11-466b-a978-c3801d6a96af",
+      "name": "工作流说明便签",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -1152,
+        -160
+      ]
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-globals.globalConstants",
+      "typeVersion": 1,
+      "position": [
+        -256,
+        32
+      ],
+      "id": "56cee33a-8e54-4626-803d-e5f2e84ce723",
+      "name": "Global Constants"
+    },
+    {
+      "id": "dd8531db-445e-4770-80c5-eef78452a927",
+      "name": "Acquire S011 Qwen Slot",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        416,
+        32
+      ],
+      "parameters": {
+        "command": "={{ $json.acquireQwenSlotCommand }}",
+        "executeOnce": true
+      }
+    },
+    {
+      "id": "5301d2af-9052-4dd8-9e58-e54e75c08c11",
+      "name": "Release S011 Qwen Slot",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        864,
+        -64
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const fs = require('fs');\nconst path = require('path');\nconst SEMAPHORE_NAMESPACE = \"n8n-e003-s011-qwen-semaphore-v1\";\n\nfunction readLease() {\n  const raw = String($('Acquire S011 Qwen Slot').first().json?.stdout || '').trim();\n  let lease;\n  try {\n    lease = JSON.parse(raw);\n  } catch (error) {\n    throw new Error('Invalid S011 semaphore lease JSON: ' + error.message);\n  }\n\n  const slotIndex = Number(lease.slotIndex);\n  const ownerToken = String(lease.ownerToken || '');\n  if (lease.namespace !== SEMAPHORE_NAMESPACE) throw new Error('Unexpected S011 semaphore namespace.');\n  if (!Number.isInteger(slotIndex) || slotIndex < 1 || slotIndex > 2) throw new Error('Invalid S011 semaphore slotIndex.');\n  if (!/^[A-Za-z0-9_-]{24}$/.test(ownerToken)) throw new Error('Invalid S011 semaphore ownerToken.');\n\n  const root = Buffer.from(String(lease.rootBase64 || ''), 'base64').toString('utf8');\n  if (!root || path.basename(root) !== SEMAPHORE_NAMESPACE) throw new Error('Invalid S011 semaphore root.');\n  const rootStat = fs.lstatSync(root);\n  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new Error('Unsafe S011 semaphore root.');\n\n  const slotPath = path.join(root, 'slot-' + slotIndex);\n  if (path.dirname(path.resolve(slotPath)) !== path.resolve(root)) throw new Error('Unsafe S011 semaphore slot path.');\n  return { root, slotPath, slotIndex, ownerToken };\n}\n\nfunction releaseLease(lease) {\n  const slotStat = fs.lstatSync(lease.slotPath);\n  if (!slotStat.isDirectory() || slotStat.isSymbolicLink()) throw new Error('Unsafe S011 semaphore slot.');\n\n  const ownerPath = path.join(lease.slotPath, 'owner.json');\n  const ownerStat = fs.lstatSync(ownerPath);\n  if (!ownerStat.isFile() || ownerStat.isSymbolicLink()) throw new Error('Unsafe S011 semaphore owner metadata.');\n  const owner = JSON.parse(fs.readFileSync(ownerPath, 'utf8'));\n  if (owner.ownerToken !== lease.ownerToken) throw new Error('S011 semaphore owner mismatch; slot was not released.');\n\n  const tombstone = path.join(\n    lease.root,\n    '.release-' + lease.slotIndex + '-' + lease.ownerToken + '-' + Date.now()\n  );\n  fs.renameSync(lease.slotPath, tombstone);\n  fs.unlinkSync(path.join(tombstone, 'owner.json'));\n  fs.rmdirSync(tombstone);\n}\n\nconst responseItems = $input.all();\nreleaseLease(readLease());\nreturn responseItems;"
+      }
+    },
+    {
+      "id": "7604c8b6-2e20-43b6-97e6-85baee7b6981",
+      "name": "Release S011 Qwen Slot and Throw",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        864,
+        160
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const fs = require('fs');\nconst path = require('path');\nconst SEMAPHORE_NAMESPACE = \"n8n-e003-s011-qwen-semaphore-v1\";\n\nfunction readLease() {\n  const raw = String($('Acquire S011 Qwen Slot').first().json?.stdout || '').trim();\n  let lease;\n  try {\n    lease = JSON.parse(raw);\n  } catch (error) {\n    throw new Error('Invalid S011 semaphore lease JSON: ' + error.message);\n  }\n\n  const slotIndex = Number(lease.slotIndex);\n  const ownerToken = String(lease.ownerToken || '');\n  if (lease.namespace !== SEMAPHORE_NAMESPACE) throw new Error('Unexpected S011 semaphore namespace.');\n  if (!Number.isInteger(slotIndex) || slotIndex < 1 || slotIndex > 2) throw new Error('Invalid S011 semaphore slotIndex.');\n  if (!/^[A-Za-z0-9_-]{24}$/.test(ownerToken)) throw new Error('Invalid S011 semaphore ownerToken.');\n\n  const root = Buffer.from(String(lease.rootBase64 || ''), 'base64').toString('utf8');\n  if (!root || path.basename(root) !== SEMAPHORE_NAMESPACE) throw new Error('Invalid S011 semaphore root.');\n  const rootStat = fs.lstatSync(root);\n  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new Error('Unsafe S011 semaphore root.');\n\n  const slotPath = path.join(root, 'slot-' + slotIndex);\n  if (path.dirname(path.resolve(slotPath)) !== path.resolve(root)) throw new Error('Unsafe S011 semaphore slot path.');\n  return { root, slotPath, slotIndex, ownerToken };\n}\n\nfunction releaseLease(lease) {\n  const slotStat = fs.lstatSync(lease.slotPath);\n  if (!slotStat.isDirectory() || slotStat.isSymbolicLink()) throw new Error('Unsafe S011 semaphore slot.');\n\n  const ownerPath = path.join(lease.slotPath, 'owner.json');\n  const ownerStat = fs.lstatSync(ownerPath);\n  if (!ownerStat.isFile() || ownerStat.isSymbolicLink()) throw new Error('Unsafe S011 semaphore owner metadata.');\n  const owner = JSON.parse(fs.readFileSync(ownerPath, 'utf8'));\n  if (owner.ownerToken !== lease.ownerToken) throw new Error('S011 semaphore owner mismatch; slot was not released.');\n\n  const tombstone = path.join(\n    lease.root,\n    '.release-' + lease.slotIndex + '-' + lease.ownerToken + '-' + Date.now()\n  );\n  fs.renameSync(lease.slotPath, tombstone);\n  fs.unlinkSync(path.join(tombstone, 'owner.json'));\n  fs.rmdirSync(tombstone);\n}\n\nconst errorItem = $input.first().json || {};\nconst sourceInput = $('When Executed by Another Workflow').first().json || {};\nlet releaseError = '';\ntry {\n  releaseLease(readLease());\n} catch (error) {\n  releaseError = error && error.message ? error.message : String(error);\n}\n\nfunction describeError(value) {\n  if (typeof value === 'string') return value.trim();\n  if (value && typeof value === 'object') {\n    return String(value.message || value.description || JSON.stringify(value)).trim();\n  }\n  return String(value || '').trim();\n}\n\nconst taskIndex = Number.isInteger(Number(sourceInput.taskIndex)) ? Number(sourceInput.taskIndex) : 'unknown';\nconst sceneKey = String(sourceInput.sceneKey || '').trim() || 'unknown';\nconst upstreamMessage = describeError(errorItem.error || errorItem.message || errorItem.description)\n  || 'Unknown HTTP request error';\nconst cleanupSuffix = releaseError ? ' Semaphore release warning: ' + releaseError : '';\nthrow new Error(\n  'S011 Qwen request failed after 3 attempts (taskIndex=' + taskIndex +\n  ', sceneKey=' + sceneKey + '): ' + upstreamMessage.slice(0, 800) + cleanupSuffix\n);"
+      }
+    }
+  ],
+  "connections": {
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Global Constants",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Assemble Prompt": {
+      "main": [
+        [
+          {
+            "node": "Acquire S011 Qwen Slot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request Form": {
+      "main": [
+        [
+          {
+            "node": "Release S011 Qwen Slot",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Release S011 Qwen Slot and Throw",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "图生图-提示词设置": {
+      "main": [
+        [
+          {
+            "node": "Assemble Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Global Constants": {
+      "main": [
+        [
+          {
+            "node": "图生图-提示词设置",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Acquire S011 Qwen Slot": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request Form",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Release S011 Qwen Slot": {
+      "main": [
+        [
+          {
+            "node": "Return Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  }
+}

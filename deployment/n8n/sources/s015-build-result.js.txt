@@ -1,0 +1,45 @@
+const verify = $input.first().json || {};
+const renderRun = $('Run FFmpeg Render').first().json || {};
+const commandInfo = $('Build FFmpeg Command').first().json || {};
+
+function parseLastJson(text) {
+  const lines = String(text || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean).reverse();
+  for (const line of lines) {
+    try {
+      const parsed = JSON.parse(line);
+      if (parsed && typeof parsed === 'object') return parsed;
+    } catch {}
+  }
+  return null;
+}
+
+const runnerSummary = parseLastJson(renderRun.stdout) || {};
+const verifySummary = parseLastJson(verify.stdout) || {};
+if (runnerSummary.success !== true) throw new Error('S015_RENDER_RUNNER_RESULT_INVALID: ' + (renderRun.stderr || renderRun.stdout || 'no runner summary'));
+if (verifySummary.success !== true) throw new Error('S015_OUTPUT_VERIFY_RESULT_INVALID: ' + (verify.stderr || verify.stdout || 'no verify summary'));
+if (runnerSummary.outputVideoPath !== verifySummary.outputVideoPath) throw new Error('S015_OUTPUT_PATH_MISMATCH');
+if (Number(runnerSummary.sizeBytes) !== Number(verifySummary.sizeBytes)) throw new Error('S015_OUTPUT_SIZE_CHANGED_AFTER_RENDER');
+
+const diagnosticsTail = String(runnerSummary.diagnosticsTail || '').slice(-4000);
+return [{ json: {
+  success: true,
+  ok: true,
+  outputVideoPath: verifySummary.outputVideoPath,
+  outputSubDir: commandInfo.outputSubDir,
+  sizeBytes: Number(verifySummary.sizeBytes),
+  durationSeconds: Number(verifySummary.mediaProbe?.durationSeconds || runnerSummary.durationSeconds || commandInfo.totalDuration || 0),
+  effectPreset: commandInfo.effectPreset,
+  imageCount: Array.isArray(commandInfo.imagePaths) ? commandInfo.imagePaths.length : 0,
+  mediaProbe: verifySummary.mediaProbe || runnerSummary.mediaProbe || null,
+  logo: {
+    enabled: Boolean(commandInfo.preset?.enableLogo),
+    logoPath: commandInfo.preset?.logoPath || '',
+    logoWidth: commandInfo.preset?.logoWidth ?? 0,
+    logoMarginX: commandInfo.preset?.logoMarginX ?? 0,
+    logoMarginY: commandInfo.preset?.logoMarginY ?? 0,
+    logoOpacity: commandInfo.preset?.logoOpacity ?? 1,
+    logoPosition: commandInfo.preset?.logoPosition || 'top_left',
+  },
+  renderInvocation: commandInfo.renderInvocation,
+  diagnosticsTail,
+} }];

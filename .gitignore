@@ -1,0 +1,110 @@
+# Dependencies
+node_modules/
+
+# Build and test output
+dist/
+coverage/
+playwright-report/
+test-results/
+.e2e-data/
+acceptance-results/
+.runtime-backups/
+
+# Local application data and generated artifacts
+app-data/
+outputs/
+backups/
+browser-profiles/
+**/browser-profiles/
+**/chrome-user-data/
+.tools/
+test-fixtures/*
+!test-fixtures/README.md
+
+# One-off production repair scripts with embedded task-specific metadata
+scripts/reconcile-e007-nonfatal-stitch.mjs
+scripts/reconcile-ozon-0000053-product-links.mjs
+scripts/recover-e006-temp-downloads.mjs
+scripts/recover-ozon-accepted-variant-media.mts
+scripts/smoke-ozon-multistore-clone.mjs
+apps/server/src/scripts/ozon-variant-color-repair.ts
+apps/server/src/services/ozon-stores/variant-color-repair.ts
+apps/server/src/services/ozon-stores/variant-color-repair.test.ts
+
+# Environment files and secrets
+.env
+.env.*
+.env-*
+.merchroute-runtime.env
+!.env.example
+.envrc
+*.local
+config/*.local.json
+
+# This repository uses npm and package-lock.json as its canonical lockfile
+pnpm-lock.yaml
+
+# Local databases and credential material
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+*.pem
+*.key
+*.p12
+*.pfx
+*.dump
+*.backup
+*.sql.gz
+database-backups/
+db-backups/
+
+# Deployment-private material (never commit)
+deployment/private/
+deployment/n8n/.export-*/
+deployment/**/*.dump
+deployment/**/*.backup
+deployment/**/*.bak
+deployment/**/*.sql
+deployment/**/.env
+deployment/**/.env.*
+deployment/**/.env-*
+deployment/**/.merchroute-runtime.env
+deployment/**/credentials*.json
+deployment/**/secrets*.json
+deployment/**/auth.json
+deployment/**/tokens.json
+deployment/**/config
+!deployment/n8n/config/
+!deployment/n8n/config/category-scene-rules.json
+deployment/**/config.json
+deployment/**/database.sqlite*
+deployment/**/node_modules/
+
+# Vendored Jimeng source is tracked, but its runtime state is never tracked
+integrations/**/node_modules/
+integrations/**/dist/
+integrations/**/logs/
+integrations/**/tmp/
+integrations/**/data/
+integrations/**/data-test/
+integrations/**/sessions/
+integrations/**/backup/
+integrations/**/playwright-cache/
+
+# Logs and caches
+*.log
+logs/
+*.tsbuildinfo
+.cache/
+.npm/
+.eslintcache
+
+# Editors and operating systems
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+Desktop.ini

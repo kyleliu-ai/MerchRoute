@@ -1,0 +1,1040 @@
+{
+  "id": "6rGNfgghmkkeYhfG",
+  "name": "E006-v02-拼多多商品媒体下载",
+  "active": true,
+  "nodes": [
+    {
+      "id": "39412549-2fa7-488c-b14f-34be13f1b783",
+      "name": "Workflow Summary",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -1120,
+        -420
+      ],
+      "parameters": {
+        "content": "## E006-v02-拼多多商品媒体下载\n\n手动或 Webhook 输入拼多多移动端商品链接，调用本地 Playwright 脚本下载主图、详情图和视频。\n\n- 参数入口：`setParameter`\n- Webhook path：`pdd-image-download`，POST JSON 必须包含 UUID `downloadJobId`\n- Webhook 仅允许覆盖商品身份、输出父目录及有界下载/滚动参数；脚本、Node、浏览器、Profile、FFmpeg 与结果路径只接受 `setParameter` 配置\n- 幂等状态写入 `parentOutputDir/.download-idempotency/v1/E006`，同一任务重放不会创建第二个下载目录\n- 浏览器：系统 Chrome，可执行文件 `__MERCHROUTE_BROWSER_EXECUTABLE__`\n- 浏览器控制模式：Playwright persistentContext，专用 Profile 为 `__MERCHROUTE_BROWSER_PROFILE_ROOT__/pdd`\n- Webhook 固定 headless 后台运行；Manual Trigger 固定 headed，用于人工登录和排查\n- 检测到登录、验证码或安全验证时，Webhook 立即失败返回，不弹出浏览器且不绕过平台验证\n- 人工登录：`node \"__MERCHROUTE_N8N_RUNTIME_DIR__/scripts/pdd-login.cjs\" \"https://mobile.yangkeduo.com/\" \"__MERCHROUTE_BROWSER_PROFILE_ROOT__/pdd\" \"__MERCHROUTE_BROWSER_EXECUTABLE__\"`",
+        "height": 340,
+        "width": 680,
+        "color": 4
+      }
+    },
+    {
+      "id": "75ecb5c4-c6d4-4d12-abfb-9677323666c1",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -1120,
+        0
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "9556b3c4-3ebe-4a3c-8001-99bdcaeaf249",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -1120,
+        220
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "pdd-image-download",
+        "authentication": "none",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "1dc58ad2-981a-4cb1-9ae4-5385c947795d",
+      "name": "setParameter",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -860,
+        100
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "8d91b45e-281f-401c-b77e-9816ff87416e",
+              "name": "parentOutputDir",
+              "value": "__MERCHROUTE_DATA_ROOT__/03-pddProductMedia",
+              "type": "string"
+            },
+            {
+              "id": "50c0a1d2-c7a8-4b44-8752-a1d1c752281e",
+              "name": "productUrl",
+              "value": "https://mobile.yangkeduo.com/goods.html?goods_id=967312087989",
+              "type": "string"
+            },
+            {
+              "id": "13efbcba-424d-44e8-9951-f70aacef4d2e",
+              "name": "productName",
+              "value": "产品名",
+              "type": "string"
+            },
+            {
+              "id": "8f0b5598-d41c-42e6-a31c-2c9102c09bd6",
+              "name": "SKU",
+              "value": "0000000",
+              "type": "string"
+            },
+            {
+              "id": "ac2694fb-ac82-44fa-b9d2-10008208037b",
+              "name": "downloadMainImages",
+              "value": true,
+              "type": "boolean"
+            },
+            {
+              "id": "25bdcdcf-b12a-48f9-b868-7526fab15bd2",
+              "name": "downloadDetailImages",
+              "value": true,
+              "type": "boolean"
+            },
+            {
+              "id": "ccdfa92e-9569-415a-a12c-47eb00e64688",
+              "name": "downloadVideos",
+              "value": true,
+              "type": "boolean"
+            },
+            {
+              "id": "11ccf26e-47f3-49fd-92ec-47947041e59f",
+              "name": "maxMainImages",
+              "value": 10,
+              "type": "number"
+            },
+            {
+              "id": "fdc4cd19-bc69-4960-9882-7f606efaa2c1",
+              "name": "maxDetailImages",
+              "value": 50,
+              "type": "number"
+            },
+            {
+              "id": "71877378-5476-4ce2-bbce-db7fb1183840",
+              "name": "maxVideos",
+              "value": 3,
+              "type": "number"
+            },
+            {
+              "id": "0fbe5ac0-ad86-491b-bfcc-cf59a7a44fe6",
+              "name": "scrollMaxTimes",
+              "value": 12,
+              "type": "number"
+            },
+            {
+              "id": "b3ee6caa-4dc9-4035-95db-ea3b8ce30f8e",
+              "name": "scrollWaitMs",
+              "value": 1200,
+              "type": "number"
+            },
+            {
+              "id": "bd0828f3-7632-4192-8895-5f71e79164e0",
+              "name": "scrollBehavior",
+              "value": "natural",
+              "type": "string"
+            },
+            {
+              "id": "173a00ca-3fd7-410e-9f45-f7582bbea3cf",
+              "name": "interactionSeed",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "id": "5bed0f4c-69dc-4e8f-ad8e-6ba78cf1e587",
+              "name": "unavailableCanonicalRetryEnabled",
+              "value": true,
+              "type": "boolean"
+            },
+            {
+              "id": "75d6e6d3-4826-4078-98d3-51b268d7b924",
+              "name": "unavailableCanonicalRetryDelayMs",
+              "value": 12000,
+              "type": "number"
+            },
+            {
+              "id": "13b486c2-f6a3-4ca7-82cd-a4b56656965c",
+              "name": "unavailableCanonicalRetryJitterMs",
+              "value": 3000,
+              "type": "number"
+            },
+            {
+              "id": "9cea9ef8-b982-4b66-b2f2-dbbae2e89a17",
+              "name": "unavailableCanonicalRetryMaxAttempts",
+              "value": 1,
+              "type": "number"
+            },
+            {
+              "id": "a723ac34-7e71-45d2-8853-2d65d9e03dd2",
+              "name": "mainCarouselSwipeEnabled",
+              "value": true,
+              "type": "boolean"
+            },
+            {
+              "id": "78e5c2dc-ad2a-4ce6-aa73-8e9b91b5a0ec",
+              "name": "mainCarouselMaxSwipes",
+              "value": 16,
+              "type": "number"
+            },
+            {
+              "id": "ea0abccd-e17e-4e3c-9476-e7437194b2e0",
+              "name": "mainCarouselSwipeMinWaitMs",
+              "value": 650,
+              "type": "number"
+            },
+            {
+              "id": "9bcb4de9-da13-4317-9a7a-4e2ad530063a",
+              "name": "mainCarouselSwipeMaxWaitMs",
+              "value": 1800,
+              "type": "number"
+            },
+            {
+              "id": "e2337328-b482-434f-94af-615761696811",
+              "name": "crawlerScriptPath",
+              "value": "__MERCHROUTE_N8N_RUNTIME_DIR__/scripts/pdd-product-media-downloader.cjs",
+              "type": "string"
+            },
+            {
+              "id": "e2023b1e-a743-4bab-b788-eca875035e0a",
+              "name": "detailStitcherScriptPath",
+              "value": "__MERCHROUTE_N8N_RUNTIME_DIR__/scripts/pdd-detail-image-stitcher.cjs",
+              "type": "string"
+            },
+            {
+              "id": "aae054de-5828-4333-8db0-33adba8ec802",
+              "name": "idempotencyHelperScriptPath",
+              "value": "__MERCHROUTE_N8N_RUNTIME_DIR__/scripts/download-idempotency-v1.cjs",
+              "type": "string"
+            },
+            {
+              "id": "341b41c2-12f1-44a8-861d-bb4d8ff46337",
+              "name": "browserControlMode",
+              "value": "persistentContext",
+              "type": "string"
+            },
+            {
+              "id": "d473840c-cd88-4a0e-8a9c-16fa122f2c1e",
+              "name": "sourceBrowserUserDataDir",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "id": "d223db57-2ff2-4f64-b997-80b9a41ebf55",
+              "name": "sourceBrowserProfileDirectory",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "id": "e00f1292-f243-47ac-94dc-50722ac4d77c",
+              "name": "syncDefaultProfileBeforeRun",
+              "value": false,
+              "type": "boolean"
+            },
+            {
+              "id": "37a99685-cf55-437c-85dd-fede48ad7b37",
+              "name": "closeEdgeBeforeSync",
+              "value": false,
+              "type": "boolean"
+            },
+            {
+              "id": "5bb56d81-63ad-4cbd-946e-2219abff4e52",
+              "name": "preserveTargetPddLogin",
+              "value": false,
+              "type": "boolean"
+            },
+            {
+              "id": "9d76548d-fa3b-440f-ac53-78d4cffad76e",
+              "name": "forceRefreshProfileMirror",
+              "value": false,
+              "type": "boolean"
+            },
+            {
+              "id": "8223cd26-19cd-43f4-afc9-43b2a3d4fe06",
+              "name": "profileRecoveryMode",
+              "value": "disabled",
+              "type": "string"
+            },
+            {
+              "id": "9a303cae-fbe6-429f-9ee3-e30cf94884fd",
+              "name": "profileRecoveryMaxAttempts",
+              "value": 0,
+              "type": "number"
+            },
+            {
+              "id": "f8b02036-8142-4f20-8132-7b64f5dd1dcc",
+              "name": "profileRecoveryWarmupUrl",
+              "value": "https://mobile.yangkeduo.com/",
+              "type": "string"
+            },
+            {
+              "id": "c97e3266-88a4-4d3e-ab9d-796584631c07",
+              "name": "profileRecoveryDelayMs",
+              "value": 8000,
+              "type": "number"
+            },
+            {
+              "id": "d02ddc7d-f872-4de8-a75b-104cd65adf7b",
+              "name": "browserUserDataDir",
+              "value": "__MERCHROUTE_BROWSER_PROFILE_ROOT__/pdd",
+              "type": "string"
+            },
+            {
+              "id": "db3b117f-7251-4242-a65f-697f8e425eb5",
+              "name": "browserExecutablePath",
+              "value": "__MERCHROUTE_BROWSER_EXECUTABLE__",
+              "type": "string"
+            },
+            {
+              "id": "18238a69-0401-44cb-8969-22d1aedaf9a7",
+              "name": "browserProfileDirectory",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "id": "38fdd31f-ebd2-4b54-8d89-5279a1e52a78",
+              "name": "browserChannel",
+              "value": "chrome",
+              "type": "string"
+            },
+            {
+              "id": "940a7662-dbc7-4fce-87c3-5207be8b90e3",
+              "name": "requireBrowserProfileUnlocked",
+              "value": true,
+              "type": "boolean"
+            },
+            {
+              "id": "6cc00d4a-27bd-4c3e-9b82-e25066f21e02",
+              "name": "browserRunMode",
+              "value": "auto",
+              "type": "string"
+            },
+            {
+              "id": "3bde999a-1e53-4890-b2ee-cd568cc0fead",
+              "name": "minimizeBrowserWindow",
+              "value": false,
+              "type": "boolean"
+            },
+            {
+              "id": "d07ac6ae-0784-428c-9732-efc866f4b865",
+              "name": "headless",
+              "value": false,
+              "type": "boolean"
+            },
+            {
+              "id": "48b5485e-b3a9-4cdd-b5fc-5d38046a95fa",
+              "name": "humanVerificationMode",
+              "value": "interactive",
+              "type": "string"
+            },
+            {
+              "id": "bb718d29-3e7f-4e54-99e0-a201c971028e",
+              "name": "humanVerificationTimeoutMs",
+              "value": 300000,
+              "type": "number"
+            },
+            {
+              "id": "60f49cd8-aa69-4e37-8061-9e46801bdf9c",
+              "name": "debugOnFailure",
+              "value": true,
+              "type": "boolean"
+            },
+            {
+              "id": "db2008e8-9c9d-4d08-9266-21535ef8cd1d",
+              "name": "downloadConcurrency",
+              "value": 8,
+              "type": "number"
+            },
+            {
+              "id": "c7a27264-3a57-469f-9eee-4207ba342704",
+              "name": "requestTimeoutMs",
+              "value": 30000,
+              "type": "number"
+            },
+            {
+              "id": "2997d18d-0b08-4568-a8f4-05d6dd982802",
+              "name": "browserLaunchTimeoutMs",
+              "value": 30000,
+              "type": "number"
+            },
+            {
+              "id": "d9cae362-4fd9-43c8-bc72-85a063eb2369",
+              "name": "ffmpegPath",
+              "value": "",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      }
+    },
+    {
+      "id": "1d530f41-411c-4122-9f11-516c146ef8db",
+      "name": "Normalize Parameters",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -600,
+        100
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const input = $input.first().json || {};\nconst isWebhook = Boolean(input.body && typeof input.body === 'object');\n\nfunction firstDefined(...values) {\n  for (const value of values) {\n    if (value !== undefined && value !== null && value !== '') return value;\n  }\n  return undefined;\n}\n\nfunction toBool(value, fallback) {\n  if (value === undefined || value === null || value === '') return fallback;\n  if (typeof value === 'boolean') return value;\n  const text = String(value).trim().toLowerCase();\n  if (['true', '1', 'yes', 'y'].includes(text)) return true;\n  if (['false', '0', 'no', 'n'].includes(text)) return false;\n  return fallback;\n}\n\nfunction toInt(value, fallback, min, max) {\n  const parsed = Number.parseInt(value, 10);\n  if (!Number.isFinite(parsed)) return fallback;\n  return Math.max(min, Math.min(max, parsed));\n}\n\nfunction normalizeScrollBehavior(value) {\n  const text = String(value || '').trim().toLowerCase();\n  return text === 'fixed' ? 'fixed' : 'natural';\n}\n\nfunction normalizeBrowserChannel(value) {\n  const text = String(value || '').trim().toLowerCase();\n  return text === 'edge' || text === 'msedge' || text === 'microsoft-edge' ? 'edge' : 'chrome';\n}\n\nfunction normalizeBrowserControlMode(value) {\n  return String(value || '').trim() === 'edgeProfileMirror' ? 'edgeProfileMirror' : 'persistentContext';\n}\n\nfunction normalizeBrowserRunModeInput(value) {\n  const text = String(value || '').trim().toLowerCase();\n  if (text === 'headless' || text === 'headed') return text;\n  return 'auto';\n}\n\nfunction sanitizeProfileDirectory(value) {\n  const text = String(value || '').trim();\n  if (!text || /[\\\\/:*?\"<>|\\x00-\\x1F]/.test(text) || text === '.' || text === '..') return '';\n  return text.slice(0, 80);\n}\n\nfunction normalizePath(value) {\n  let result = String(value || '').trim();\n  if ((result.startsWith('\"') && result.endsWith('\"')) || (result.startsWith(\"'\") && result.endsWith(\"'\"))) {\n    result = result.slice(1, -1).trim();\n  }\n  result = result.replace(/\\\\+/g, '/').replace(/^([A-Za-z]:)\\/+/, '$1/');\n  while (result.length > 1 && result.endsWith('/') && !/^[A-Za-z]:\\/$/.test(result)) result = result.slice(0, -1);\n  return result;\n}\n\nfunction isAbsolutePath(value) {\n  const normalized = normalizePath(value);\n  return /^[A-Za-z]:\\//.test(normalized) || normalized.startsWith('/');\n}\n\nfunction cleanName(value, fallback = 'product') {\n  const cleaned = String(value || '')\n    .trim()\n    .replace(/[<>:\"/\\\\|?*\\x00-\\x1F]/g, '_')\n    .replace(/[. ]+$/g, '')\n    .replace(/\\s+/g, ' ');\n  return cleaned || fallback;\n}\n\nfunction joinPortable(root, ...segments) {\n  const base = normalizePath(root).replace(/\\/+$/, '');\n  const suffix = segments\n    .map((segment) => String(segment || '').replace(/^\\/+|\\/+$/g, ''))\n    .filter(Boolean)\n    .join('/');\n  return normalizePath(suffix ? base + '/' + suffix : base);\n}\n\nfunction extractGoodsId(productUrl) {\n  try {\n    const u = new URL(productUrl);\n    return u.searchParams.get('goods_id') || u.searchParams.get('goodsId') || '';\n  } catch (error) {\n    const match = String(productUrl || '').match(/[?&](?:goods_id|goodsId)=([^&#]+)/);\n    return match ? decodeURIComponent(match[1]) : '';\n  }\n}\n\nconst body = input.body && typeof input.body === 'object' ? input.body : {};\nconst publicParams = isWebhook ? body : input;\n// Keep the established bounded runtime controls available to webhook callers,\n// while local script/executable/profile paths remain owned by setParameter.\n// Query values are never merged into either contract.\nconst webhookRuntimeParameterNames = [\n  'downloadMainImages', 'downloadDetailImages', 'downloadVideos',\n  'maxMainImages', 'maxDetailImages', 'maxVideos',\n  'scrollMaxTimes', 'scrollWaitMs', 'scrollBehavior', 'interactionSeed',\n  'mainCarouselSwipeEnabled', 'mainCarouselMaxSwipes',\n  'mainCarouselSwipeMinWaitMs', 'mainCarouselSwipeMaxWaitMs',\n  'humanVerificationTimeoutMs', 'debugOnFailure', 'downloadConcurrency',\n  'requestTimeoutMs', 'browserLaunchTimeoutMs',\n];\nconst params = { ...input };\nif (isWebhook) {\n  for (const name of webhookRuntimeParameterNames) {\n    if (Object.prototype.hasOwnProperty.call(body, name)) params[name] = body[name];\n  }\n}\n\nconst productUrl = String(firstDefined(publicParams.productUrl, '') || '').trim();\nconst productName = String(firstDefined(publicParams.productName, '') || '').trim();\nconst SKU = String(firstDefined(publicParams.SKU, '') || '').trim();\nconst downloadJobId = isWebhook ? String(body.downloadJobId || '').trim().toLowerCase() : '';\nconst parentOutputDir = normalizePath(firstDefined(publicParams.parentOutputDir, ''));\nconst safeProductName = cleanName(productName);\nconst goodsId = extractGoodsId(productUrl);\nconst requestedBrowserRunMode = normalizeBrowserRunModeInput(firstDefined(params.browserRunMode, input.browserRunMode, 'auto'));\nconst normalizedHeadless = isWebhook ? true : false;\nconst browserChannel = normalizeBrowserChannel(firstDefined(params.browserChannel, input.browserChannel, 'chrome'));\nconst browserControlMode = normalizeBrowserControlMode(firstDefined(params.browserControlMode, input.browserControlMode, 'persistentContext'));\nconst browserProfileDirectory = sanitizeProfileDirectory(firstDefined(params.browserProfileDirectory, input.browserProfileDirectory, ''));\nconst n8nExecutionId = String($execution.id || '').trim();\nconst expectedOutputDir = joinPortable(parentOutputDir, SKU + '-' + safeProductName + '-' + n8nExecutionId);\nconst expectedMetadataPath = joinPortable(expectedOutputDir, 'metadata', 'pdd-media-metadata.json');\n\nconst normalized = {\n  isWebhook,\n  requestSource: isWebhook ? 'webhook' : 'manual',\n  parentOutputDir,\n  productUrl,\n  productName,\n  SKU,\n  downloadJobId,\n  workflowCode: 'E006',\n  n8nExecutionId,\n  safeProductName,\n  goodsId,\n  expectedOutputDir,\n  expectedMetadataPath,\n  downloadMainImages: toBool(firstDefined(params.downloadMainImages, input.downloadMainImages), true),\n  downloadDetailImages: toBool(firstDefined(params.downloadDetailImages, input.downloadDetailImages), true),\n  downloadVideos: toBool(firstDefined(params.downloadVideos, input.downloadVideos), true),\n  maxMainImages: toInt(firstDefined(params.maxMainImages, input.maxMainImages), 10, 0, 100),\n  maxDetailImages: toInt(firstDefined(params.maxDetailImages, input.maxDetailImages), 50, 0, 100),\n  maxVideos: toInt(firstDefined(params.maxVideos, input.maxVideos), 3, 0, 30),\n  scrollMaxTimes: toInt(firstDefined(params.scrollMaxTimes, input.scrollMaxTimes), 12, 0, 80),\n  scrollWaitMs: toInt(firstDefined(params.scrollWaitMs, input.scrollWaitMs), 1200, 100, 10000),\n  scrollBehavior: normalizeScrollBehavior(firstDefined(params.scrollBehavior, input.scrollBehavior, 'natural')),\n  interactionSeed: String(firstDefined(params.interactionSeed, input.interactionSeed, '') || '').trim(),\n  unavailableCanonicalRetryEnabled: toBool(firstDefined(input.unavailableCanonicalRetryEnabled), true),\n  unavailableCanonicalRetryDelayMs: toInt(firstDefined(input.unavailableCanonicalRetryDelayMs), 12000, 0, 60000),\n  unavailableCanonicalRetryJitterMs: toInt(firstDefined(input.unavailableCanonicalRetryJitterMs), 3000, 0, 15000),\n  unavailableCanonicalRetryMaxAttempts: toInt(firstDefined(input.unavailableCanonicalRetryMaxAttempts), 1, 0, 1),\n  mainCarouselSwipeEnabled: toBool(firstDefined(params.mainCarouselSwipeEnabled, input.mainCarouselSwipeEnabled), true),\n  mainCarouselMaxSwipes: toInt(firstDefined(params.mainCarouselMaxSwipes, input.mainCarouselMaxSwipes), 16, 0, 32),\n  mainCarouselSwipeMinWaitMs: toInt(firstDefined(params.mainCarouselSwipeMinWaitMs, input.mainCarouselSwipeMinWaitMs), 650, 100, 10000),\n  mainCarouselSwipeMaxWaitMs: toInt(firstDefined(params.mainCarouselSwipeMaxWaitMs, input.mainCarouselSwipeMaxWaitMs), 1800, 100, 15000),\n  crawlerScriptPath: normalizePath(firstDefined(params.crawlerScriptPath, input.crawlerScriptPath, '__MERCHROUTE_N8N_RUNTIME_DIR__/scripts/pdd-product-media-downloader.cjs')),\n  detailStitcherScriptPath: normalizePath(firstDefined(params.detailStitcherScriptPath, input.detailStitcherScriptPath, '__MERCHROUTE_N8N_RUNTIME_DIR__/scripts/pdd-detail-image-stitcher.cjs')),\n  idempotencyHelperScriptPath: normalizePath(firstDefined(input.idempotencyHelperScriptPath, '__MERCHROUTE_N8N_RUNTIME_DIR__/scripts/download-idempotency-v1.cjs')),\n  browserControlMode,\n  sourceBrowserUserDataDir: normalizePath(firstDefined(params.sourceBrowserUserDataDir, input.sourceBrowserUserDataDir, '')),\n  sourceBrowserProfileDirectory: sanitizeProfileDirectory(firstDefined(params.sourceBrowserProfileDirectory, input.sourceBrowserProfileDirectory, '')),\n  syncDefaultProfileBeforeRun: false,\n  closeEdgeBeforeSync: false,\n  preserveTargetPddLogin: false,\n  forceRefreshProfileMirror: toBool(firstDefined(params.forceRefreshProfileMirror, input.forceRefreshProfileMirror), false),\n  profileRecoveryMode: 'disabled',\n  profileRecoveryMaxAttempts: 0,\n  profileRecoveryWarmupUrl: String(firstDefined(params.profileRecoveryWarmupUrl, input.profileRecoveryWarmupUrl, 'https://mobile.yangkeduo.com/') || '').trim() || 'https://mobile.yangkeduo.com/',\n  profileRecoveryDelayMs: toInt(firstDefined(params.profileRecoveryDelayMs, input.profileRecoveryDelayMs), 8000, 0, 60000),\n  browserUserDataDir: normalizePath(firstDefined(params.browserUserDataDir, input.browserUserDataDir, '__MERCHROUTE_BROWSER_PROFILE_ROOT__/pdd')),\n  browserExecutablePath: normalizePath(firstDefined(params.browserExecutablePath, input.browserExecutablePath, '__MERCHROUTE_BROWSER_EXECUTABLE__')),\n  browserProfileDirectory,\n  browserChannel,\n  requireBrowserProfileUnlocked: toBool(firstDefined(params.requireBrowserProfileUnlocked, input.requireBrowserProfileUnlocked), true),\n  browserRunMode: normalizedHeadless ? 'headless' : 'headed',\n  minimizeBrowserWindow: false,\n  headless: normalizedHeadless,\n  humanVerificationMode: isWebhook ? 'failFast' : 'interactive',\n  humanVerificationTimeoutMs: toInt(firstDefined(params.humanVerificationTimeoutMs, input.humanVerificationTimeoutMs), 300000, 60000, 1800000),\n  debugOnFailure: toBool(firstDefined(params.debugOnFailure, input.debugOnFailure), true),\n  downloadConcurrency: toInt(firstDefined(params.downloadConcurrency, input.downloadConcurrency), 8, 4, 64),\n  requestTimeoutMs: toInt(firstDefined(params.requestTimeoutMs, input.requestTimeoutMs), 30000, 5000, 180000),\n  browserLaunchTimeoutMs: toInt(firstDefined(params.browserLaunchTimeoutMs, input.browserLaunchTimeoutMs), 30000, 5000, 180000),\n  ffmpegPath: normalizePath(firstDefined(params.ffmpegPath, input.ffmpegPath, '')),\n};\n\nconst validationErrors = [];\nif (!normalized.productUrl) validationErrors.push('productUrl is empty.');\nif (!normalized.productName) validationErrors.push('productName is empty.');\nif (!/^\\d{7}$/.test(normalized.SKU)) validationErrors.push('SKU must be exactly 7 digits.');\nif (isWebhook && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(normalized.downloadJobId)) {\n  validationErrors.push('Webhook body downloadJobId must be a UUID.');\n}\nif (!/^\\d+$/.test(normalized.n8nExecutionId)) validationErrors.push('n8nExecutionId must contain digits only.');\nif (!normalized.parentOutputDir) validationErrors.push('parentOutputDir is empty.');\nif (normalized.parentOutputDir && !isAbsolutePath(normalized.parentOutputDir)) validationErrors.push('parentOutputDir must be an absolute path.');\nif (normalized.productUrl && !normalized.goodsId) validationErrors.push('productUrl does not contain goods_id.');\nif (!['failFast', 'interactive'].includes(normalized.humanVerificationMode)) {\n  normalized.humanVerificationMode = isWebhook ? 'failFast' : 'interactive';\n}\nif (normalized.downloadConcurrency % 4 !== 0) {\n  normalized.downloadConcurrency = Math.max(4, Math.ceil(normalized.downloadConcurrency / 4) * 4);\n}\n\nnormalized.paramBase64 = Buffer.from(JSON.stringify(normalized), 'utf8').toString('base64');\nnormalized.nodeExecutable = 'node';\nnormalized.validationErrors = validationErrors;\nnormalized.validationValid = validationErrors.length === 0;\nnormalized.idempotencyPreflightParamBase64 = Buffer.from(JSON.stringify({\n  workflowCode: normalized.workflowCode,\n  isWebhook,\n  downloadJobId: normalized.downloadJobId,\n  requestN8nExecutionId: normalized.n8nExecutionId,\n  parentOutputDir: normalized.parentOutputDir,\n  expectedOutputDir: normalized.expectedOutputDir,\n  SKU: normalized.SKU,\n  productName: normalized.productName,\n  productUrl: normalized.productUrl,\n  platformProductId: normalized.goodsId,\n}), 'utf8').toString('base64');\n\nreturn [{ json: normalized }];"
+      }
+    },
+    {
+      "id": "cb12aed9-61db-4d23-9c56-0720cb27f532",
+      "name": "Parameters Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -360,
+        100
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "20396493-f596-441e-8e9c-97f566e7b4de",
+              "leftValue": "={{ $json.validationValid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "5ec972fe-cd9c-458d-9479-3c79bddea218",
+      "name": "Build Validation Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -120,
+        360
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const normalized = $input.first().json || {};\nreturn [{ json: {\n  success: false,\n  status: 'validation_error',\n  httpStatus: 400,\n  platform: 'pdd',\n  productName: normalized.productName || '',\n  SKU: normalized.SKU || '',\n  productUrl: normalized.productUrl || '',\n  goodsId: normalized.goodsId || '',\n  outputDir: '',\n  errors: Array.isArray(normalized.validationErrors) ? normalized.validationErrors : ['Invalid input.'],\n  warnings: [],\n  downloadJobId: normalized.downloadJobId || '',\n  idempotencyState: 'failed',\n  idempotencyReplay: false,\n  ownerN8nExecutionId: '',\n  requestN8nExecutionId: normalized.n8nExecutionId || '',\n} }];"
+      }
+    },
+    {
+      "id": "935794b3-8735-4f64-b822-d11653e26424",
+      "name": "Idempotency Preflight",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        -120,
+        0
+      ],
+      "parameters": {
+        "command": "={{ $json.nodeExecutable + ' ' + JSON.stringify($json.idempotencyHelperScriptPath) + ' preflight ' + JSON.stringify($json.idempotencyPreflightParamBase64) }}"
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "a085ecd0-7d27-4791-905b-3c6b173b96bd",
+      "name": "Parse Idempotency Preflight",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        120,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const current = $input.first().json || {};\nconst normalized = $('Normalize Parameters').first().json || {};\nfunction parseLastJson(value) {\n  const lines = String(value || '').split(/\\r?\\n/).map((line) => line.trim()).filter(Boolean).reverse();\n  for (const line of lines) {\n    try {\n      const parsed = JSON.parse(line);\n      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;\n    } catch {}\n  }\n  return null;\n}\nconst parsed = parseLastJson(current.stdout);\nlet outcome = parsed && typeof parsed.action === 'string' ? parsed : null;\nif (!outcome) {\n  const helperResult = parsed && typeof parsed === 'object' ? parsed : {};\n  outcome = {\n    action: 'error',\n    idempotency: null,\n    response: {\n      success: false,\n      status: String(helperResult.status || 'idempotency_preflight_error'),\n      httpStatus: Number(helperResult.httpStatus || 500),\n      platform: 'pdd',\n      SKU: normalized.SKU || '',\n      productName: normalized.productName || '',\n      productUrl: normalized.productUrl || '',\n      outputDir: '',\n      errors: Array.isArray(helperResult.errors)\n        ? helperResult.errors\n        : ['Idempotency preflight did not return a valid outcome.'],\n      warnings: String(current.stderr || '').trim() ? [String(current.stderr).trim().slice(0, 1000)] : [],\n      downloadJobId: normalized.downloadJobId || '',\n      idempotencyState: 'failed',\n      idempotencyReplay: false,\n      ownerN8nExecutionId: '',\n      requestN8nExecutionId: normalized.n8nExecutionId || '',\n    },\n  };\n}\nlet downloaderPayload = {};\ntry {\n  downloaderPayload = JSON.parse(Buffer.from(String(normalized.paramBase64 || ''), 'base64').toString('utf8'));\n} catch {}\ndownloaderPayload.idempotency = outcome.idempotency || { enabled: false };\nconst ownerN8nExecutionId = String(outcome.ownerN8nExecutionId || normalized.n8nExecutionId || '');\nconst ownerOutputDir = String(outcome.outputDir || normalized.expectedOutputDir || '');\ndownloaderPayload.n8nExecutionId = ownerN8nExecutionId;\ndownloaderPayload.resultFilePath = ownerOutputDir\n  ? ownerOutputDir.replace(/\\/+$/, '') + '/metadata/pdd-media-result.json'\n  : normalized.expectedResultFilePath;\nreturn [{ json: {\n  ...normalized,\n  requestN8nExecutionId: normalized.n8nExecutionId || '',\n  idempotencyAction: String(outcome.action || 'error'),\n  idempotency: outcome.idempotency || null,\n  idempotencyResponse: outcome.response || null,\n  recoveredDownloadResult: outcome.downloadResult || null,\n  ownerN8nExecutionId,\n  ownerOutputDir,\n  expectedOutputDir: ownerOutputDir,\n  expectedMetadataPath: ownerOutputDir ? ownerOutputDir.replace(/\\/+$/, '') + '/metadata/pdd-media-metadata.json' : '',\n  expectedResultFilePath: ownerOutputDir ? ownerOutputDir.replace(/\\/+$/, '') + '/metadata/pdd-media-result.json' : '',\n  paramBase64: Buffer.from(JSON.stringify(downloaderPayload), 'utf8').toString('base64'),\n} }];"
+      }
+    },
+    {
+      "id": "34adbc42-fa90-477c-aa91-311f71ff43b0",
+      "name": "Idempotency Route",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        360,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "67531027-05c2-4756-8eb1-1f7de8a0adba",
+              "leftValue": "={{ $json.idempotencyAction === 'owner' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "d6b720f3-e888-4273-baac-e90dc272de75",
+      "name": "Resume Stitch?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        600,
+        260
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "8ca57e57-171d-4f83-8758-b9994e405db4",
+              "leftValue": "={{ $json.idempotencyAction === 'resume_stitch' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ffa8d252-4b1b-4afc-a0bb-b792b1b49f24",
+      "name": "Build Recovered Downloader Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        840,
+        220
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const input = $input.first().json || {};\nconst recovered = input.recoveredDownloadResult && typeof input.recoveredDownloadResult === 'object'\n  ? input.recoveredDownloadResult\n  : {\n    success: false,\n    status: 'idempotency_recovery_invalid',\n    httpStatus: 500,\n    errors: ['Idempotency recovery did not provide a media result.'],\n    warnings: [],\n  };\nreturn [{ json: { ...recovered, resultSource: 'idempotency_artifact_recovery' } }];"
+      }
+    },
+    {
+      "id": "5c5ec9a2-98b9-4c4b-97f4-1f7f411c3d95",
+      "name": "Build Idempotency Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        840,
+        420
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const input = $input.first().json || {};\nconst response = input.idempotencyResponse && typeof input.idempotencyResponse === 'object'\n  ? input.idempotencyResponse\n  : {\n    success: false,\n    status: 'idempotency_preflight_error',\n    httpStatus: 500,\n    errors: ['Idempotency routing reached a terminal branch without a response.'],\n    warnings: [],\n  };\nreturn [{ json: response }];"
+      }
+    },
+    {
+      "id": "c60d273a-40e7-43b3-b2db-c074da188e23",
+      "name": "Run Playwright Downloader",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        600,
+        -120
+      ],
+      "parameters": {
+        "command": "={{ $json.nodeExecutable + ' ' + JSON.stringify($json.crawlerScriptPath) + ' ' + JSON.stringify($json.paramBase64) }}"
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "763e4f7c-8347-488b-ad4e-08ed16d6d121",
+      "name": "Parse Downloader Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        840,
+        -120
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const current = $input.first().json || {};\nconst upstream = $('Parse Idempotency Preflight').first().json || {};\nconst stdout = String(current.stdout || '').trim();\nconst stderr = String(current.stderr || '').trim();\n\nfunction defaultResult(message) {\n  return {\n    success: false,\n    status: 'execution_output_missing',\n    httpStatus: 500,\n    productName: upstream.productName || '',\n    SKU: upstream.SKU || '',\n    n8nExecutionId: upstream.n8nExecutionId || '',\n    resultSource: 'none',\n    productUrl: upstream.productUrl || '',\n    goodsId: upstream.goodsId || '',\n    outputDir: upstream.expectedOutputDir || '',\n    revision: 0,\n    mainImageCount: 0,\n    detailImageCount: 0,\n    videoCount: 0,\n    mainImages: [],\n    detailImages: [],\n    videos: [],\n    metadataPath: upstream.expectedMetadataPath || '',\n    commandExitCode: Number.isFinite(Number(current.exitCode)) ? Number(current.exitCode) : null,\n    needLoginOrCaptcha: false,\n    needHumanVerification: false,\n    humanVerificationStatus: 'not_required',\n    pageVariant: 'unknown',\n    mainImageSource: '',\n    detailImageSource: '',\n    expectedMainImageCount: 0,\n    mainImageComplete: false,\n    mainCompletenessVersion: 2,\n    mainGallerySlotCount: 0,\n    mainDuplicateContentCount: 0,\n    mainFailedCandidateCount: 0,\n    mainCandidateCount: 0,\n    detailCandidateCount: 0,\n    detailImageLimit: 50,\n    detailImageComplete: false,\n    detailImageTruncated: false,\n    detailSkippedByLimitCount: 0,\n    rejectedMedia: [],\n    fallbackUsed: false,\n    queryThumbnailOnly: false,\n    authoritativeMainCandidateCount: 0,\n    authoritativeDetailCandidateCount: 0,\n    retryReason: '',\n    queryPreviewImages: [],\n    mainCarouselDetected: false,\n    mainCarouselSwipeCount: 0,\n    mainCarouselExpectedCount: 0,\n    mainCarouselCollectedCount: 0,\n    mainCarouselActions: [],\n    mainCarouselRejectReasons: [],\n    mainRecoveryUsed: false,\n    mainRecoverySource: '',\n    mainRecoveryCandidateCount: 0,\n    canonicalProductUrl: '',\n    activeProductUrl: upstream.productUrl || '',\n    initialUnavailableShellDetected: false,\n    unavailableCanonicalRetryUsed: false,\n    unavailableCanonicalRetryRecovered: false,\n    unavailableClassification: 'not_unavailable',\n    unavailableCanonicalRetryDelayMs: Number(upstream.unavailableCanonicalRetryDelayMs || 12000),\n    targetAvailabilityEvidence: [],\n    productNavigationCount: 0,\n    scrollSuppressed: false,\n    scrollSuppressedReason: '',\n    loginCanonicalRetryUsed: false,\n    productUnavailableDetected: false,\n    productUnavailableReason: '',\n    unavailableScreenshotPaths: [],\n    browserModeAttempts: [],\n    profileSessionStatus: 'not_checked',\n    profileRecoveryMode: upstream.profileRecoveryMode || 'auto',\n    profileRecoveryAttempted: false,\n    profileRecoveryCount: 0,\n    profileRecoveryMaxAttempts: Number(upstream.profileRecoveryMaxAttempts || 1),\n    profileRecoveryReason: '',\n    profileRecoveryWarmupUrl: upstream.profileRecoveryWarmupUrl || 'https://mobile.yangkeduo.com/',\n    profileRecoveryDelayMs: Number(upstream.profileRecoveryDelayMs || 8000),\n    profileRefreshCommand: '',\n    scrollBehavior: upstream.scrollBehavior || 'natural',\n    interactionSeed: upstream.interactionSeed || '',\n    scrollActionCount: 0,\n    scrollActions: [],\n    browserChannel: upstream.browserChannel || '',\n    browserControlMode: upstream.browserControlMode || '',\n    browserRunMode: upstream.browserRunMode || '',\n    browserExecutablePath: upstream.browserExecutablePath || '',\n    browserUserDataDir: upstream.browserUserDataDir || '',\n    browserProfileDirectory: upstream.browserProfileDirectory || '',\n    sourceBrowserUserDataDir: upstream.sourceBrowserUserDataDir || '',\n    sourceBrowserProfileDirectory: upstream.sourceBrowserProfileDirectory || '',\n    syncDefaultProfileBeforeRun: false,\n    closeEdgeBeforeSync: false,\n    preserveTargetPddLogin: false,\n    forceRefreshProfileMirror: Boolean(upstream.forceRefreshProfileMirror),\n    sourcePddLoginDetected: false,\n    sourcePddAuthCookieNames: [],\n    targetPddLoginDetected: false,\n    targetPddAuthCookieNames: [],\n    edgeCloseAttempted: false,\n    edgeCloseStatus: 'not_requested',\n    edgeCloseWarnings: [],\n    profileMirrorSourceDir: upstream.sourceBrowserUserDataDir || '',\n    profileMirrorSourceProfileDirectory: upstream.sourceBrowserProfileDirectory || '',\n    profileMirrorTargetDir: upstream.browserUserDataDir || '',\n    profileMirrorSynced: false,\n    profileMirrorSyncStatus: 'not_configured',\n    profileMirrorCopiedFileCount: 0,\n    profileMirrorCopiedBytes: 0,\n    profileMirrorSkippedEntryCount: 0,\n    profileMirrorWarnings: [],\n    requireBrowserProfileUnlocked: upstream.requireBrowserProfileUnlocked !== false,\n    browserProfileLocked: false,\n    minimizeBrowserWindow: false,\n    browserWindowMinimized: false,\n    browserWindowMinimizeAttempts: [],\n    browserLaunchTimeoutMs: upstream.browserLaunchTimeoutMs || 30000,\n    errors: [message],\n    warnings: stderr ? [stderr] : [],\n  };\n}\n\nfunction parseLastJson(text) {\n  const lines = text.split(/\\r?\\n/).map((line) => line.trim()).filter(Boolean).reverse();\n  for (const line of lines) {\n    try {\n      const parsed = JSON.parse(line);\n      if (parsed && typeof parsed === 'object') return parsed;\n    } catch (error) {}\n  }\n  return null;\n}\n\nfunction normalizePath(value) {\n  let text = String(value || '').trim().replace(/\\\\+/g, '/').replace(/^([A-Za-z]:)\\/+/, '$1/');\n  while (text.length > 1 && text.endsWith('/') && !/^[A-Za-z]:\\/$/.test(text)) text = text.slice(0, -1);\n  return /^[A-Za-z]:\\//.test(text) ? text.toLowerCase() : text;\n}\n\nfunction readMetadataFallback() {\n  const expectedPath = String(upstream.expectedMetadataPath || '').trim();\n  const expectedOutputDir = String(upstream.expectedOutputDir || '').trim();\n  if (!expectedPath || !expectedOutputDir) throw new Error('Expected metadata path is unavailable.');\n  const fs = require('fs');\n  if (!fs.existsSync(expectedPath)) throw new Error('Expected metadata file does not exist: ' + expectedPath);\n  const metadata = JSON.parse(fs.readFileSync(expectedPath, 'utf8'));\n  const params = metadata && typeof metadata.params === 'object' ? metadata.params : {};\n  const result = metadata && typeof metadata.result === 'object' ? metadata.result : null;\n  if (!result) throw new Error('Metadata does not contain a result object.');\n  const mismatches = [];\n  if (String(params.SKU || '') !== String(upstream.SKU || '')) mismatches.push('SKU');\n  if (String(params.goodsId || '') !== String(upstream.goodsId || '')) mismatches.push('goodsId');\n  if (String(params.n8nExecutionId || '') !== String(upstream.n8nExecutionId || '')) mismatches.push('n8nExecutionId');\n  if (String(result.SKU || '') !== String(upstream.SKU || '')) mismatches.push('result.SKU');\n  if (String(result.goodsId || '') !== String(upstream.goodsId || '')) mismatches.push('result.goodsId');\n  if (normalizePath(result.outputDir) !== normalizePath(expectedOutputDir)) mismatches.push('result.outputDir');\n  if (normalizePath(result.metadataPath) !== normalizePath(expectedPath)) mismatches.push('result.metadataPath');\n  if (mismatches.length) throw new Error('Metadata identity mismatch: ' + mismatches.join(', ') + '.');\n  return result;\n}\n\nif (Array.isArray(upstream.validationErrors) && upstream.validationErrors.length) {\n  const invalid = defaultResult(upstream.validationErrors.join(' '));\n  invalid.status = 'validation_error';\n  invalid.httpStatus = 400;\n  return [{ json: invalid }];\n}\n\nlet parsed = parseLastJson(stdout);\nlet resultSource = parsed ? 'stdout' : '';\nlet fallbackError = '';\nif (!parsed) {\n  try {\n    parsed = readMetadataFallback();\n    resultSource = 'metadata_fallback';\n  } catch (error) {\n    fallbackError = error.message || String(error);\n  }\n}\nif (!parsed) {\n  const commandOutput = (stderr || stdout || '').slice(0, 500);\n  const message = 'Downloader execution output is unavailable. '\n    + (fallbackError ? fallbackError + ' ' : '')\n    + (commandOutput ? 'Command output: ' + commandOutput : '');\n  return [{ json: defaultResult(message.trim()) }];\n}\n\nfunction isForbiddenMediaUrl(value) {\n  const text = String(value || '').trim();\n  const match = text.match(/^https?:\\/\\/([^/?#]+)(\\/[^?#]*)?/i);\n  if (!match) return true;\n  const hostname = String(match[1] || '').toLowerCase().replace(/:\\d+$/, '');\n  const pathname = String(match[2] || '/').toLowerCase();\n  return /\\.(?:html?|php)$/.test(pathname)\n    || /(?:^|\\/)(?:core-ui|personal|fonts?)(?:\\/|$)/i.test(pathname)\n    || /\\/(?:base\\/)?(?:share_)?logo(?:[._/-]|$)/i.test(pathname)\n    || /(?:^|\\/)promo(?:\\/|$)/i.test(pathname)\n    || /(?:spinner|loading|sprite|avatar|favicon|iconfont|qrcode|qr_code|captcha|badge|brand[_-]?(?:black[_-]?)?label|corner[_-]?mark)[._/-]/i.test(pathname)\n    || hostname === 'th.yangkeduo.com';\n}\n\nconst warnings = Array.isArray(parsed.warnings) ? [...parsed.warnings] : [];\nconst errors = Array.isArray(parsed.errors) ? [...parsed.errors] : [];\nparsed.n8nExecutionId = String(upstream.n8nExecutionId || parsed.n8nExecutionId || '');\nparsed.resultSource = resultSource;\nparsed.outputDir = parsed.outputDir || upstream.expectedOutputDir || '';\nparsed.metadataPath = parsed.metadataPath || upstream.expectedMetadataPath || '';\nconst sanitizeRecords = (records) => {\n  const list = Array.isArray(records) ? records : [];\n  const accepted = list.filter((record) => record && record.goodsIdMatched === true && !isForbiddenMediaUrl(record.url));\n  if (accepted.length !== list.length) warnings.push('Workflow rejected non-product media returned by the downloader.');\n  return accepted;\n};\n\nparsed.mainImages = sanitizeRecords(parsed.mainImages);\nparsed.detailImages = sanitizeRecords(parsed.detailImages);\nparsed.mainImageCount = parsed.mainImages.length;\nparsed.detailImageCount = parsed.detailImages.length;\nparsed.videoCount = Array.isArray(parsed.videos) ? parsed.videos.length : 0;\nparsed.warnings = warnings;\nparsed.errors = errors;\nparsed.browserChannel = parsed.browserChannel || upstream.browserChannel || '';\nparsed.browserControlMode = parsed.browserControlMode || upstream.browserControlMode || '';\nparsed.browserRunMode = parsed.browserRunMode || upstream.browserRunMode || '';\nparsed.browserExecutablePath = parsed.browserExecutablePath || upstream.browserExecutablePath || '';\nparsed.browserUserDataDir = parsed.browserUserDataDir || upstream.browserUserDataDir || '';\nparsed.browserProfileDirectory = parsed.browserProfileDirectory || upstream.browserProfileDirectory || '';\nparsed.sourceBrowserUserDataDir = parsed.sourceBrowserUserDataDir || upstream.sourceBrowserUserDataDir || '';\nparsed.sourceBrowserProfileDirectory = parsed.sourceBrowserProfileDirectory || upstream.sourceBrowserProfileDirectory || '';\nif (parsed.syncDefaultProfileBeforeRun === undefined) {\n  parsed.syncDefaultProfileBeforeRun = false;\n}\nif (parsed.closeEdgeBeforeSync === undefined) {\n  parsed.closeEdgeBeforeSync = false;\n}\nif (parsed.preserveTargetPddLogin === undefined) {\n  parsed.preserveTargetPddLogin = false;\n}\nparsed.forceRefreshProfileMirror = Boolean(parsed.forceRefreshProfileMirror);\nparsed.sourcePddLoginDetected = Boolean(parsed.sourcePddLoginDetected);\nparsed.sourcePddAuthCookieNames = Array.isArray(parsed.sourcePddAuthCookieNames) ? parsed.sourcePddAuthCookieNames : [];\nparsed.targetPddLoginDetected = Boolean(parsed.targetPddLoginDetected);\nparsed.targetPddAuthCookieNames = Array.isArray(parsed.targetPddAuthCookieNames) ? parsed.targetPddAuthCookieNames : [];\nparsed.edgeCloseAttempted = Boolean(parsed.edgeCloseAttempted);\nparsed.edgeCloseStatus = parsed.edgeCloseStatus || 'not_requested';\nparsed.edgeCloseWarnings = Array.isArray(parsed.edgeCloseWarnings) ? parsed.edgeCloseWarnings : [];\nparsed.profileMirrorSourceDir = parsed.profileMirrorSourceDir || parsed.sourceBrowserUserDataDir || '';\nparsed.profileMirrorSourceProfileDirectory = parsed.profileMirrorSourceProfileDirectory || parsed.sourceBrowserProfileDirectory || '';\nparsed.profileMirrorTargetDir = parsed.profileMirrorTargetDir || parsed.browserUserDataDir || '';\nparsed.profileMirrorSynced = Boolean(parsed.profileMirrorSynced);\nparsed.profileMirrorSyncStatus = parsed.profileMirrorSyncStatus || 'not_configured';\nparsed.profileMirrorCopiedFileCount = Number(parsed.profileMirrorCopiedFileCount || 0);\nparsed.profileMirrorCopiedBytes = Number(parsed.profileMirrorCopiedBytes || 0);\nparsed.profileMirrorSkippedEntryCount = Number(parsed.profileMirrorSkippedEntryCount || 0);\nparsed.profileMirrorWarnings = Array.isArray(parsed.profileMirrorWarnings) ? parsed.profileMirrorWarnings : [];\nif (parsed.requireBrowserProfileUnlocked === undefined) {\n  parsed.requireBrowserProfileUnlocked = upstream.requireBrowserProfileUnlocked !== false;\n}\nparsed.browserProfileLocked = Boolean(parsed.browserProfileLocked);\nif (parsed.minimizeBrowserWindow === undefined) {\n  parsed.minimizeBrowserWindow = false;\n}\nparsed.browserWindowMinimized = Boolean(parsed.browserWindowMinimized);\nparsed.browserWindowMinimizeAttempts = Array.isArray(parsed.browserWindowMinimizeAttempts)\n  ? parsed.browserWindowMinimizeAttempts\n  : [];\nparsed.browserLaunchTimeoutMs = parsed.browserLaunchTimeoutMs || upstream.browserLaunchTimeoutMs || 30000;\nparsed.canonicalProductUrl = String(parsed.canonicalProductUrl || '');\nparsed.activeProductUrl = String(parsed.activeProductUrl || parsed.productUrl || upstream.productUrl || '');\nparsed.initialUnavailableShellDetected = Boolean(parsed.initialUnavailableShellDetected);\nparsed.unavailableCanonicalRetryUsed = Boolean(parsed.unavailableCanonicalRetryUsed);\nparsed.unavailableCanonicalRetryRecovered = Boolean(parsed.unavailableCanonicalRetryRecovered);\nparsed.unavailableClassification = String(parsed.unavailableClassification || 'not_unavailable');\nparsed.unavailableCanonicalRetryDelayMs = Number(parsed.unavailableCanonicalRetryDelayMs || upstream.unavailableCanonicalRetryDelayMs || 12000);\nparsed.targetAvailabilityEvidence = Array.isArray(parsed.targetAvailabilityEvidence) ? parsed.targetAvailabilityEvidence : [];\nparsed.productNavigationCount = Number(parsed.productNavigationCount || 0);\nparsed.scrollSuppressed = Boolean(parsed.scrollSuppressed);\nparsed.scrollSuppressedReason = String(parsed.scrollSuppressedReason || '');\nparsed.loginCanonicalRetryUsed = Boolean(parsed.loginCanonicalRetryUsed);\nparsed.productUnavailableDetected = Boolean(parsed.productUnavailableDetected);\nparsed.productUnavailableReason = String(parsed.productUnavailableReason || '');\nparsed.unavailableScreenshotPaths = Array.isArray(parsed.unavailableScreenshotPaths)\n  ? parsed.unavailableScreenshotPaths\n  : [];\nparsed.browserModeAttempts = Array.isArray(parsed.browserModeAttempts)\n  ? parsed.browserModeAttempts\n  : [];\nparsed.profileSessionStatus = String(parsed.profileSessionStatus || 'not_checked');\nparsed.profileRecoveryMode = String(parsed.profileRecoveryMode || upstream.profileRecoveryMode || 'auto');\nparsed.profileRecoveryAttempted = Boolean(parsed.profileRecoveryAttempted);\nparsed.profileRecoveryCount = Number(parsed.profileRecoveryCount || 0);\nparsed.profileRecoveryMaxAttempts = Number(parsed.profileRecoveryMaxAttempts || upstream.profileRecoveryMaxAttempts || 1);\nparsed.profileRecoveryReason = String(parsed.profileRecoveryReason || '');\nparsed.profileRecoveryWarmupUrl = String(parsed.profileRecoveryWarmupUrl || upstream.profileRecoveryWarmupUrl || 'https://mobile.yangkeduo.com/');\nparsed.profileRecoveryDelayMs = Number(parsed.profileRecoveryDelayMs || upstream.profileRecoveryDelayMs || 8000);\nparsed.profileRefreshCommand = String(parsed.profileRefreshCommand || '');\nparsed.mainCarouselDetected = Boolean(parsed.mainCarouselDetected);\nparsed.mainCarouselSwipeCount = Number(parsed.mainCarouselSwipeCount || 0);\nparsed.mainCarouselExpectedCount = Number(parsed.mainCarouselExpectedCount || 0);\nparsed.mainCarouselCollectedCount = Number(parsed.mainCarouselCollectedCount || 0);\nparsed.mainCarouselActions = Array.isArray(parsed.mainCarouselActions) ? parsed.mainCarouselActions : [];\nparsed.mainCarouselRejectReasons = Array.isArray(parsed.mainCarouselRejectReasons) ? parsed.mainCarouselRejectReasons : [];\nparsed.mainRecoveryUsed = Boolean(parsed.mainRecoveryUsed);\nparsed.mainRecoverySource = String(parsed.mainRecoverySource || '');\nparsed.mainRecoveryCandidateCount = Number(parsed.mainRecoveryCandidateCount || 0);\nparsed.mainCompletenessVersion = Number(parsed.mainCompletenessVersion || 0);\nparsed.mainGallerySlotCount = Number(parsed.mainGallerySlotCount || parsed.expectedMainImageCount || 0);\nparsed.mainDuplicateContentCount = Number(parsed.mainDuplicateContentCount || 0);\nparsed.mainFailedCandidateCount = Number(parsed.mainFailedCandidateCount || 0);\n\nconst expectedCanonicalProductUrl = /^\\d+$/.test(String(upstream.goodsId || ''))\n  ? 'https://mobile.yangkeduo.com/goods.html?goods_id=' + String(upstream.goodsId)\n  : '';\nconst allowedAvailabilityReasons = new Set([\n  'explicit_sold_out_true',\n  'explicit_on_sale_false',\n  'explicit_unavailable_status_text',\n]);\nconst verifiedAvailabilityEvidence = parsed.targetAvailabilityEvidence.filter((item) => item\n  && item.goodsIdMatched === true\n  && String(item.goodsId || '') === String(upstream.goodsId || '')\n  && allowedAvailabilityReasons.has(String(item.reason || '')));\nif (verifiedAvailabilityEvidence.length !== parsed.targetAvailabilityEvidence.length) {\n  parsed.warnings.push('Workflow rejected unverified target-availability evidence.');\n}\nparsed.targetAvailabilityEvidence = verifiedAvailabilityEvidence;\nconst unavailableContractErrors = [];\nif (parsed.initialUnavailableShellDetected) {\n  if (parsed.productNavigationCount > 2) unavailableContractErrors.push('Unavailable-shell navigation budget exceeded two product navigations.');\n  if (parsed.browserModeAttempts.some((attempt) => Number(attempt?.scrollActionCount || 0) > 0 && attempt?.initialUnavailableShellDetected === true)) {\n    unavailableContractErrors.push('Unavailable-shell attempt scrolled before returning.');\n  }\n  if (parsed.browserModeAttempts.some((attempt) => String(attempt?.mode || '').startsWith('desktop'))) {\n    unavailableContractErrors.push('Unavailable-shell recovery used a forbidden desktop fallback.');\n  }\n}\nif (parsed.unavailableCanonicalRetryUsed && parsed.canonicalProductUrl !== expectedCanonicalProductUrl) {\n  unavailableContractErrors.push('Unavailable-shell canonical retry URL is invalid.');\n}\nif (parsed.status === 'product_unavailable_confirmed' && !verifiedAvailabilityEvidence.length) {\n  parsed.status = 'profile_session_degraded';\n  parsed.unavailableClassification = 'session_degraded';\n  parsed.httpStatus = 409;\n  parsed.errors.push('Real product unavailability was not supported by target-bound structured evidence.');\n}\nif (unavailableContractErrors.length) {\n  parsed.success = false;\n  parsed.status = 'invalid_unavailable_retry_contract';\n  parsed.httpStatus = 500;\n  parsed.errors.push(...unavailableContractErrors);\n}\n\nconst mainImageSource = String(parsed.mainImageSource || '').toLowerCase();\nconst hasQueryOnlyMainSource = parsed.queryThumbnailOnly === true\n  || mainImageSource === 'url_parameter'\n  || mainImageSource === 'query_parameter'\n  || parsed.mainImages.some((record) => ['url_parameter', 'query_parameter'].includes(String(record.source || '').toLowerCase()));\nconst hasUnverifiedSingleTopGallery = mainImageSource === 'structured_single_top_gallery';\nconst verifiedMainExpectedCount = parsed.mainCompletenessVersion >= 2\n  ? Number(parsed.expectedMainImageCount || 0)\n  : Math.max(\n    Number(parsed.expectedMainImageCount || 0),\n    Number(parsed.mainCarouselExpectedCount || 0) > 0\n      ? Math.min(Number(upstream.maxMainImages || 10), Number(parsed.mainCarouselExpectedCount || 0))\n      : 0,\n  );\nconst addError = (message) => {\n  if (message && !parsed.errors.includes(message)) parsed.errors.push(message);\n};\n\nif (parsed.status === 'invalid_unavailable_retry_contract') {\n  parsed.success = false;\n  parsed.httpStatus = 500;\n  parsed.mainImages = [];\n  parsed.detailImages = [];\n  parsed.videos = [];\n  parsed.mainImageCount = 0;\n  parsed.detailImageCount = 0;\n  parsed.videoCount = 0;\n} else if (parsed.status === 'edge_profile_locked') {\n  parsed.success = false;\n  parsed.httpStatus = 423;\n  parsed.browserProfileLocked = true;\n  parsed.mainImages = [];\n  parsed.detailImages = [];\n  parsed.videos = [];\n  parsed.mainImageCount = 0;\n  parsed.detailImageCount = 0;\n  parsed.videoCount = 0;\n  if (!parsed.errors.length) parsed.errors.push('Edge default profile is currently in use; close Edge and retry.');\n} else if (parsed.status === 'edge_default_profile_busy_for_sync') {\n  parsed.success = false;\n  parsed.httpStatus = 423;\n  parsed.mainImages = [];\n  parsed.detailImages = [];\n  parsed.videos = [];\n  parsed.mainImageCount = 0;\n  parsed.detailImageCount = 0;\n  parsed.videoCount = 0;\n  if (!parsed.errors.length) parsed.errors.push('Edge Default profile is busy and could not be mirrored.');\n} else if (parsed.status === 'edge_close_failed' || parsed.status === 'profile_mirror_failed') {\n  parsed.success = false;\n  parsed.httpStatus = parsed.status === 'edge_close_failed' ? 500 : Number(parsed.httpStatus || 500);\n  parsed.mainImages = [];\n  parsed.detailImages = [];\n  parsed.videos = [];\n  parsed.mainImageCount = 0;\n  parsed.detailImageCount = 0;\n  parsed.videoCount = 0;\n  if (!parsed.errors.length) parsed.errors.push('Edge Default profile mirror failed before browser launch.');\n} else if (parsed.status === 'browser_executable_missing') {\n  parsed.success = false;\n  parsed.httpStatus = 500;\n  parsed.mainImages = [];\n  parsed.detailImages = [];\n  parsed.videos = [];\n  parsed.mainImageCount = 0;\n  parsed.detailImageCount = 0;\n  parsed.videoCount = 0;\n  if (!parsed.errors.length) parsed.errors.push('Configured browser executable was not found.');\n} else if (parsed.status === 'edge_default_profile_remote_debugging_blocked') {\n  parsed.success = false;\n  parsed.httpStatus = 409;\n  parsed.mainImages = [];\n  parsed.detailImages = [];\n  parsed.videos = [];\n  parsed.mainImageCount = 0;\n  parsed.detailImageCount = 0;\n  parsed.videoCount = 0;\n  if (!parsed.errors.length) {\n    parsed.errors.push('Microsoft Edge refused DevTools remote debugging for the default User Data directory.');\n  }\n} else if (parsed.needLoginOrCaptcha || parsed.status === 'login_required') {\n  parsed.success = false;\n  parsed.status = 'login_required';\n  parsed.httpStatus = 409;\n  parsed.mainImages = [];\n  parsed.detailImages = [];\n  parsed.videos = [];\n  parsed.mainImageCount = 0;\n  parsed.detailImageCount = 0;\n  parsed.videoCount = 0;\n  if (!parsed.errors.length) parsed.errors.push('PDD login or security verification is required.');\n} else if (parsed.status === 'profile_session_degraded') {\n  parsed.success = false;\n  parsed.httpStatus = 409;\n  parsed.mainImages = [];\n  parsed.detailImages = [];\n  parsed.videos = [];\n  parsed.mainImageCount = 0;\n  parsed.detailImageCount = 0;\n  parsed.videoCount = 0;\n  parsed.profileSessionStatus = 'degraded';\n  if (!parsed.errors.length) parsed.errors.push('当前 pdd Chrome 会话返回售罄壳页且没有目标商品真实下架证据。');\n} else if (parsed.status === 'profile_session_refresh_required') {\n  parsed.success = false;\n  parsed.httpStatus = 409;\n  parsed.mainImages = [];\n  parsed.detailImages = [];\n  parsed.videos = [];\n  parsed.mainImageCount = 0;\n  parsed.detailImageCount = 0;\n  parsed.videoCount = 0;\n  parsed.profileSessionStatus = 'refresh_required';\n  if (!parsed.errors.length) parsed.errors.push('当前 pdd Chrome 会话不可用，请重新登录 E006 使用的 pdd profile。');\n} else if (parsed.status === 'product_unavailable_confirmed') {\n  parsed.success = false;\n  parsed.httpStatus = 410;\n  parsed.mainImages = [];\n  parsed.detailImages = [];\n  parsed.videos = [];\n  parsed.mainImageCount = 0;\n  parsed.detailImageCount = 0;\n  parsed.videoCount = 0;\n  if (!parsed.errors.length) parsed.errors.push('目标商品结构化数据明确显示商品已售罄或已下架。');\n} else if (parsed.status === 'product_unavailable_in_automation_session') {\n  parsed.success = false;\n  parsed.httpStatus = 409;\n  parsed.mainImages = [];\n  parsed.detailImages = [];\n  parsed.videos = [];\n  parsed.mainImageCount = 0;\n  parsed.detailImageCount = 0;\n  parsed.videoCount = 0;\n  if (!parsed.errors.length) parsed.errors.push('当前自动化浏览器会话无法访问目标商品。');\n} else if (parsed.status === 'platform_busy_or_rate_limited') {\n  parsed.success = false;\n  parsed.httpStatus = 429;\n  parsed.mainImages = [];\n  parsed.detailImages = [];\n  parsed.videos = [];\n  parsed.mainImageCount = 0;\n  parsed.detailImageCount = 0;\n  parsed.videoCount = 0;\n  if (!parsed.errors.length) parsed.errors.push('拼多多当前返回系统繁忙或请求频繁，请稍后重试。');\n} else if (parsed.status === 'web_limited_single_gallery') {\n  parsed.success = false;\n  parsed.httpStatus = 422;\n  parsed.mainImageComplete = false;\n  if (!parsed.errors.length) parsed.errors.push('当前 PDD 网页只向自动化会话暴露 1/1 单主图，无法验证完整商品主图轮播。');\n} else if (hasQueryOnlyMainSource) {\n  parsed.success = false;\n  parsed.status = 'unsupported_page_variant';\n  parsed.httpStatus = 422;\n  parsed.mainImages = [];\n  parsed.mainImageCount = 0;\n  parsed.mainImageComplete = false;\n  parsed.queryThumbnailOnly = true;\n  if (!parsed.errors.length) parsed.errors.push('Only query thumbnail preview images were available; the product gallery could not be verified.');\n} else if (hasUnverifiedSingleTopGallery) {\n  parsed.success = false;\n  parsed.status = 'unsupported_page_variant';\n  parsed.httpStatus = 422;\n  parsed.mainImageComplete = false;\n  if (!parsed.errors.length) parsed.errors.push('Only a single topGallery image was available; the product gallery count could not be verified.');\n} else if (parsed.status === 'unsupported_page_variant' || !parsed.mainImageSource) {\n  parsed.success = false;\n  parsed.status = 'unsupported_page_variant';\n  parsed.httpStatus = 422;\n  if (!parsed.errors.length) parsed.errors.push('No goods-bound product gallery was found.');\n} else if (parsed.mainCompletenessVersion >= 2 && parsed.mainImageComplete !== true) {\n  parsed.success = false;\n  parsed.status = 'main_image_download_incomplete';\n  parsed.httpStatus = 502;\n  parsed.mainImageComplete = false;\n  addError('Downloaded main image count is lower than the verified unique product-media count.');\n} else if (verifiedMainExpectedCount > 0 && parsed.mainImageCount < verifiedMainExpectedCount) {\n  parsed.success = false;\n  parsed.status = 'main_image_download_incomplete';\n  parsed.httpStatus = 502;\n  parsed.mainImageComplete = false;\n  addError('Downloaded main image count is lower than the verified product gallery count.');\n} else if (parsed.success && parsed.mainImageCount === 0) {\n  parsed.success = false;\n  parsed.status = 'invalid_media_result';\n  parsed.httpStatus = 500;\n  addError('Downloader returned success without a valid product main image.');\n}\n\nconst terminalHttpStatus = Number(parsed.httpStatus || 0);\nif (parsed.success === true) {\n  parsed.httpStatus = 200;\n} else if (terminalHttpStatus >= 200 && terminalHttpStatus < 300) {\n  const originalHttpStatus = terminalHttpStatus;\n  parsed.httpStatus = parsed.status === 'unsupported_page_variant' || parsed.status === 'web_limited_single_gallery'\n    ? 422\n    : parsed.status === 'main_image_download_incomplete' || parsed.status === 'detail_image_download_incomplete'\n      ? 502\n      : 500;\n  addError('Downloader returned a contradictory failure response with HTTP ' + originalHttpStatus + '; normalized to HTTP ' + parsed.httpStatus + '.');\n}\nparsed.errors = [...new Set(parsed.errors.filter(Boolean).map(String))];\nparsed.warnings = [...new Set(parsed.warnings.filter(Boolean).map(String))];\n\nreturn [{ json: parsed }];"
+      }
+    },
+    {
+      "id": "663aa697-18d7-4793-9850-f83d9e22922b",
+      "name": "Build Detail Long Image Params",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1080,
+        100
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const input = $input.first().json || {};\nconst normalized = $('Normalize Parameters').first().json || {};\nconst preflight = $('Parse Idempotency Preflight').first().json || {};\nconst detailImageDir = input.outputDir ? input.outputDir + '/detail-images' : '';\nconst detailLongImageResultPath = input.outputDir ? input.outputDir + '/metadata/pdd-detail-stitch-result.json' : '';\nconst stitchParams = {\n  outputDir: input.outputDir || '',\n  detailImageDir,\n  outputFileName: '详情长图.png',\n  needLoginOrCaptcha: Boolean(input.needLoginOrCaptcha),\n  n8nExecutionId: input.n8nExecutionId || normalized.n8nExecutionId || '',\n  resultFilePath: detailLongImageResultPath,\n  idempotency: preflight.idempotency || { enabled: false },\n};\n\nreturn [{\n  json: {\n    ...input,\n    nodeExecutable: normalized.nodeExecutable || 'node',\n    detailStitcherScriptPath: normalized.detailStitcherScriptPath || '__MERCHROUTE_N8N_RUNTIME_DIR__/scripts/pdd-detail-image-stitcher.cjs',\n    detailLongImageResultPath,\n    detailLongImageParamBase64: Buffer.from(JSON.stringify(stitchParams), 'utf8').toString('base64'),\n  },\n}];"
+      }
+    },
+    {
+      "id": "af037761-dee1-4e3b-84ca-375484080b83",
+      "name": "Stitch Detail Long Image",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        1320,
+        100
+      ],
+      "parameters": {
+        "command": "={{ $json.nodeExecutable + ' ' + JSON.stringify($json.detailStitcherScriptPath) + ' ' + JSON.stringify($json.detailLongImageParamBase64) }}"
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "2349f1d6-f12d-4c16-85ac-5a96c8fb6566",
+      "name": "Parse Detail Long Image Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1560,
+        100
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const current = $input.first().json || {};\nconst original = $('Build Detail Long Image Params').first().json || {};\nconst stdout = String(current.stdout || '').trim();\nconst stderr = String(current.stderr || '').trim();\n\nfunction parseLastJson(text) {\n  const lines = text.split(/\\r?\\n/).map((line) => line.trim()).filter(Boolean).reverse();\n  for (const line of lines) {\n    try {\n      const parsed = JSON.parse(line);\n      if (parsed && typeof parsed === 'object') return parsed;\n    } catch (error) {}\n  }\n  return null;\n}\n\nlet parsed = parseLastJson(stdout);\nlet detailLongImageResultSource = parsed ? 'stdout' : '';\nlet fallbackError = '';\nconst warnings = Array.isArray(original.warnings) ? [...original.warnings] : [];\nconst errors = Array.isArray(original.errors) ? [...original.errors] : [];\nconst defaultPath = original.outputDir ? original.outputDir + '/detail-images/详情长图.png' : '';\nconst resultFilePath = String(original.detailLongImageResultPath || '').trim();\n\nfunction normalizePath(value) {\n  let text = String(value || '').trim().replace(/\\\\+/g, '/').replace(/^([A-Za-z]:)\\/+/, '$1/');\n  while (text.length > 1 && text.endsWith('/') && !/^[A-Za-z]:\\/$/.test(text)) text = text.slice(0, -1);\n  return /^[A-Za-z]:\\//.test(text) ? text.toLowerCase() : text;\n}\n\nfunction normalizedInputSet(values) {\n  if (!Array.isArray(values)) return null;\n  const normalized = [];\n  for (const value of values) {\n    const localPath = typeof value === 'string'\n      ? value\n      : value && (value.localPath || value.path || value.filePath);\n    const fingerprint = normalizePath(localPath);\n    if (!fingerprint) return null;\n    normalized.push(fingerprint);\n  }\n  return [...new Set(normalized)].sort();\n}\n\nfunction isVerifiedNonFatalPixelLimit(value) {\n  if (!value || value.schemaVersion !== 1\n    || value.success !== false\n    || value.status !== 'warning'\n    || value.nonFatal !== true\n    || value.skipped !== false\n    || value.errorCode !== 'OUTPUT_PIXEL_LIMIT_EXCEEDED') return false;\n  if (String(value.n8nExecutionId || '') !== String(original.n8nExecutionId || '')) return false;\n  if (normalizePath(value.resultFilePath) !== normalizePath(resultFilePath)) return false;\n  if (normalizePath(value.detailImageDir) !== normalizePath(original.outputDir + '/detail-images')) return false;\n  if (normalizePath(value.detailLongImagePath) !== normalizePath(defaultPath)) return false;\n  if (normalizePath(value.path) !== normalizePath(defaultPath)) return false;\n  if (String(value.detailLongImageFileName || '') !== '详情长图.png'\n    || String(value.fileName || '') !== '详情长图.png') return false;\n  const errorDetails = Array.isArray(value.errorDetails) ? value.errorDetails : [];\n  const valueErrors = Array.isArray(value.errors) ? value.errors : [];\n  const valueWarnings = Array.isArray(value.warnings) ? value.warnings : [];\n  if (errorDetails.length !== 1\n    || errorDetails[0]?.code !== 'OUTPUT_PIXEL_LIMIT_EXCEEDED'\n    || !String(errorDetails[0]?.message || '').trim()\n    || valueErrors.length !== 0\n    || valueWarnings.length !== 1\n    || String(valueWarnings[0]) !== String(errorDetails[0].message)) return false;\n  for (const field of ['detailLongImageWidth', 'detailLongImageHeight', 'detailLongImageSizeBytes', 'width', 'height', 'sizeBytes', 'stitchedImageCount']) {\n    if (!Number.isSafeInteger(value[field]) || value[field] !== 0) return false;\n  }\n  if (!Array.isArray(value.stitchedImages) || value.stitchedImages.length !== 0) return false;\n  const inputCount = Number(value.inputImageCount);\n  if (!Number.isSafeInteger(inputCount)\n    || inputCount < 1\n    || inputCount !== Number(original.detailImageCount || 0)\n    || value.inputCount !== inputCount) return false;\n  const expectedInputs = normalizedInputSet(\n    Array.isArray(original.detailImages)\n      ? original.detailImages.map((item) => item && (item.localPath || item.path || item.filePath))\n      : null,\n  );\n  const actualInputs = normalizedInputSet(value.inputImages);\n  return Boolean(expectedInputs && actualInputs && JSON.stringify(expectedInputs) === JSON.stringify(actualInputs));\n}\n\nif (!parsed && resultFilePath) {\n  try {\n    const fs = require('fs');\n    if (!fs.existsSync(resultFilePath)) throw new Error('Expected stitch result file does not exist: ' + resultFilePath);\n    parsed = JSON.parse(fs.readFileSync(resultFilePath, 'utf8'));\n    if (!parsed || typeof parsed !== 'object') throw new Error('Stitch result file does not contain an object.');\n    const mismatches = [];\n    if (String(parsed.n8nExecutionId || '') !== String(original.n8nExecutionId || '')) mismatches.push('n8nExecutionId');\n    if (normalizePath(parsed.resultFilePath) !== normalizePath(resultFilePath)) mismatches.push('resultFilePath');\n    if (normalizePath(parsed.detailLongImagePath) !== normalizePath(defaultPath)) mismatches.push('detailLongImagePath');\n    if (mismatches.length) throw new Error('Stitch result identity mismatch: ' + mismatches.join(', ') + '.');\n    detailLongImageResultSource = 'result_file_fallback';\n  } catch (error) {\n    parsed = null;\n    fallbackError = error.message || String(error);\n  }\n}\n\nif (!parsed) {\n  const commandOutput = (stderr || stdout || '').slice(0, 500);\n  const message = 'Detail long image execution output is unavailable. '\n    + (fallbackError ? fallbackError + ' ' : '')\n    + (commandOutput ? 'Command output: ' + commandOutput : '');\n  warnings.push(message);\n  return [{\n    json: {\n      ...original,\n      warnings,\n      detailLongImageSuccess: false,\n      detailLongImageSkipped: false,\n      detailLongImagePath: defaultPath,\n      detailLongImageError: message,\n      detailLongImageResultSource: 'none',\n      detailLongImageResultPath: resultFilePath,\n    },\n  }];\n}\n\nconst stitchErrors = Array.isArray(parsed.errors) ? parsed.errors.filter(Boolean) : [];\nconst stitchWarnings = Array.isArray(parsed.warnings) ? parsed.warnings.filter(Boolean) : [];\nwarnings.push(...stitchWarnings);\nif (parsed.skipped && stitchErrors.length) warnings.push(...stitchErrors);\n\nconst nonFatalPixelLimit = isVerifiedNonFatalPixelLimit(parsed);\nconst shouldFailWorkflow = !parsed.success\n  && !parsed.skipped\n  && !nonFatalPixelLimit\n  && Boolean(original.success)\n  && Number(original.detailImageCount || 0) > 0;\nif (shouldFailWorkflow) errors.push(...stitchErrors);\n\nreturn [{\n  json: {\n    ...original,\n    success: shouldFailWorkflow ? false : Boolean(original.success),\n    status: shouldFailWorkflow ? 'detail_long_image_failed' : String(original.status || (original.success ? 'success' : 'internal_error')),\n    httpStatus: shouldFailWorkflow ? 500 : Number(original.httpStatus || (original.success ? 200 : 500)),\n    errors,\n    warnings,\n    detailLongImageSuccess: Boolean(parsed.success),\n    detailLongImageSkipped: Boolean(parsed.skipped),\n    detailLongImagePath: parsed.detailLongImagePath || defaultPath,\n    detailLongImageFileName: parsed.detailLongImageFileName || '详情长图.png',\n    detailLongImageWidth: parsed.detailLongImageWidth || 0,\n    detailLongImageHeight: parsed.detailLongImageHeight || 0,\n    detailLongImageSizeBytes: parsed.detailLongImageSizeBytes || 0,\n    detailLongImageInputCount: parsed.inputImageCount || 0,\n    detailLongImageInputImages: Array.isArray(parsed.inputImages) ? parsed.inputImages : [],\n    detailLongImageResultSource,\n    detailLongImageResultPath: parsed.resultFilePath || resultFilePath,\n  },\n}];"
+      }
+    },
+    {
+      "id": "65b83ebf-cf1d-4f34-8cba-d0d9e57717d8",
+      "name": "Build Idempotency Finalize Params",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1800,
+        100
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const result = $input.first().json || {};\nconst normalized = $('Normalize Parameters').first().json || {};\nconst preflight = $('Parse Idempotency Preflight').first().json || {};\n\nfunction boundedTextArray(value) {\n  return Array.isArray(value)\n    ? value.slice(0, 2).map((entry) => String(entry || '').slice(0, 160))\n    : [];\n}\n\nfunction compactFailure(value) {\n  return {\n    success: false,\n    status: String(value?.status || 'idempotency_finalize_failed').slice(0, 128),\n    httpStatus: Number.isInteger(Number(value?.httpStatus)) ? Number(value.httpStatus) : 500,\n    platform: String(value?.platform || 'pdd').slice(0, 32),\n    SKU: String(value?.SKU || '').slice(0, 64),\n    productName: String(value?.productName || '').slice(0, 256),\n    productUrl: String(value?.productUrl || '').slice(0, 1024),\n    goodsId: String(value?.goodsId || '').slice(0, 128),\n    outputDir: String(value?.outputDir || '').slice(0, 1024),\n    mainImageCount: Number(value?.mainImageCount || 0),\n    detailImageCount: Number(value?.detailImageCount || 0),\n    videoCount: Number(value?.videoCount || 0),\n    browserProfileBusy: Boolean(value?.browserProfileBusy),\n    browserProfileLocked: Boolean(value?.browserProfileLocked),\n    needLoginOrCaptcha: Boolean(value?.needLoginOrCaptcha),\n    needHumanVerification: Boolean(value?.needHumanVerification),\n    humanVerificationStatus: String(value?.humanVerificationStatus || '').slice(0, 128),\n    retryReason: String(value?.retryReason || '').slice(0, 256),\n    detailLongImageSuccess: Boolean(value?.detailLongImageSuccess),\n    detailLongImageSkipped: Boolean(value?.detailLongImageSkipped),\n    errors: boundedTextArray(value?.errors),\n    warnings: boundedTextArray(value?.warnings),\n  };\n}\n\nconst ownerN8nExecutionId = String(preflight.ownerN8nExecutionId || result.n8nExecutionId || normalized.n8nExecutionId || '');\nconst ownerOutputDir = String(preflight.ownerOutputDir || result.outputDir || normalized.expectedOutputDir || '');\nconst payload = {\n  workflowCode: normalized.workflowCode || 'E006',\n  isWebhook: Boolean(normalized.isWebhook),\n  downloadJobId: normalized.downloadJobId || '',\n  requestN8nExecutionId: normalized.n8nExecutionId || '',\n  idempotency: preflight.idempotency || { enabled: false },\n  resultReference: {\n    mode: 'verified_artifacts',\n    workflowCode: normalized.workflowCode || 'E006',\n    parentOutputDir: normalized.parentOutputDir || '',\n    allowedOutputRoots: Array.isArray(normalized.allowedOutputRoots) ? normalized.allowedOutputRoots : [],\n    outputDir: ownerOutputDir,\n    SKU: normalized.SKU || result.SKU || '',\n    productName: normalized.productName || result.productName || '',\n    productUrl: normalized.productUrl || result.productUrl || '',\n    platformProductId: normalized.goodsId || result.goodsId || '',\n    ownerN8nExecutionId,\n  },\n};\nif (result.success !== true) payload.inlineResult = compactFailure(result);\nlet encoded = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64');\nif (encoded.length > 6000) {\n  const overflowPayload = {\n    workflowCode: normalized.workflowCode || 'E006',\n    isWebhook: Boolean(normalized.isWebhook),\n    downloadJobId: normalized.downloadJobId || '',\n    ownerN8nExecutionId,\n    requestN8nExecutionId: normalized.n8nExecutionId || '',\n    idempotency: preflight.idempotency || { enabled: false },\n    inlineResult: {\n      success: false,\n      status: 'idempotency_finalize_payload_too_large',\n      httpStatus: 500,\n      platform: 'pdd',\n      SKU: String(normalized.SKU || '').slice(0, 64),\n      productName: String(normalized.productName || '').slice(0, 128),\n      outputDir: ownerOutputDir.slice(0, 1024),\n      errors: ['Finalize identity exceeded the safe Windows command-line envelope.'],\n      warnings: [],\n    },\n  };\n  encoded = Buffer.from(JSON.stringify(overflowPayload), 'utf8').toString('base64');\n}\nif (encoded.length > 6000) throw new Error('Idempotency finalize context exceeds the safe Windows command-line envelope.');\nreturn [{ json: {\n  ...result,\n  nodeExecutable: normalized.nodeExecutable || 'node',\n  idempotencyHelperScriptPath: normalized.idempotencyHelperScriptPath || '',\n  idempotencyFinalizeParamBase64: encoded,\n  downloadJobId: normalized.downloadJobId || '',\n  ownerN8nExecutionId,\n  requestN8nExecutionId: normalized.n8nExecutionId || '',\n} }];"
+      }
+    },
+    {
+      "id": "34707486-c57d-4f86-86bf-d6d257b29924",
+      "name": "Idempotency Finalize",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        2040,
+        100
+      ],
+      "parameters": {
+        "command": "={{ $json.nodeExecutable + ' ' + JSON.stringify($json.idempotencyHelperScriptPath) + ' finalize ' + JSON.stringify($json.idempotencyFinalizeParamBase64) }}"
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "e8f733c1-7680-49ea-8bca-04b22274dee2",
+      "name": "Parse Idempotency Finalize",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2280,
+        100
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const current = $input.first().json || {};\nconst original = $('Build Idempotency Finalize Params').first().json || {};\nconst lines = String(current.stdout || '').split(/\\r?\\n/).map((line) => line.trim()).filter(Boolean).reverse();\nlet parsed = null;\nfor (const line of lines) {\n  try {\n    const value = JSON.parse(line);\n    if (value && typeof value === 'object' && !Array.isArray(value)) {\n      parsed = value;\n      break;\n    }\n  } catch {}\n}\nif (parsed) return [{ json: parsed }];\nconst warnings = Array.isArray(original.warnings) ? [...original.warnings] : [];\nif (String(current.stderr || '').trim()) warnings.push(String(current.stderr).trim().slice(0, 1000));\nreturn [{ json: {\n  ...original,\n  success: false,\n  status: 'idempotency_finalize_error',\n  httpStatus: 500,\n  idempotencyState: 'failed',\n  idempotencyReplay: false,\n  downloadJobId: String(original.downloadJobId || ''),\n  ownerN8nExecutionId: String(original.ownerN8nExecutionId || ''),\n  requestN8nExecutionId: String(original.requestN8nExecutionId || ''),\n  warnings,\n  errors: [...(Array.isArray(original.errors) ? original.errors : []), 'Idempotency finalize did not return valid JSON.'],\n} }];"
+      }
+    },
+    {
+      "id": "8ef116c7-8e8c-4d4e-bdc0-857c6f2ace5e",
+      "name": "Webhook Request?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2520,
+        100
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "a822145b-54e4-432a-a25b-090daeeeaba7",
+              "leftValue": "={{ $('Normalize Parameters').first().json.isWebhook }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "3511bc3a-52c9-4041-8c34-309264457117",
+      "name": "Manual Result",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        2760,
+        300
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "6d91f181-e13f-4a66-bc88-b786c61ba3a5",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        2760,
+        0
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": "={{ Number($json.httpStatus || 500) }}",
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json; charset=utf-8"
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "setParameter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "setParameter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "setParameter": {
+      "main": [
+        [
+          {
+            "node": "Normalize Parameters",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Parameters": {
+      "main": [
+        [
+          {
+            "node": "Parameters Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parameters Valid?": {
+      "main": [
+        [
+          {
+            "node": "Idempotency Preflight",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Validation Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Validation Response": {
+      "main": [
+        [
+          {
+            "node": "Webhook Request?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Idempotency Preflight": {
+      "main": [
+        [
+          {
+            "node": "Parse Idempotency Preflight",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Parse Idempotency Preflight",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Idempotency Preflight": {
+      "main": [
+        [
+          {
+            "node": "Idempotency Route",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Idempotency Route": {
+      "main": [
+        [
+          {
+            "node": "Run Playwright Downloader",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Resume Stitch?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resume Stitch?": {
+      "main": [
+        [
+          {
+            "node": "Build Recovered Downloader Result",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Idempotency Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Recovered Downloader Result": {
+      "main": [
+        [
+          {
+            "node": "Build Detail Long Image Params",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Idempotency Response": {
+      "main": [
+        [
+          {
+            "node": "Webhook Request?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Playwright Downloader": {
+      "main": [
+        [
+          {
+            "node": "Parse Downloader Result",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Parse Downloader Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Downloader Result": {
+      "main": [
+        [
+          {
+            "node": "Build Detail Long Image Params",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Detail Long Image Params": {
+      "main": [
+        [
+          {
+            "node": "Stitch Detail Long Image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Stitch Detail Long Image": {
+      "main": [
+        [
+          {
+            "node": "Parse Detail Long Image Result",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Parse Detail Long Image Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Detail Long Image Result": {
+      "main": [
+        [
+          {
+            "node": "Build Idempotency Finalize Params",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Idempotency Finalize Params": {
+      "main": [
+        [
+          {
+            "node": "Idempotency Finalize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Idempotency Finalize": {
+      "main": [
+        [
+          {
+            "node": "Parse Idempotency Finalize",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Parse Idempotency Finalize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Idempotency Finalize": {
+      "main": [
+        [
+          {
+            "node": "Webhook Request?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook Request?": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Manual Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true
+  }
+}

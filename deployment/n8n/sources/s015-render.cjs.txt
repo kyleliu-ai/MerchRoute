@@ -1,0 +1,157 @@
+const fs = require('fs');
+const path = require('path');
+const { spawnSync } = require('child_process');
+
+const specPath = Buffer.from(process.argv[2] || '', 'base64').toString('utf8');
+let spec = null;
+
+function clip(value, maximum = 4000) {
+  const text = String(value || '');
+  return text.length > maximum ? text.slice(-maximum) : text;
+}
+
+function isInside(root, target) {
+  const relative = path.relative(root, target);
+  return relative === '' || (relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative));
+}
+
+function safeRemove(file) {
+  try { if (file && fs.existsSync(file)) fs.rmSync(file, { force: true }); } catch {}
+}
+
+function fail(stage, message, details = {}) {
+  if (spec) {
+    safeRemove(spec.partialOutputPath);
+    if (spec.videoOnlyPath && spec.videoOnlyPath !== spec.outputVideoPath) safeRemove(spec.videoOnlyPath);
+  }
+  const outputDir = spec?.outputSubDir || path.dirname(specPath || '.');
+  const payload = { success: false, stage, message: String(message || 'render failed'), details, specPath };
+  try {
+    fs.mkdirSync(outputDir, { recursive: true });
+    fs.writeFileSync(path.join(outputDir, '_render_error.log'), JSON.stringify({ payload, spec }, null, 2), 'utf8');
+  } catch {}
+  console.error(JSON.stringify(payload));
+  process.exit(2);
+}
+
+function requireRealDirectory(file, label) {
+  if (!file || !fs.existsSync(file)) fail('preflight', label + ' not found: ' + file);
+  const stats = fs.lstatSync(file);
+  if (stats.isSymbolicLink() || !stats.isDirectory()) fail('preflight', label + ' must be a real directory: ' + file);
+  return fs.realpathSync(file);
+}
+
+function requireRealFile(file, label, options = {}) {
+  if (!file || !fs.existsSync(file)) fail('preflight', label + ' not found: ' + file);
+  const stats = fs.lstatSync(file);
+  if (stats.isSymbolicLink() && !options.allowSymlink) fail('preflight', label + ' symlink is forbidden: ' + file);
+  const real = fs.realpathSync(file);
+  if (!fs.statSync(real).isFile()) fail('preflight', label + ' must point to a regular file: ' + file);
+  return real;
+}
+
+function run(executable, stage, args, maximumBuffer = 64 * 1024 * 1024) {
+  const result = spawnSync(executable, args, { shell: false, windowsHide: true, encoding: 'utf8', maxBuffer: maximumBuffer });
+  if (result.error) fail(stage, result.error.message, { stdout: clip(result.stdout), stderr: clip(result.stderr) });
+  if (result.status !== 0) fail(stage, stage + ' exited with code ' + result.status, { status: result.status, signal: result.signal, stdout: clip(result.stdout), stderr: clip(result.stderr) });
+  return result;
+}
+
+function parseRate(value) {
+  const [numerator, denominator] = String(value || '').split('/').map(Number);
+  if (!Number.isFinite(numerator) || !Number.isFinite(denominator) || denominator === 0) return NaN;
+  return numerator / denominator;
+}
+
+function probeMedia(file) {
+  const result = run(spec.ffprobePath, 'ffprobe', ['-v', 'error', '-show_streams', '-show_format', '-of', 'json', file], 8 * 1024 * 1024);
+  let probe;
+  try { probe = JSON.parse(result.stdout || '{}'); }
+  catch (error) { fail('verify', 'ffprobe returned invalid JSON', { message: error?.message, stdout: clip(result.stdout) }); }
+  const streams = Array.isArray(probe.streams) ? probe.streams : [];
+  const video = streams.find((stream) => stream.codec_type === 'video');
+  const audio = streams.find((stream) => stream.codec_type === 'audio');
+  if (!video) fail('verify', 'Output has no video stream');
+  if (String(video.codec_name || '').toLowerCase() !== 'h264') fail('verify', 'Output video codec must be h264', { actual: video.codec_name });
+  if (Number(video.width) !== Number(spec.width) || Number(video.height) !== Number(spec.height)) fail('verify', 'Output dimensions do not match render spec', { expected: [spec.width, spec.height], actual: [video.width, video.height] });
+  const actualFps = parseRate(video.avg_frame_rate || video.r_frame_rate);
+  if (!Number.isFinite(actualFps) || Math.abs(actualFps - Number(spec.fps)) > 0.05) fail('verify', 'Output fps does not match render spec', { expected: spec.fps, actual: actualFps });
+  const duration = Number(probe.format?.duration || video.duration);
+  const tolerance = Math.max(0.75, Number(spec.targetDuration) * 0.05);
+  if (!Number.isFinite(duration) || Math.abs(duration - Number(spec.targetDuration)) > tolerance) fail('verify', 'Output duration does not match render spec', { expected: spec.targetDuration, actual: duration, tolerance });
+  if (spec.expectAudio && !audio) fail('verify', 'Output has no audio stream while music is configured');
+  if (spec.expectAudio && String(audio.codec_name || '').toLowerCase() !== 'aac') fail('verify', 'Output audio codec must be aac', { actual: audio.codec_name });
+  const formatName = String(probe.format?.format_name || '');
+  if (!/(^|,)mov(,|$)|(^|,)mp4(,|$)/.test(formatName)) fail('verify', 'Output container is not MP4/MOV', { actual: formatName });
+  return {
+    videoCodec: String(video.codec_name || ''),
+    audioCodec: audio ? String(audio.codec_name || '') : null,
+    width: Number(video.width),
+    height: Number(video.height),
+    fps: Number(actualFps.toFixed(3)),
+    durationSeconds: Number(duration.toFixed(3)),
+    formatName,
+  };
+}
+
+try {
+  spec = JSON.parse(fs.readFileSync(specPath, 'utf8'));
+  const outputParentReal = requireRealDirectory(spec.outputParentDir, 'Output parent');
+  const outputReal = requireRealDirectory(spec.outputSubDir, 'Output directory');
+  if (!isInside(outputParentReal, outputReal) || outputParentReal === outputReal) fail('preflight', 'Output directory escaped output parent');
+  const sourceReal = requireRealDirectory(spec.sourceChildDir, 'Source directory');
+  const ffmpegReal = requireRealFile(spec.ffmpegPath, 'FFmpeg', { allowSymlink: true });
+  const ffprobeReal = requireRealFile(spec.ffprobePath, 'FFprobe', { allowSymlink: true });
+  if (!/^ffmpeg(?:\.exe)?$/i.test(path.basename(ffmpegReal))) fail('preflight', 'Unexpected FFmpeg executable name');
+  if (!/^ffprobe(?:\.exe)?$/i.test(path.basename(ffprobeReal))) fail('preflight', 'Unexpected FFprobe executable name');
+  if (!Array.isArray(spec.imagePaths) || spec.imagePaths.length < 1 || spec.imagePaths.length > Number(spec.maxImageCount)) fail('preflight', 'Image count is outside the configured range');
+  for (const image of spec.imagePaths) {
+    const real = requireRealFile(image, 'Image');
+    if (!isInside(sourceReal, real)) fail('preflight', 'Image escaped source directory: ' + image);
+  }
+  if (spec.logoPath) requireRealFile(spec.logoPath, 'Logo');
+  if (spec.musicPath) requireRealFile(spec.musicPath, 'Music');
+  for (const [label, file] of [['Output video', spec.outputVideoPath], ['Partial output', spec.partialOutputPath], ['Video-only output', spec.videoOnlyPath]]) {
+    const resolved = path.resolve(file);
+    if (!isInside(outputReal, resolved) || path.dirname(resolved) !== outputReal) fail('preflight', label + ' escaped output directory');
+  }
+  if (fs.existsSync(spec.outputVideoPath)) fail('preflight', 'Final output already exists: ' + spec.outputVideoPath);
+  safeRemove(spec.partialOutputPath);
+  if (spec.videoOnlyPath !== spec.outputVideoPath) safeRemove(spec.videoOnlyPath);
+
+  const videoArgs = ['-y'];
+  for (const image of spec.imagePaths) videoArgs.push('-i', image);
+  if (spec.logoPath) videoArgs.push('-i', spec.logoPath);
+  videoArgs.push('-filter_complex', spec.filterComplex, '-map', '[vout]', '-r', String(spec.fps), '-t', Number(spec.targetDuration).toFixed(3), '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', spec.videoOnlyPath);
+  const video = run(spec.ffmpegPath, 'video', videoArgs);
+  let audio = null;
+  if (spec.musicPath) {
+    const audioArgs = ['-y', '-i', spec.videoOnlyPath, '-stream_loop', '-1', '-i', spec.musicPath, '-filter_complex', spec.audioFilter, '-map', '0:v', '-map', '[a]', '-t', Number(spec.targetDuration).toFixed(3), '-c:v', 'copy', '-c:a', 'aac', '-shortest', spec.partialOutputPath];
+    audio = run(spec.ffmpegPath, 'audio', audioArgs);
+  } else if (path.resolve(spec.videoOnlyPath) !== path.resolve(spec.partialOutputPath)) {
+    fs.renameSync(spec.videoOnlyPath, spec.partialOutputPath);
+  }
+
+  const stat = fs.statSync(spec.partialOutputPath);
+  if (!stat.isFile() || stat.size <= 0) fail('verify', 'Partial output is empty');
+  const mediaProbe = probeMedia(spec.partialOutputPath);
+  fs.renameSync(spec.partialOutputPath, spec.outputVideoPath);
+  if (spec.videoOnlyPath !== spec.outputVideoPath) safeRemove(spec.videoOnlyPath);
+  safeRemove(specPath);
+  safeRemove(path.join(spec.outputSubDir, '_render_error.log'));
+  const diagnostics = [video?.stderr, audio?.stderr].filter(Boolean).join('\n');
+  console.log(JSON.stringify({
+    success: true,
+    outputVideoPath: spec.outputVideoPath,
+    sizeBytes: fs.statSync(spec.outputVideoPath).size,
+    durationSeconds: mediaProbe.durationSeconds,
+    effectPreset: spec.effectPreset,
+    imageCount: spec.imagePaths.length,
+    logo: Boolean(spec.logoPath),
+    music: Boolean(spec.musicPath),
+    mediaProbe,
+    diagnosticsTail: clip(diagnostics),
+  }));
+} catch (error) {
+  fail('runner', error?.message || error);
+}

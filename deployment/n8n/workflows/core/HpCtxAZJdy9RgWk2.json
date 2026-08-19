@@ -1,0 +1,1240 @@
+{
+  "id": "HpCtxAZJdy9RgWk2",
+  "name": "E002-v03-白底图-生5视图",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "triggerOn": "folder",
+        "path": "__MERCHROUTE_DATA_ROOT__/01_monitorFolder/E002-白底图-生5图-监听",
+        "events": [
+          "addDir"
+        ],
+        "options": {
+          "awaitWriteFinish": true,
+          "ignored": ".staging",
+          "ignoreInitial": true,
+          "depth": 0,
+          "usePolling": true,
+          "ignoreMode": "contain"
+        }
+      },
+      "id": "9e724779-1eeb-478c-9b9c-8c5a7296f304",
+      "name": "Local File Trigger",
+      "type": "n8n-nodes-base.localFileTrigger",
+      "typeVersion": 1,
+      "position": [
+        640,
+        32
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const __hiddenFs = require('fs');\nconst __hiddenPath = require('path');\nconst __HIDDEN_PS_TEMPLATE = \"$ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue';[Console]::OutputEncoding=New-Object System.Text.UTF8Encoding $false;$OutputEncoding=[Console]::OutputEncoding;function q([string]$a){if($null -eq $a){return '\\\"\\\"'}if($a.Length -eq 0){return '\\\"\\\"'}if($a -notmatch '[\\\\s\\\"]'){return $a}$r='\\\"';$b=0;foreach($c in $a.ToCharArray()){if($c -eq '\\\\'){$b++;continue}if($c -eq '\\\"'){$r+=('\\\\'*($b*2+1))+'\\\"';$b=0;continue}if($b -gt 0){$r+='\\\\'*$b;$b=0}$r+=$c}if($b -gt 0){$r+='\\\\'*($b*2)}return $r+'\\\"'};$sp=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__SPEC_PATH_B64__'));$o=[IO.Path]::GetTempFileName();$e=[IO.Path]::GetTempFileName();try{$s=Get-Content -LiteralPath $sp -Raw -Encoding UTF8|ConvertFrom-Json;$av=@();foreach($x in $s.args){$av+=[string]$x};$al=($av|%{q $_}) -join ' ';$p=Start-Process -FilePath ([string]$s.executable) -ArgumentList $al -WindowStyle Hidden -Wait -PassThru -RedirectStandardOutput $o -RedirectStandardError $e;$out=if(Test-Path -LiteralPath $o){[IO.File]::ReadAllText($o,[Text.Encoding]::UTF8)}else{''};$err=if(Test-Path -LiteralPath $e){[IO.File]::ReadAllText($e,[Text.Encoding]::UTF8)}else{''};if($out){[Console]::Out.Write($out)};if($err){[Console]::Error.Write($err)};exit $p.ExitCode}finally{Remove-Item -LiteralPath $o,$e -Force -ErrorAction SilentlyContinue;if(Test-Path -LiteralPath $sp){Remove-Item -LiteralPath $sp -Force -ErrorAction SilentlyContinue}}\";\nfunction __hiddenB64Utf8(value) { return Buffer.from(String(value ?? ''), 'utf8').toString('base64'); }\nfunction __hiddenShQuote(value) { const text = String(value ?? ''); return \"'\" + text.replace(/'/g, \"'\\\"'\\\"'\") + \"'\"; }\nfunction __useWindowsHiddenCommand() { return __hiddenPath.sep === '\\\\'; }\nfunction __buildHiddenCommand(executable, args) {\n  const __isWin = __useWindowsHiddenCommand();\n  const __tempRoot = __isWin ? '__MERCHROUTE_TEMP_DIR__' : '/tmp';\n  const dir = __hiddenPath.join(__tempRoot, 'n8n-hidden-command-specs');\n  __hiddenFs.mkdirSync(dir, { recursive: true });\n  const specPath = __hiddenPath.join(dir, 'cmd-' + Date.now() + '-' + Math.random().toString(36).slice(2, 10) + '.json');\n  const spec = { executable: String(executable), args: args.map((arg) => String(arg ?? '')), createdAt: new Date().toISOString(), version: 'n8n-hidden-cli-v1' };\n  __hiddenFs.writeFileSync(specPath, JSON.stringify(spec), 'utf8');\n  const psScript = __HIDDEN_PS_TEMPLATE.replace('__SPEC_PATH_B64__', __hiddenB64Utf8(specPath));\n  return 'powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -OutputFormat Text -EncodedCommand ' + Buffer.from(psScript, 'utf16le').toString('base64');\n}\nfunction __buildNodeCommand(args) {\n  const normalizedArgs = args.map((arg) => String(arg ?? ''));\n  if (__useWindowsHiddenCommand()) return __buildHiddenCommand('node', normalizedArgs);\n  return ['node', ...normalizedArgs.map(__hiddenShQuote)].join(' ');\n}\nfunction __buildNodeEvalCommand(scriptBase64, scriptArgs = []) {\n  return __buildNodeCommand(['-e', \"eval(Buffer.from(process.argv[1],'base64').toString('utf8'))\", scriptBase64, ...scriptArgs.map((arg) => String(arg ?? ''))]);\n}\nfunction __buildNodeGzipEvalCommand(scriptBase64, scriptArgs = []) {\n  return __buildNodeCommand(['-e', \"eval(require('zlib').gunzipSync(Buffer.from(process.argv[1],'base64')).toString('utf8'))\", scriptBase64, ...scriptArgs.map((arg) => String(arg ?? ''))]);\n}\n\nconst E002_WAIT_FOLDER_STABLE_SCRIPT_BASE64 = 'Y29uc3QgZnM9cmVxdWlyZSgnZnMnKSxwYXRoPXJlcXVpcmUoJ3BhdGgnKTtjb25zdCBkaXI9ZGVjb2RlVVJJQ29tcG9uZW50KHByb2Nlc3MuYXJndlsyXXx8JycpO2NvbnN0IG1heE1zPU51bWJlcihwcm9jZXNzLmFyZ3ZbM118fCcxMjAwMDAnKTtjb25zdCBpbnRlcnZhbE1zPU51bWJlcihwcm9jZXNzLmFyZ3ZbNF18fCcxMDAwJyk7Y29uc3Qgc3RhYmxlTXM9TnVtYmVyKHByb2Nlc3MuYXJndls1XXx8JzUwMDAnKTtjb25zdCB0ZW1wUGF0dGVybj0vXC4odG1wfHBhcnR8Y3Jkb3dubG9hZHxkb3dubG9hZCkkL2k7Y29uc3Qgc2xlZXA9KG1zKT0+bmV3IFByb21pc2UocmVzb2x2ZT0+c2V0VGltZW91dChyZXNvbHZlLG1zKSk7ZnVuY3Rpb24gbm9ybWFsaXplKHZhbHVlKXtyZXR1cm4gU3RyaW5nKHZhbHVlfHwnJykucmVwbGFjZSgvXFwvZywnLycpO31mdW5jdGlvbiBzbmFwc2hvdChyb290KXtpZighcm9vdCl0aHJvdyBuZXcgRXJyb3IoJ2ZvbGRlclBhdGggaXMgcmVxdWlyZWQnKTtpZighZnMuZXhpc3RzU3luYyhyb290KSl0aHJvdyBuZXcgRXJyb3IoJ0RpcmVjdG9yeSBkb2VzIG5vdCBleGlzdDogJytyb290KTtjb25zdCBzdGF0PWZzLnN0YXRTeW5jKHJvb3QpO2lmKCFzdGF0LmlzRGlyZWN0b3J5KCkpdGhyb3cgbmV3IEVycm9yKCdQYXRoIGlzIG5vdCBhIGRpcmVjdG9yeTogJytyb290KTtjb25zdCByb3dzPVtdO2xldCB0b3RhbEJ5dGVzPTAsbmV3ZXN0TXRpbWVNcz0wLGhhc1RlbXBGaWxlcz1mYWxzZTtmdW5jdGlvbiB3YWxrKGN1cnJlbnQpe2NvbnN0IGVudHJpZXM9ZnMucmVhZGRpclN5bmMoY3VycmVudCx7d2l0aEZpbGVUeXBlczp0cnVlfSkuc29ydCgoYSxiKT0+YS5uYW1lLmxvY2FsZUNvbXBhcmUoYi5uYW1lKSk7Zm9yKGNvbnN0IGVudHJ5IG9mIGVudHJpZXMpe2NvbnN0IGZ1bGxQYXRoPXBhdGguam9pbihjdXJyZW50LGVudHJ5Lm5hbWUpO2NvbnN0IHJlbFBhdGg9bm9ybWFsaXplKHBhdGgucmVsYXRpdmUocm9vdCxmdWxsUGF0aCkpO2lmKGVudHJ5LmlzRGlyZWN0b3J5KCkpe3dhbGsoZnVsbFBhdGgpO2NvbnRpbnVlO31pZighZW50cnkuaXNGaWxlKCkpY29udGludWU7Y29uc3QgZmlsZVN0YXQ9ZnMuc3RhdFN5bmMoZnVsbFBhdGgpO3RvdGFsQnl0ZXMrPWZpbGVTdGF0LnNpemU7bmV3ZXN0TXRpbWVNcz1NYXRoLm1heChuZXdlc3RNdGltZU1zLE1hdGguZmxvb3IoZmlsZVN0YXQubXRpbWVNcykpO2lmKHRlbXBQYXR0ZXJuLnRlc3QoZW50cnkubmFtZSkpaGFzVGVtcEZpbGVzPXRydWU7cm93cy5wdXNoKHJlbFBhdGgrJzonK2ZpbGVTdGF0LnNpemUrJzonK01hdGguZmxvb3IoZmlsZVN0YXQubXRpbWVNcykpO319d2Fsayhyb290KTtyZXR1cm57c2lnbmF0dXJlOnJvd3Muam9pbignfCcpLGZpbGVDb3VudDpyb3dzLmxlbmd0aCx0b3RhbEJ5dGVzLG5ld2VzdE10aW1lTXMsaGFzVGVtcEZpbGVzfTt9KGFzeW5jKCk9Pntjb25zdCBzdGFydGVkQXQ9RGF0ZS5ub3coKTtsZXQgcHJldmlvdXNTaWduYXR1cmU9Jycsc3RhYmxlU2luY2U9MCxjdXJyZW50PW51bGwsYXR0ZW1wdHM9MDt3aGlsZShEYXRlLm5vdygpLXN0YXJ0ZWRBdDw9bWF4TXMpe2N1cnJlbnQ9c25hcHNob3QoZGlyKTthdHRlbXB0cys9MTtjb25zdCBjYW5CZVN0YWJsZT1jdXJyZW50LmZpbGVDb3VudD4wJiYhY3VycmVudC5oYXNUZW1wRmlsZXM7aWYoY2FuQmVTdGFibGUmJmN1cnJlbnQuc2lnbmF0dXJlPT09cHJldmlvdXNTaWduYXR1cmUpe2lmKCFzdGFibGVTaW5jZSlzdGFibGVTaW5jZT1EYXRlLm5vdygpO2lmKERhdGUubm93KCktc3RhYmxlU2luY2U+PXN0YWJsZU1zKXtjb25zb2xlLmxvZyhKU09OLnN0cmluZ2lmeSh7b2s6dHJ1ZSxmb2xkZXJQYXRoOm5vcm1hbGl6ZShkaXIpLHdhaXRlZE1zOkRhdGUubm93KCktc3RhcnRlZEF0LHN0YWJsZU1zLGludGVydmFsTXMsbWF4TXMsYXR0ZW1wdHMsZmlsZUNvdW50OmN1cnJlbnQuZmlsZUNvdW50LHRvdGFsQnl0ZXM6Y3VycmVudC50b3RhbEJ5dGVzLG5ld2VzdE10aW1lTXM6Y3VycmVudC5uZXdlc3RNdGltZU1zfSkpO3JldHVybjt9fWVsc2V7cHJldmlvdXNTaWduYXR1cmU9Y3VycmVudC5zaWduYXR1cmU7c3RhYmxlU2luY2U9MDt9YXdhaXQgc2xlZXAoaW50ZXJ2YWxNcyk7fWNvbnNvbGUuZXJyb3IoSlNPTi5zdHJpbmdpZnkoe29rOmZhbHNlLGZvbGRlclBhdGg6bm9ybWFsaXplKGRpciksd2FpdGVkTXM6RGF0ZS5ub3coKS1zdGFydGVkQXQsc3RhYmxlTXMsaW50ZXJ2YWxNcyxtYXhNcyxhdHRlbXB0cyxmaWxlQ291bnQ6Y3VycmVudD8uZmlsZUNvdW50fHwwLHRvdGFsQnl0ZXM6Y3VycmVudD8udG90YWxCeXRlc3x8MCxoYXNUZW1wRmlsZXM6Y3VycmVudD8uaGFzVGVtcEZpbGVzfHxmYWxzZSxlcnJvcjonRGlyZWN0b3J5IGRpZCBub3QgYmVjb21lIHN0YWJsZSBiZWZvcmUgdGltZW91dCd9KSk7cHJvY2Vzcy5leGl0KDIpO30pKCkuY2F0Y2goZXJyb3I9Pntjb25zb2xlLmVycm9yKEpTT04uc3RyaW5naWZ5KHtvazpmYWxzZSxmb2xkZXJQYXRoOm5vcm1hbGl6ZShkaXIpLGVycm9yOmVycm9yLm1lc3NhZ2V9KSk7cHJvY2Vzcy5leGl0KDEpO30pOw==';\n\nconst windowMs = 120 * 1000;\nconst now = Date.now();\nconst state = $getWorkflowStaticData('global');\n\nif (!state.productThreeViewsDedupe || typeof state.productThreeViewsDedupe !== 'object' || Array.isArray(state.productThreeViewsDedupe)) {\n  state.productThreeViewsDedupe = {};\n}\n\nconst recent = state.productThreeViewsDedupe;\nconst cutoff = now - windowMs;\nfor (const [key, seenAt] of Object.entries(recent)) {\n  if (!Number.isFinite(seenAt) || seenAt < cutoff) {\n    delete recent[key];\n  }\n}\n\nfunction normalizePath(value) {\n  let result = String(value || '').trim().replace(/\\\\/g, '/');\n  while (result.length > 1 && result.endsWith('/')) result = result.slice(0, -1);\n  return result;\n}\n\nfunction dirname(value) {\n  const normalized = normalizePath(value);\n  const index = normalized.lastIndexOf('/');\n  return index > 0 ? normalized.slice(0, index) : normalized;\n}\n\nfunction looksLikeFile(value) {\n  const lastPart = normalizePath(value).split('/').pop() || '';\n  return /\\.[A-Za-z0-9]{1,8}$/.test(lastPart);\n}\n\nconst output = [];\nfor (const [index, item] of $input.all().entries()) {\n  const rawPath = normalizePath(item.json?.path || item.json?.filePath || item.json?.folderPath || '');\n  if (!rawPath) continue;\n\n  const event = String(item.json?.event || item.json?.eventName || '').toLowerCase();\n  const productFolderPath = event.includes('adddir') || (!event.includes('add') && !looksLikeFile(rawPath))\n    ? rawPath\n    : dirname(rawPath);\n  const key = productFolderPath.toLowerCase();\n  const folderStableCommand = __buildNodeEvalCommand(E002_WAIT_FOLDER_STABLE_SCRIPT_BASE64, [encodeURIComponent(productFolderPath), '120000', '1000', '5000']);\n\n  if (recent[key] && now - recent[key] < windowMs) {\n    continue;\n  }\n\n  recent[key] = now;\n  output.push({\n    json: {\n      ...item.json,\n      rawTriggerPath: rawPath,\n      productFolderPath,\n      fileSelector: productFolderPath + '/*',\n      folderStableCommand,\n      dedupeKey: key,\n      dedupeWindowSeconds: Math.round(windowMs / 1000),\n    },\n    pairedItem: { item: index },\n  });\n}\n\nreturn output;"
+      },
+      "id": "da1b0b5d-b3a0-45fa-b5f0-a60218689d8d",
+      "name": "Dedupe Folder Path",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        864,
+        32
+      ]
+    },
+    {
+      "parameters": {
+        "fileSelector": "={{ $('Restore Stable Folder Path').first().json.fileSelector }}",
+        "options": {}
+      },
+      "id": "fcb0882c-669e-442a-95eb-9fcd852c8035",
+      "name": "Read Product Folder Files",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        1760,
+        32
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst trigger = $('Dedupe Folder Path').first().json || {};\nconst lookup = $(\"Call 'S016-JSON文件-解析'\").first().json || {};\nconst defaultDownloadFatherFolder = \"G:\\\\01_MerchRoute\\\\02_GenerateFolder\\\\E002-5视图-下载\";\n\nfunction cleanString(value) {\n  return typeof value === 'string' ? value.trim() : '';\n}\n\nfunction normalizePath(value) {\n  let result = cleanString(value).replace(/\\\\/g, '/');\n  while (result.length > 1 && result.endsWith('/')) result = result.slice(0, -1);\n  return result;\n}\n\nfunction joinPath(folder, fileName) {\n  const normalizedFolder = normalizePath(folder);\n  const normalizedFileName = String(fileName || '').replace(/^[\\\\/]+/, '');\n  return normalizedFolder ? normalizedFolder + '/' + normalizedFileName : normalizedFileName;\n}\n\nconst productFolderPath = normalizePath(trigger.productFolderPath || $('Local File Trigger').first().json?.path);\nif (!productFolderPath) {\n  throw new Error('productFolderPath is required from Dedupe Folder Path or Local File Trigger.');\n}\n\nif (lookup.success !== true || !lookup.data || typeof lookup.data !== 'object' || Array.isArray(lookup.data)) {\n  throw new Error('读取 n8n_setParameter 配置失败：' + String(lookup.message || lookup.errorType || 'S016 data is missing'));\n}\nconst data = lookup.data;\nconst configFile = lookup.latestFile?.filePath || lookup.latestFile?.fileName || 'n8n_setParameter_xxx.json';\nif (typeof data.SKU !== 'string') throw new Error(configFile + ' 的 SKU 必须是 String。');\nif (typeof data.productName !== 'string') throw new Error(configFile + ' 的 productName 必须是 String。');\nif (typeof data.variants !== 'string') throw new Error(configFile + ' 的 variants 必须是 String。');\nconst SKU = cleanString(data.SKU);\nconst productName = cleanString(data.productName);\nconst variants = cleanString(data.variants);\nif (!/^\\d{7}$/.test(SKU)) throw new Error(configFile + ' 的 SKU 必须是保留前导零的 7 位数字。');\nif (!productName) throw new Error(configFile + ' 的 productName 不能为空。');\nif (!variants) throw new Error(configFile + ' 的 variants 不能为空。');\nconst configFileName = String(lookup.latestFile?.fileName || configFile).split(/[\\\\/]/).pop() || '';\nconst sourceSubmissionId = configFileName.match(/^n8n_setParameter_E002_(.+)\\.json$/i)?.[1] || '';\nif (!sourceSubmissionId) throw new Error('配置文件名缺少 E002 sourceSubmissionId；禁止在上传或生成前继续。');\nconst downloadFatherFolder = cleanString(data.downloadFatherFolder) || defaultDownloadFatherFolder;\n\nconst allowedImageExtensions = new Set(['jpg', 'jpeg', 'png', 'webp']);\nconst imageFiles = [];\n\nfunction getFileName(item) {\n  return String(item.json?.fileName || item.binary?.data?.fileName || '').trim();\n}\n\nfunction getExtension(fileName, item) {\n  const binaryExt = String(item.binary?.data?.fileExtension || '').toLowerCase();\n  if (binaryExt) return binaryExt;\n  const dotIndex = fileName.lastIndexOf('.');\n  return dotIndex > -1 ? fileName.slice(dotIndex + 1).toLowerCase() : '';\n}\n\nfor (const [index, item] of items.entries()) {\n  const fileName = getFileName(item);\n  if (!fileName || !item.binary?.data) continue;\n  const extension = getExtension(fileName, item);\n  if (allowedImageExtensions.has(extension)) imageFiles.push({ item, index, fileName, extension });\n}\n\nif (imageFiles.length < 1 || imageFiles.length > 5) {\n  throw new Error('产品图片数量必须为 1-5 张，当前为 ' + imageFiles.length + ' 张。');\n}\n\nconst collator = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' });\nimageFiles.sort((a, b) => collator.compare(a.fileName, b.fileName));\n\nconst mimeByExtension = {\n  jpg: 'image/jpeg',\n  jpeg: 'image/jpeg',\n  png: 'image/png',\n  webp: 'image/webp',\n};\n\nconst sourceFilePaths = [];\nconst sourceImages = [];\n\nfor (const file of imageFiles) {\n  const binaryData = file.item.binary?.data || {};\n  const mimeType = binaryData.mimeType || mimeByExtension[file.extension] || 'application/octet-stream';\n  const sourceDirectory = normalizePath(binaryData.directory || productFolderPath);\n  const sourceFilePath = joinPath(sourceDirectory, file.fileName);\n  const byteValue = Number(binaryData.bytes);\n  sourceFilePaths.push(sourceFilePath);\n  sourceImages.push({\n    fileName: file.fileName,\n    fileExtension: file.extension,\n    mimeType,\n    bytes: Number.isFinite(byteValue) && byteValue >= 0 ? byteValue : 0,\n  });\n}\n\nreturn [{\n  json: {\n    SKU,\n    productName,\n    variants,\n    sourceSubmissionId,\n    downloadFatherFolder,\n    productFolderPath,\n    imageCount: sourceFilePaths.length,\n    sourceFilePaths,\n    sourceImages,\n  },\n}];"
+      },
+      "id": "39f1da5a-4aa4-436c-8f88-a0bd50a7a08e",
+      "name": "Parse Product Folder",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1984,
+        32
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ceb963ea-eeda-4ca3-bcf7-baa2b93d4bb5",
+              "name": "downloadFatherFolder",
+              "value": "={{ $json.downloadFatherFolder }}",
+              "type": "string"
+            },
+            {
+              "id": "c76e6ca4-3253-4105-9e81-00f60fac26e4",
+              "name": "productName",
+              "value": "={{ $json.productName }}",
+              "type": "string"
+            },
+            {
+              "id": "58a78167-18a3-4a50-ac5f-df34e08d5ebd",
+              "name": "SKU",
+              "value": "={{ $json.SKU }}",
+              "type": "string"
+            },
+            {
+              "id": "2ba8363d-fdb8-40af-8e62-0e7f5b88a7f5",
+              "name": "sourceSubmissionId",
+              "value": "={{ $json.sourceSubmissionId }}",
+              "type": "string"
+            },
+            {
+              "id": "916ba0b9-869f-4b79-8280-4a12f1838546",
+              "name": "productFolderPath",
+              "value": "={{ $json.productFolderPath }}",
+              "type": "string"
+            },
+            {
+              "id": "d2e533ce-487a-4735-b078-dc7cd57be304",
+              "name": "imageCount",
+              "value": "={{ $json.imageCount }}",
+              "type": "number"
+            },
+            {
+              "id": "e8f2d1fa-2013-48cb-a51c-d3715c2c53f3",
+              "name": "sourceFilePaths",
+              "value": "={{ $json.sourceFilePaths }}",
+              "type": "array"
+            },
+            {
+              "id": "8ebfe400-e0de-40ac-b45b-f2329c7bd7d2",
+              "name": "sourceImages",
+              "value": "={{ $json.sourceImages }}",
+              "type": "array"
+            },
+            {
+              "id": "29cfc036-efdf-490f-8f1e-c8bb87ef7226",
+              "name": "promptFront",
+              "value": "={{ '请参考' + $json.productName + '的产品白底参考图，保持产品颜色、结构、比例、材质、按钮、接口、孔位和细节位置完全一致，不得添加或修改任何不存在的结构与装饰。生成该产品的正面视图图片。要求：单一视图，产品居中，完整清晰，纯白背景，真实电商白底摄影风格，1:1比例。' }}",
+              "type": "string"
+            },
+            {
+              "id": "4d25f74e-b756-4a5c-99b9-98707df9f1d8",
+              "name": "promptSide",
+              "value": "={{ '请参考' + $json.productName + '的产品白底参考图，保持产品颜色、结构、比例、材质、按钮、接口、孔位和细节位置完全一致，不得添加或修改任何不存在的结构与装饰。生成该产品的45度侧俯视图图片。要求：单一视图，产品居中，完整清晰，纯白背景，真实电商白底摄影风格，1:1比例。' }}",
+              "type": "string"
+            },
+            {
+              "id": "82025d96-d522-45bf-8d6d-36e24eced530",
+              "name": "promptTop",
+              "value": "={{ '请参考' + $json.productName + '的产品白底参考图，保持产品颜色、结构、比例、材质、按钮、接口、孔位和细节位置完全一致，不得添加或修改任何不存在的结构与装饰。生成该产品的顶视图图片。要求：单一视图，产品居中，完整清晰，纯白背景，真实电商白底摄影风格，1:1比例。' }}",
+              "type": "string"
+            },
+            {
+              "id": "67c27d29-5164-478b-b679-5e54c9f38d84",
+              "name": "promptBack",
+              "value": "={{ '请参考' + $json.productName + '的产品白底参考图，保持产品颜色、结构、比例、材质、按钮、接口、孔位和细节位置完全一致，不得添加或修改任何不存在的结构与装饰。生成该产品的背面视图图片。要求：单一视图，产品居中，完整清晰，纯白背景，真实电商白底摄影风格，1:1比例。'}}",
+              "type": "string"
+            },
+            {
+              "id": "4bd6eda4-673c-461f-8633-3b591a0935f3",
+              "name": "promptBottom",
+              "value": "={{ '请参考' + $json.productName + '的产品白底参考图，保持产品颜色、结构、比例、材质、按钮、接口、孔位和细节位置完全一致，不得添加或修改任何不存在的结构与装饰。生成该产品的底部视图图片。要求：单一视图，产品居中，完整清晰，纯白背景，真实电商白底摄影风格，1:1比例。'}}",
+              "type": "string"
+            },
+            {
+              "id": "28d023e4-172d-453a-b37a-1e8e3856a42d",
+              "name": "model",
+              "value": "即梦4.5",
+              "type": "string"
+            },
+            {
+              "id": "36ca9e0f-0283-460f-9389-a92734d4fe50",
+              "name": "ratio",
+              "value": "1:1",
+              "type": "string"
+            },
+            {
+              "id": "3f3d0e01-fecc-42f5-86c4-b2bc95c3eb7a",
+              "name": "resolution",
+              "value": "2k",
+              "type": "string"
+            },
+            {
+              "id": "merchroute-runtime-variants-e002",
+              "name": "variants",
+              "value": "={{ $json.variants }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "2aa56547-2903-4434-8888-8994fb543c55",
+      "name": "setParameter",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2208,
+        32
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json || {};\n\nif (typeof input.SKU !== 'string') throw new Error('n8n_setParameter_xxx.json 的 SKU 必须是 String。');\nif (typeof input.productName !== 'string') throw new Error('n8n_setParameter_xxx.json 的 productName 必须是 String。');\nif (typeof input.variants !== 'string') throw new Error('n8n_setParameter_xxx.json 的 variants 必须是 String。');\nconst SKU = input.SKU.trim();\nconst productName = input.productName.trim();\nconst variants = input.variants.trim();\nconst executionId = String($execution.id || '').trim();\nconst sourceSubmissionId = String(input.sourceSubmissionId || '').trim();\nif (!sourceSubmissionId) throw new Error('sourceSubmissionId 不能为空。');\nif (!/^\\d{7}$/.test(SKU)) throw new Error('n8n_setParameter_xxx.json 的 SKU 必须是保留前导零的 7 位数字。');\nif (!productName) throw new Error('n8n_setParameter_xxx.json 的 productName 不能为空。');\nif (!variants) throw new Error('n8n_setParameter_xxx.json 的 variants 不能为空。');\nif (!/^\\d+$/.test(executionId)) throw new Error('当前工作流 executionId 无效。');\n\nconst imageUrls = Array.isArray(input.imageUrls) ? input.imageUrls.map((value) => String(value || '').trim()) : [];\nif (imageUrls.length < 1 || imageUrls.length > 5 || imageUrls.some((url) => !/^https?:\\/\\//i.test(url))) {\n  throw new Error('imageUrls must contain 1-5 valid HTTP(S) image URLs.');\n}\n\nconst cleanName = (value) => String(value || '')\n  .trim()\n  .replace(/[<>:\"/\\\\|?*\\x00-\\x1F]/g, '_')\n  .replace(/[. ]+$/g, '')\n  || 'product';\n\nconst normalizeFolderPath = (value) => {\n  let result = String(value || '').trim().replace(/\\\\/g, '/');\n  while (result.length > 1 && result.endsWith('/')) result = result.slice(0, -1);\n  return result;\n};\n\nconst modelInput = String(input.model || '即梦4.5').trim();\nconst modelApiName = modelInput === '即梦4.5' ? 'jimeng-4.5' : modelInput;\nconst folderPath = normalizeFolderPath(input.downloadFatherFolder) + '/' + SKU + '-' + cleanName(productName) + '-' + executionId;\n\nconst views = [\n  { taskId: '01', view: 'front', label: '正面视图', promptField: 'promptFront', prompt: String(input.promptFront || '').trim() },\n  { taskId: '02', view: 'side', label: '侧俯视图', promptField: 'promptSide', prompt: String(input.promptSide || '').trim() },\n  { taskId: '03', view: 'top', label: '顶视图', promptField: 'promptTop', prompt: String(input.promptTop || '').trim() },\n  { taskId: '04', view: 'back', label: '背面视图', promptField: 'promptBack', prompt: String(input.promptBack || '').trim() },\n  { taskId: '05', view: 'bottom', label: '底部视图', promptField: 'promptBottom', prompt: String(input.promptBottom || '').trim() },\n];\n\nfor (const entry of views) {\n  if (!entry.prompt) throw new Error('setParameter.' + entry.promptField + ' is required.');\n}\n\nreturn views.map((entry, index) => ({\n  json: {\n    ...input,\n    SKU,\n    productName,\n    variants,\n    sourceSubmissionId,\n    n8nExecutionId: executionId,\n    modelApiName,\n    taskId: entry.taskId,\n    view: entry.view,\n    viewLabel: entry.label,\n    viewIndex: index + 1,\n    promptField: entry.promptField,\n    folderPath,\n    viewPrompt: entry.prompt,\n    imageUrls,\n  },\n  pairedItem: { item: 0 },\n}));"
+      },
+      "id": "ba928b0e-b70e-4e1a-a363-bda4084d13ec",
+      "name": "Build View Tasks",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        800,
+        16
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const retryPlan = $('Build Explicit Retry Batch').first().json || {};\nconst firstResults = Array.isArray(retryPlan.firstResults) ? retryPlan.firstResults.slice() : [];\nlet retryResults = [];\nif (retryPlan.hasRetryItems) {\n  const retryInput = $input.first().json || {};\n  if (retryInput.phase === 'retry' && Array.isArray(retryInput.tasks)) retryResults = retryInput.tasks;\n}\nconst byTaskId = new Map(firstResults.map((result) => [String(result.taskId || result.context?.taskId || ''), result]));\nfor (const retry of retryResults) {\n  const taskId = String(retry.taskId || retry.context?.taskId || '');\n  if (taskId) byTaskId.set(taskId, retry);\n}\nconst finalResults = [...byTaskId.values()].sort((a, b) => {\n  const ai = Number(a.context?.originalIndex ?? 999);\n  const bi = Number(b.context?.originalIndex ?? 999);\n  return ai - bi;\n});\n\nfunction pad(value, size = 2) {\n  return String(value).padStart(size, '0');\n}\nfunction timestampFor(index) {\n  const date = new Date(Date.now() + index);\n  return [date.getFullYear(), pad(date.getMonth() + 1), pad(date.getDate())].join('') + '-' +\n    [pad(date.getHours()), pad(date.getMinutes()), pad(date.getSeconds())].join('') + '-' +\n    pad(date.getMilliseconds(), 3);\n}\nfunction cleanName(value) {\n  return String(value || '').trim()\n    .replace(/[<>:\"/\\\\|?*\\x00-\\x1F]/g, '_')\n    .replace(/[. ]+$/g, '') || 'product';\n}\n\nconst batchItems = [];\nconst failedTasks = [];\nlet successTaskCount = 0;\nconst pendingStatuses = new Set(['reserved', 'processing']);\nfor (const [index, result] of finalResults.entries()) {\n  const context = result.context || {};\n  const urls = Array.isArray(result.imageUrls)\n    ? [...new Set(result.imageUrls.filter((url) => typeof url === 'string' && /^https?:\\/\\//i.test(url)))]\n    : [];\n  const taskId = String(result.taskId || context.taskId || pad(index + 1));\n  const view = String(context.view || '');\n  const viewLabel = String(context.viewLabel || ('item ' + (index + 1)));\n  const retryAttempt = Number(context.retryAttempt ?? result.retryAttempt ?? 0);\n  const status = String(result.status || 'unknown');\n  const failCode = String(result.failCode || '');\n  const errorMessage = String(result.errorMessage || result.error || '');\n  if (status !== 'success' || urls.length < 1) {\n    const retryReason = status === 'submission_unknown'\n      ? 'submission_unknown_no_retry'\n      : (pendingStatuses.has(status)\n          ? 'poll_limit_reached'\n          : (status === 'failed'\n              ? String(context.retryReason || 'explicit_generation_failure')\n              : (status === 'success' ? 'success_without_image_urls' : 'unexpected_task_state')));\n    const error = errorMessage || failCode || (status === 'submission_unknown'\n      ? '提交结果未知且没有 historyId；为避免重复生成，禁止自动重提'\n      : (pendingStatuses.has(status)\n          ? '达到轮询上限，保留现有任务状态供后续恢复'\n          : (status === 'success' ? '即梦任务成功但未返回图片 URL' : '即梦任务未返回图片 URL')));\n    failedTasks.push({\n      taskId,\n      view,\n      viewLabel,\n      promptField: String(context.promptField || ''),\n      historyId: String(result.historyId || ''),\n      status,\n      retryAttempt,\n      retryReason,\n      failCode,\n      errorMessage,\n      error,\n      rawStatus: result.rawStatus ?? '',\n    });\n    continue;\n  }\n  successTaskCount += 1;\n  for (const [imageIndex, fileUrl] of urls.entries()) {\n    batchItems.push({\n      fileUrl,\n      folderPath: context.folderPath,\n      fileName: [taskId, cleanName(context.productName), viewLabel, timestampFor(batchItems.length + imageIndex)].join('-') + '.png',\n      mimeType: 'image/png',\n      fileKind: 'image',\n      taskId,\n      view,\n      viewLabel,\n      sourceImageIndex: imageIndex + 1,\n      retryAttempt,\n      historyId: String(result.historyId || ''),\n    });\n  }\n}\n\nif (batchItems.length < 1) {\n  throw new Error('即梦任务全部失败或仍在处理中，没有可下载图片。任务状态：' + JSON.stringify(failedTasks));\n}\nconst folderPaths = [...new Set(batchItems.map((entry) => entry.folderPath).filter(Boolean))];\nif (folderPaths.length !== 1) throw new Error('所有图片必须保存到同一个子目录。');\nconst identity = finalResults.map((entry) => entry.context || {}).find((entry) => entry.SKU && entry.productName && entry.variants) || {};\nif (typeof identity.SKU !== 'string' || !/^\\d{7}$/.test(identity.SKU.trim())) throw new Error('输出任务缺少合法 String SKU。');\nif (typeof identity.productName !== 'string' || !identity.productName.trim()) throw new Error('输出任务缺少合法 String productName。');\nif (typeof identity.variants !== 'string' || !identity.variants.trim()) throw new Error('输出任务缺少合法 String variants。');\nconst taskContext = {\n  schemaVersion: 2,\n  workflowCode: 'E002',\n  SKU: identity.SKU.trim(),\n  productName: identity.productName.trim(),\n  variants: identity.variants.trim(),\n  ...(identity.variantId ? { variantId: String(identity.variantId) } : {}),\n  sourceSubmissionId: String(identity.sourceSubmissionId || ''),\n  n8nExecutionId: String($execution.id || ''),\n  generationMode: 'async-history-polling',\n  taskResults: finalResults.map((result) => ({\n    taskId: String(result.taskId || result.context?.taskId || ''),\n    view: String(result.context?.view || ''),\n    historyId: String(result.historyId || ''),\n    status: String(result.status || ''),\n    rawStatus: result.rawStatus ?? '',\n    failCode: String(result.failCode || ''),\n    errorMessage: String(result.errorMessage || result.error || ''),\n    count: Number(result.count || 0),\n    retryAttempt: Number(result.context?.retryAttempt ?? result.retryAttempt ?? 0),\n  })),\n};\nconst imageDownloadItemCount = batchItems.length;\nbatchItems.push({\n  fileUrl: '',\n  contentText: JSON.stringify(taskContext, null, 2),\n  folderPath: folderPaths[0],\n  fileName: 'task-context.json',\n  mimeType: 'application/json; charset=utf-8',\n  fileKind: 'text',\n});\nreturn [{ json: {\n  ok: failedTasks.length === 0,\n  status: failedTasks.length === 0 ? 'success' : 'partial_success',\n  productName: identity.productName,\n  folderPath: folderPaths[0],\n  generatedTaskCount: finalResults.length,\n  firstPassTaskCount: firstResults.length,\n  retriedTaskCount: retryResults.length,\n  successTaskCount,\n  failedTaskCount: failedTasks.length,\n  imageDownloadItemCount,\n  downloadItemCount: batchItems.length,\n  failedTasks,\n  batchItems,\n  concurrency: 8,\n} }];"
+      },
+      "id": "c9af5dd7-e48a-4ecf-938e-2b75960544d2",
+      "name": "Build Download Batch",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4384,
+        16
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "KmZ1AibtVGxzCgzc",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/KmZ1AibtVGxzCgzc",
+          "cachedResultName": "S001-Url文件下载-v02"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "batchItems": "={{ $json.batchItems }}",
+            "concurrency": "={{ $json.concurrency }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "fileUrl",
+              "displayName": "fileUrl",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": true
+            },
+            {
+              "id": "folderPath",
+              "displayName": "folderPath",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": true
+            },
+            {
+              "id": "fileName",
+              "displayName": "fileName",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": true
+            },
+            {
+              "id": "contentText",
+              "displayName": "contentText",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": true
+            },
+            {
+              "id": "mimeType",
+              "displayName": "mimeType",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": true
+            },
+            {
+              "id": "fileKind",
+              "displayName": "fileKind",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": true
+            },
+            {
+              "id": "batchItems",
+              "displayName": "batchItems",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "array",
+              "removed": false
+            },
+            {
+              "id": "concurrency",
+              "displayName": "concurrency",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "number",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "b02eca06-3175-48bd-a220-cf4bdb5fab17",
+      "name": "Call 'S001-Url文件下载-v02'",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        5056,
+        16
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const fs = require('fs');\nconst path = require('path');\n\nconst items = $input.all();\nif (items.length !== 1) {\n  throw new Error(`Ensure Download Folder expects exactly 1 item, received ${items.length}.`);\n}\n\nconst rawFolderPath = items[0]?.json?.folderPath;\nif (typeof rawFolderPath !== 'string' || !rawFolderPath.trim()) {\n  throw new Error('folderPath is required');\n}\n\nconst folderPath = path.normalize(rawFolderPath.trim());\nfs.mkdirSync(folderPath, { recursive: true });\n\nconst stat = fs.statSync(folderPath);\nif (!stat.isDirectory()) {\n  throw new Error(`Output path exists but is not a directory: ${folderPath}`);\n}\n\nreturn [{\n  json: {\n    ok: true,\n    folderPath,\n    stdout: `${folderPath}\\n`,\n    stderr: '',\n    exitCode: 0,\n  },\n}];"
+      },
+      "id": "8ea36dab-5877-4428-82a7-ed0dad859b1d",
+      "name": "Ensure Download Folder",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4608,
+        16
+      ],
+      "notes": "使用 fs/path 原子创建下载目录；保留旧 Execute Command 的 stdout/stderr/exitCode 返回契约。"
+    },
+    {
+      "parameters": {
+        "jsCode": "const source = $('Build Download Batch').first().json || {};\nconst commandResult = $input.first().json || {};\n\nif (!source.folderPath) {\n  throw new Error('folderPath is required before calling download sub-workflow.');\n}\n\nreturn [{\n  json: {\n    ...source,\n    ensureDownloadFolder: {\n      ok: true,\n      folderPath: source.folderPath,\n      stdout: commandResult.stdout || '',\n      stderr: commandResult.stderr || '',\n      exitCode: commandResult.exitCode ?? 0,\n    },\n  },\n}];\n"
+      },
+      "id": "06660f52-e8ce-47fa-82cd-7c7892ddf9a2",
+      "name": "Restore Download Batch",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4832,
+        16
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## E002-v03-白底图-生5视图\n### 主要功能\n监听新增产品目录，等待目录稳定后读取 1-5 张产品图，并调用 S016 解析目录中最新的 n8n_setParameter*.json，再调用即梦 4.5 生成五视图并下载成功结果。\n\n### 输入与参数来源\n- 产品目录：来自 Local File Trigger.path。\n- 产品图片：支持 jpg/jpeg/png/webp，数量 1-5 张。\n- S016 调用参数：filePrefix=n8n_setParameter、fileExtension=json、returnMode=latest。\n- productName：优先使用 JSON 的 data.productName；无匹配 JSON、解析失败或字段为空时使用源图文件夹名。\n- downloadFatherFolder：优先使用 JSON 的 data.downloadFatherFolder；无可用值时使用 __MERCHROUTE_DATA_ROOT__\\02_GenerateFolder\\E002-5视图-下载。\n- setParameter：继续配置五视图提示词、model、ratio、resolution。\n\n### 核心流程\n- Dedupe Folder Path / Wait For Folder Stable：去重并等待源图目录稳定。\n- Call 'S016-JSON文件-解析'：读取最新配置 JSON。\n- Read Product Folder Files / Parse Product Folder：筛选图片并生成本地文件路径，不再生成 Base64。\n- Call S005 / Attach Uploaded Image URLs：以并发 5 批量上传 1-5 张参考图并按 inputIndex + sourceFileName 回配 URL；任一上传失败时整批停止。\n- Build View Tasks：生成正面、侧俯、顶视、背面和底部 5 个任务。\n- Generate View Image：把 SiliconFlow HTTP(S) 图片 URL 与视图参数提交给即梦；失败任务仅重试一次并沿用原 URL，其它成功结果继续下载。\n- Call 'S001-Url文件下载-v02'：批量保存成功生成的图片。\n\n### 输出\n- 下载目录：downloadFatherFolder/产品名-时间戳。\n- 图片文件名：任务id-产品名-视图名-时间戳.png。\n- 下载并发必须为 4 的倍数。\n\n### 注意\n- 下载子工作流只负责下载，主工作流负责提前创建目录。\n- Code 节点不使用 fs 模块。\n- 修改含 Local File Trigger 的工作流后，如需启用监听，应重新激活工作流。",
+        "height": 732,
+        "width": 620,
+        "color": 4
+      },
+      "id": "0840b1da-8a3f-4ee4-bada-a26c1f9c170e",
+      "name": "工作流说明便签",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -32,
+        -160
+      ]
+    },
+    {
+      "parameters": {
+        "command": "={{ $json.folderStableCommand }}"
+      },
+      "id": "4020cdb1-2586-4e45-801c-9465abc045f2",
+      "name": "Wait For Folder Stable",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        1088,
+        32
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const sourceItems = $('Dedupe Folder Path').all();\nconst commandItems = $input.all();\n\nfunction parseWaitResult(commandJson) {\n  const stdout = String(commandJson?.stdout || '').trim();\n  if (!stdout) return {};\n  const line = stdout.split(/\\r?\\n/).filter(Boolean).pop() || '';\n  try {\n    return JSON.parse(line);\n  } catch (error) {\n    return { rawStdout: stdout, parseError: error.message };\n  }\n}\n\nreturn commandItems.map((item, index) => {\n  const source = sourceItems[index]?.json || sourceItems[0]?.json || {};\n  const waitForFolderStable = parseWaitResult(item.json || {});\n  const productFolderPath = source.productFolderPath || waitForFolderStable.folderPath;\n\n  if (!productFolderPath) {\n    throw new Error('productFolderPath is required after Wait For Folder Stable.');\n  }\n\n  return {\n    json: {\n      ...source,\n      productFolderPath,\n      fileSelector: productFolderPath.replace(/\\\\/g, '/').replace(/\\/+$/, '') + '/*',\n      waitForFolderStable,\n    },\n    pairedItem: sourceItems[index]?.pairedItem || { item: index },\n  };\n});"
+      },
+      "id": "d0c049f3-5af4-4c92-9d90-47cd620189e4",
+      "name": "Restore Stable Folder Path",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1312,
+        32
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "gDMR3Mxnm9dKQJtO",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/gDMR3Mxnm9dKQJtO",
+          "cachedResultName": "S016-JSON文件-解析"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "folderPath": "={{ $('Local File Trigger').first().json.path }}",
+            "filePrefix": "n8n_setParameter",
+            "fileExtension": "json",
+            "returnMode": "latest"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "folderPath",
+              "displayName": "folderPath",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "filePrefix",
+              "displayName": "filePrefix",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "fileExtension",
+              "displayName": "fileExtension",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "returnMode",
+              "displayName": "returnMode",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "e25fa6e1-e0e7-4ffc-b2a5-4f5aef19e806",
+      "name": "Call 'S016-JSON文件-解析'",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        1536,
+        32
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "5fKlIwJWfXJM1y4E",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/5fKlIwJWfXJM1y4E",
+          "cachedResultName": "S005-文件上传-转URL-硅基API-v4"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "filePaths": "={{ $json.sourceFilePaths }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "filePaths",
+              "displayName": "filePaths",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "array",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "47bcc3a4-3691-4466-891d-292a9819ba08",
+      "name": "Call 'S005-文件上传-转URL-硅基API-v4'",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        2432,
+        -176
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const config = $('setParameter').first().json || {};\nconst sourceFilePaths = Array.isArray(config.sourceFilePaths) ? config.sourceFilePaths : [];\nconst sourceImages = Array.isArray(config.sourceImages) ? config.sourceImages : [];\nconst uploadedItems = $input.all();\n\nfunction cleanString(value) {\n  return String(value ?? '').trim();\n}\n\nfunction baseName(value) {\n  return cleanString(value).replace(/\\\\/g, '/').split('/').filter(Boolean).pop() || '';\n}\n\nfunction isHttpUrl(value) {\n  return /^https?:\\/\\//i.test(cleanString(value));\n}\n\nif (sourceFilePaths.length < 1 || sourceFilePaths.length > 5) {\n  throw new Error('setParameter.sourceFilePaths must contain 1-5 images.');\n}\nif (sourceImages.length !== sourceFilePaths.length) {\n  throw new Error('sourceImages and sourceFilePaths count mismatch.');\n}\nif (uploadedItems.length !== sourceFilePaths.length) {\n  throw new Error('SiliconFlow upload count mismatch: expected ' + sourceFilePaths.length + ', received ' + uploadedItems.length);\n}\n\nconst urlsByIndex = new Map();\nfor (const [position, item] of uploadedItems.entries()) {\n  const row = item.json || {};\n  const inputIndex = Number(row.inputIndex);\n  const sourceFileName = cleanString(row.sourceFileName);\n  const url = cleanString(row.url);\n  if (!Number.isInteger(inputIndex) || inputIndex < 0 || inputIndex >= sourceFilePaths.length) {\n    throw new Error('Invalid SiliconFlow inputIndex at result ' + (position + 1) + ': ' + row.inputIndex);\n  }\n  if (urlsByIndex.has(inputIndex)) throw new Error('Duplicate SiliconFlow inputIndex: ' + inputIndex);\n  const expectedFileName = cleanString(sourceImages[inputIndex]?.fileName || baseName(sourceFilePaths[inputIndex]));\n  if (!sourceFileName || sourceFileName !== expectedFileName) {\n    throw new Error('SiliconFlow filename mismatch at inputIndex ' + inputIndex + ': expected ' + expectedFileName + ', received ' + (sourceFileName || '(empty)'));\n  }\n  if (!isHttpUrl(url)) throw new Error('SiliconFlow URL is missing or invalid for ' + expectedFileName);\n  urlsByIndex.set(inputIndex, url);\n}\n\nconst imageUrls = sourceFilePaths.map((filePath, index) => {\n  const url = urlsByIndex.get(index);\n  if (!url) throw new Error('Missing SiliconFlow URL for ' + baseName(filePath));\n  return url;\n});\n\nreturn [{ json: { ...config, imageUrls } }];"
+      },
+      "id": "331e685d-5fb4-441f-94cc-d2a97e0d1400",
+      "name": "Attach Uploaded Image URLs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2656,
+        -176
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all().map((item) => item.json || {});\nif (items.length !== 5) throw new Error('Build View Tasks 必须输出 5 个视图任务。');\nconst first = items[0];\nconst sourceSubmissionId = String(first.sourceSubmissionId || '').trim();\nif (!sourceSubmissionId) {\n  throw new Error('sourceSubmissionId 不能为空；禁止回退到目录名创建即梦任务。');\n}\nif (items.some((task) => String(task.sourceSubmissionId || '').trim() !== sourceSubmissionId)) {\n  throw new Error('五个视图任务的 sourceSubmissionId 必须一致。');\n}\nconst imageUrls = Array.isArray(first.imageUrls)\n  ? first.imageUrls.map((value) => String(value || '').trim())\n  : [];\nif (imageUrls.length < 1 || imageUrls.length > 5 || imageUrls.some((url) => !/^https?:\\/\\//i.test(url))) {\n  throw new Error('异步提交需要 1-5 个有效的 OSS HTTP(S) imageUrls。');\n}\nconst sourceImages = Array.isArray(first.sourceImages)\n  ? first.sourceImages.map((entry, index) => ({\n      sourceFileName: String(entry?.sourceFileName || entry?.fileName || ''),\n      fileExtension: String(entry?.fileExtension || ''),\n      mimeType: String(entry?.mimeType || ''),\n      fileSize: Number(entry?.fileSize ?? entry?.bytes ?? 0),\n      originalIndex: index,\n    }))\n  : [];\nif (sourceImages.length !== imageUrls.length || sourceImages.some((entry) => !entry.sourceFileName)) {\n  throw new Error('sourceImages 必须与 imageUrls 同序同数量，并包含稳定的 sourceFileName。');\n}\nconst batchKey = ['E002', 'v1', sourceSubmissionId, 'attempt-0'].join(':');\nconst tasks = items.map((task, index) => ({\n  taskId: String(task.taskId || ''),\n  view: String(task.view || ''),\n  viewLabel: String(task.viewLabel || ''),\n  promptField: String(task.promptField || ''),\n  originalIndex: index,\n  prompt: String(task.viewPrompt || ''),\n  idempotencyKey: ['E002', 'v1', sourceSubmissionId, String(task.view || ''), 'attempt-0'].join(':'),\n  retryAttempt: 0,\n  SKU: String(task.SKU || ''),\n  productName: String(task.productName || ''),\n  variants: String(task.variants || ''),\n  variantId: String(task.variantId || ''),\n  sourceSubmissionId,\n  sourceImages,\n  n8nExecutionId: String(task.n8nExecutionId || ''),\n  folderPath: String(task.folderPath || ''),\n}));\nif (tasks.some((task) => !task.taskId || !task.view || !task.prompt)) {\n  throw new Error('异步提交任务缺少 taskId、view 或 prompt。');\n}\nreturn [{ json: {\n  batchKey,\n  phase: 'initial',\n  concurrency: 5,\n  common: {\n    model: String(first.modelApiName || ''),\n    ratio: String(first.ratio || ''),\n    resolution: String(first.resolution || ''),\n  },\n  images: imageUrls,\n  sourceImages,\n  tasks,\n} }];"
+      },
+      "id": "f903859d-3b52-4614-b459-f431f23bacd8",
+      "name": "Build Async Submit Batch",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1024,
+        16
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:8000/v1/images/tasks/batch",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ batchKey: $json.batchKey, concurrency: $json.concurrency, common: $json.common, images: $json.images, sourceImages: $json.sourceImages, tasks: $json.tasks }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 900000
+        }
+      },
+      "id": "3e2ae7fb-3b05-4310-ace4-b5d7af9e5eed",
+      "name": "Submit View Tasks Async",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1248,
+        16
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json || {};\nfunction safeDiagnosticText(value, limit = 600) {\n  if (value === undefined || value === null || value === '') return '';\n  const raw = typeof value === 'string' ? value : JSON.stringify(value);\n  return String(raw)\n    .replace(/\\b(?:https?|data):[^\\s\"'<>]+/gi, '[redacted-url]')\n    .replace(/<[^>]*>/g, '[redacted-html]')\n    .replace(/\\s+/g, ' ')\n    .trim()\n    .slice(0, limit);\n}\nfunction failureSummary(value) {\n  return {\n    code: value.code,\n    stage: safeDiagnosticText(value.stage || value.details?.stage),\n    automaticRetriesExhausted: value.automaticRetriesExhausted ?? value.details?.automaticRetriesExhausted ?? null,\n    reservationState: safeDiagnosticText(value.reservationState || value.details?.reservationState),\n    message: safeDiagnosticText(value.message),\n    error: safeDiagnosticText(value.error),\n    details: safeDiagnosticText(value.details, 1000),\n  };\n}\nconst responseCode = String(response.code ?? '').trim();\nconst acceptsSubmissionUnknown = responseCode === 'submission_unknown';\nconst responseOk = response.ok === true && (response.code === undefined || Number(response.code) === 0);\nif (!responseOk && !acceptsSubmissionUnknown) {\n  throw new Error('异步提交失败：' + JSON.stringify(failureSummary(response)));\n}\nif (!Array.isArray(response.tasks) || response.tasks.length !== 5) {\n  throw new Error('异步提交必须返回 5 个 tasks：' + JSON.stringify(response));\n}\nconst allowedStatuses = new Set(['reserved', 'processing', 'success', 'failed', 'submission_unknown']);\nconst historyRequiredStatuses = new Set(['processing', 'success', 'failed']);\nconst invalid = response.tasks.filter((task) => {\n  const status = String(task?.status || '');\n  return !allowedStatuses.has(status)\n    || (historyRequiredStatuses.has(status) && !String(task?.historyId || '').trim());\n});\nif (invalid.length) {\n  throw new Error('异步提交存在无效状态或应有但缺失的 historyId，禁止自动重提：' + JSON.stringify(invalid));\n}\nconst batch = $('Build Async Submit Batch').first().json || {};\nreturn [{ json: {\n  ...response,\n  batchKey: batch.batchKey,\n  phase: 'initial',\n  pollCount: 0,\n  maxPollCount: 120,\n  pollIntervalSeconds: 10,\n  allTerminal: false,\n  pollLimitReached: false,\n  terminalOrLimit: false,\n} }];"
+      },
+      "id": "abf23a3c-4f61-4445-a908-38d3a18c94a9",
+      "name": "Initialize View Polling",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1472,
+        16
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 10
+      },
+      "id": "88b529ba-84fb-4091-b8ce-d3c23eec0171",
+      "name": "Wait View Tasks",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1696,
+        16
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:8000/v1/images/tasks/status",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ batchKey: $json.batchKey, phase: $json.phase, pollCount: $json.pollCount, maxPollCount: $json.maxPollCount, concurrency: 4, tasks: $json.tasks }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 60000
+        }
+      },
+      "id": "195f4010-09f2-4e50-818f-5ff68a7199e0",
+      "name": "Check View Tasks Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1920,
+        16
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json || {};\nconst responseCode = String(input.code ?? '').trim();\nconst acceptsSubmissionUnknown = responseCode === 'submission_unknown';\nconst responseOk = input.ok === true && (input.code === undefined || Number(input.code) === 0);\nif (!responseOk && !acceptsSubmissionUnknown) {\n  throw new Error('查询即梦任务状态失败；已保留原 historyId，禁止重新生成：' + JSON.stringify({ code: input.code, message: input.message, error: input.error }));\n}\nconst tasks = Array.isArray(input.tasks) ? input.tasks : [];\nif (tasks.length !== 5) throw new Error('查询即梦任务状态必须返回 5 个 tasks。');\nconst allowed = new Set(['reserved', 'processing', 'success', 'failed', 'submission_unknown']);\nconst historyRequiredStatuses = new Set(['processing', 'success', 'failed']);\nif (tasks.some((task) => {\n  const status = String(task?.status || '');\n  return !allowed.has(status)\n    || (historyRequiredStatuses.has(status) && !String(task?.historyId || '').trim());\n})) {\n  throw new Error('查询结果包含无效状态或缺少 historyId，禁止重新生成：' + JSON.stringify(tasks));\n}\nconst pollCount = Number(input.pollCount || 0) + 1;\nconst maxPollCount = Math.max(1, Number(input.maxPollCount || 120));\nconst terminalStatuses = new Set(['success', 'failed', 'submission_unknown']);\nconst allTerminal = tasks.every((task) => terminalStatuses.has(String(task.status || '')));\nconst pollLimitReached = pollCount >= maxPollCount;\nreturn [{ json: {\n  ...input,\n  phase: 'initial',\n  pollCount,\n  maxPollCount,\n  allTerminal,\n  pollLimitReached,\n  terminalOrLimit: allTerminal || pollLimitReached,\n} }];"
+      },
+      "id": "cf42193c-5b04-4e7e-8593-1ebbcca4d621",
+      "name": "Evaluate View Tasks",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2144,
+        16
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "9faebc8e-0253-4e02-bde4-5df3a2ccd608",
+              "leftValue": "={{ $json.terminalOrLimit }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "72c20d70-8493-43a6-ae46-0e585c3e4d48",
+      "name": "All View Tasks Terminal",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2368,
+        16
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const initial = $input.first().json || {};\nconst firstResults = Array.isArray(initial.tasks) ? initial.tasks : [];\nif (firstResults.length !== 5) throw new Error('初次轮询结果必须包含 5 个任务。');\nconst sourceTasks = $('Build View Tasks').all().map((item) => item.json || {});\nconst sourceBatch = $('Build Async Submit Batch').first().json || {};\nconst explicitFailures = firstResults.filter((task) => task.status === 'failed');\nconst retryTasks = explicitFailures.map((failed) => {\n  const source = sourceTasks.find((task) => String(task.taskId) === String(failed.taskId)) || {};\n  const priorContext = failed.context || {};\n  const sourceSubmissionId = String(source.sourceSubmissionId || priorContext.sourceSubmissionId || '').trim();\n  const view = String(source.view || priorContext.view || '').trim();\n  if (!sourceSubmissionId || !view) throw new Error('明确失败任务缺少 sourceSubmissionId 或 view。');\n  return {\n    taskId: String(source.taskId || failed.taskId || ''),\n    view,\n    viewLabel: String(source.viewLabel || priorContext.viewLabel || ''),\n    promptField: String(source.promptField || priorContext.promptField || ''),\n    originalIndex: Number(priorContext.originalIndex ?? (Number(source.viewIndex || 1) - 1)),\n    prompt: String(source.viewPrompt || priorContext.prompt || ''),\n    idempotencyKey: ['E002', 'v1', sourceSubmissionId, view, 'attempt-1'].join(':'),\n    retryAttempt: 1,\n    retryReason: 'explicit_generation_failure',\n    SKU: String(source.SKU || priorContext.SKU || ''),\n    productName: String(source.productName || priorContext.productName || ''),\n    variants: String(source.variants || priorContext.variants || ''),\n    variantId: String(source.variantId || priorContext.variantId || ''),\n    sourceSubmissionId,\n    sourceImages: Array.isArray(source.sourceImages) ? source.sourceImages : (priorContext.sourceImages || []),\n    n8nExecutionId: String(source.n8nExecutionId || priorContext.n8nExecutionId || ''),\n    folderPath: String(source.folderPath || priorContext.folderPath || ''),\n  };\n});\nreturn [{ json: {\n  firstResults,\n  hasRetryItems: retryTasks.length > 0,\n  retryCount: retryTasks.length,\n  batchKey: ['E002', 'v1', String(sourceTasks[0]?.sourceSubmissionId || ''), 'attempt-1'].join(':'),\n  phase: 'retry',\n  concurrency: 5,\n  common: sourceBatch.common,\n  images: sourceBatch.images,\n  sourceImages: sourceBatch.sourceImages,\n  tasks: retryTasks,\n  initialPollCount: initial.pollCount || 0,\n  initialPollLimitReached: Boolean(initial.pollLimitReached),\n} }];"
+      },
+      "id": "077db80d-9007-48ff-ab15-a6508c195dac",
+      "name": "Build Explicit Retry Batch",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2592,
+        16
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "b1cba0d3-c02b-41b1-9ac8-fe5556de9ead",
+              "leftValue": "={{ $json.hasRetryItems }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "83c89b2a-bf70-48a5-8fa5-a926384e5b91",
+      "name": "Has Explicit Retry Tasks",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2816,
+        16
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:8000/v1/images/tasks/batch",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ batchKey: $json.batchKey, concurrency: $json.concurrency, common: $json.common, images: $json.images, sourceImages: $json.sourceImages, tasks: $json.tasks }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 900000
+        }
+      },
+      "id": "6ce97a1f-4134-4208-aa60-a3155928cd7c",
+      "name": "Submit Explicit Retry Tasks",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        3040,
+        144
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json || {};\nfunction safeDiagnosticText(value, limit = 600) {\n  if (value === undefined || value === null || value === '') return '';\n  const raw = typeof value === 'string' ? value : JSON.stringify(value);\n  return String(raw)\n    .replace(/\\b(?:https?|data):[^\\s\"'<>]+/gi, '[redacted-url]')\n    .replace(/<[^>]*>/g, '[redacted-html]')\n    .replace(/\\s+/g, ' ')\n    .trim()\n    .slice(0, limit);\n}\nfunction failureSummary(value) {\n  return {\n    code: value.code,\n    stage: safeDiagnosticText(value.stage || value.details?.stage),\n    automaticRetriesExhausted: value.automaticRetriesExhausted ?? value.details?.automaticRetriesExhausted ?? null,\n    reservationState: safeDiagnosticText(value.reservationState || value.details?.reservationState),\n    message: safeDiagnosticText(value.message),\n    error: safeDiagnosticText(value.error),\n    details: safeDiagnosticText(value.details, 1000),\n  };\n}\nconst responseCode = String(response.code ?? '').trim();\nconst acceptsSubmissionUnknown = responseCode === 'submission_unknown';\nconst responseOk = response.ok === true && (response.code === undefined || Number(response.code) === 0);\nif (!responseOk && !acceptsSubmissionUnknown) {\n  throw new Error('明确失败任务的重试提交失败：' + JSON.stringify(failureSummary(response)));\n}\nconst retryBatch = $('Build Explicit Retry Batch').first().json || {};\nif (!Array.isArray(response.tasks) || response.tasks.length !== Number(retryBatch.retryCount || 0)) {\n  throw new Error('重试提交返回的 tasks 数量不正确：' + JSON.stringify(response));\n}\nconst allowedStatuses = new Set(['reserved', 'processing', 'success', 'failed', 'submission_unknown']);\nconst historyRequiredStatuses = new Set(['processing', 'success', 'failed']);\nconst invalid = response.tasks.filter((task) => {\n  const status = String(task?.status || '');\n  return !allowedStatuses.has(status)\n    || (historyRequiredStatuses.has(status) && !String(task?.historyId || '').trim());\n});\nif (invalid.length) throw new Error('重试提交存在无效状态或应有但缺失的 historyId，禁止自动重提：' + JSON.stringify(invalid));\nreturn [{ json: {\n  ...response,\n  batchKey: retryBatch.batchKey,\n  phase: 'retry',\n  pollCount: 0,\n  maxPollCount: 120,\n  pollIntervalSeconds: 10,\n  allTerminal: false,\n  pollLimitReached: false,\n  terminalOrLimit: false,\n} }];"
+      },
+      "id": "8e354147-c079-44ab-b9bc-b43fe36bbf4b",
+      "name": "Initialize Retry Polling",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3264,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 10
+      },
+      "id": "1f3ed387-4577-49c0-98cc-9b3a05d72f1e",
+      "name": "Wait Retry Tasks",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        3488,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:8000/v1/images/tasks/status",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ batchKey: $json.batchKey, phase: $json.phase, pollCount: $json.pollCount, maxPollCount: $json.maxPollCount, concurrency: 4, tasks: $json.tasks }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 60000
+        }
+      },
+      "id": "91ad16ee-7725-48bd-ae04-5a62fc11d31b",
+      "name": "Check Retry Tasks Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        3712,
+        144
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json || {};\nconst responseCode = String(input.code ?? '').trim();\nconst acceptsSubmissionUnknown = responseCode === 'submission_unknown';\nconst responseOk = input.ok === true && (input.code === undefined || Number(input.code) === 0);\nif (!responseOk && !acceptsSubmissionUnknown) {\n  throw new Error('查询重试任务状态失败；已保留原 historyId，禁止再次生成：' + JSON.stringify({ code: input.code, message: input.message, error: input.error }));\n}\nconst tasks = Array.isArray(input.tasks) ? input.tasks : [];\nconst retryPlan = $('Build Explicit Retry Batch').first().json || {};\nif (!tasks.length || tasks.length !== Number(retryPlan.retryCount || 0)) {\n  throw new Error('查询重试任务状态返回的 tasks 数量不正确。');\n}\nconst allowed = new Set(['reserved', 'processing', 'success', 'failed', 'submission_unknown']);\nconst historyRequiredStatuses = new Set(['processing', 'success', 'failed']);\nif (tasks.some((task) => {\n  const status = String(task?.status || '');\n  return !allowed.has(status)\n    || (historyRequiredStatuses.has(status) && !String(task?.historyId || '').trim());\n})) {\n  throw new Error('重试查询结果包含无效状态或缺少 historyId，禁止再次生成：' + JSON.stringify(tasks));\n}\nconst pollCount = Number(input.pollCount || 0) + 1;\nconst maxPollCount = Math.max(1, Number(input.maxPollCount || 120));\nconst terminalStatuses = new Set(['success', 'failed', 'submission_unknown']);\nconst allTerminal = tasks.every((task) => terminalStatuses.has(String(task.status || '')));\nconst pollLimitReached = pollCount >= maxPollCount;\nreturn [{ json: {\n  ...input,\n  phase: 'retry',\n  pollCount,\n  maxPollCount,\n  allTerminal,\n  pollLimitReached,\n  terminalOrLimit: allTerminal || pollLimitReached,\n} }];"
+      },
+      "id": "f0cce826-74ff-4750-9252-8855514f79fc",
+      "name": "Evaluate Retry Tasks",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3936,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c7cab7f4-c71f-43f0-ad2c-c6df94afc8ea",
+              "leftValue": "={{ $json.terminalOrLimit }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "9975e191-a49d-4d83-a0e9-368b2a8023b5",
+      "name": "All Retry Tasks Terminal",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        4160,
+        144
+      ]
+    }
+  ],
+  "connections": {
+    "Local File Trigger": {
+      "main": [
+        [
+          {
+            "node": "Dedupe Folder Path",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dedupe Folder Path": {
+      "main": [
+        [
+          {
+            "node": "Wait For Folder Stable",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Product Folder Files": {
+      "main": [
+        [
+          {
+            "node": "Parse Product Folder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Product Folder": {
+      "main": [
+        [
+          {
+            "node": "setParameter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "setParameter": {
+      "main": [
+        [
+          {
+            "node": "Call 'S005-文件上传-转URL-硅基API-v4'",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ensure Download Folder": {
+      "main": [
+        [
+          {
+            "node": "Restore Download Batch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Restore Download Batch": {
+      "main": [
+        [
+          {
+            "node": "Call 'S001-Url文件下载-v02'",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait For Folder Stable": {
+      "main": [
+        [
+          {
+            "node": "Restore Stable Folder Path",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Restore Stable Folder Path": {
+      "main": [
+        [
+          {
+            "node": "Call 'S016-JSON文件-解析'",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call 'S016-JSON文件-解析'": {
+      "main": [
+        [
+          {
+            "node": "Read Product Folder Files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call 'S005-文件上传-转URL-硅基API-v4'": {
+      "main": [
+        [
+          {
+            "node": "Attach Uploaded Image URLs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Attach Uploaded Image URLs": {
+      "main": [
+        [
+          {
+            "node": "Build View Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build View Tasks": {
+      "main": [
+        [
+          {
+            "node": "Build Async Submit Batch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Async Submit Batch": {
+      "main": [
+        [
+          {
+            "node": "Submit View Tasks Async",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Submit View Tasks Async": {
+      "main": [
+        [
+          {
+            "node": "Initialize View Polling",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Initialize View Polling": {
+      "main": [
+        [
+          {
+            "node": "Wait View Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait View Tasks": {
+      "main": [
+        [
+          {
+            "node": "Check View Tasks Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check View Tasks Status": {
+      "main": [
+        [
+          {
+            "node": "Evaluate View Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate View Tasks": {
+      "main": [
+        [
+          {
+            "node": "All View Tasks Terminal",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "All View Tasks Terminal": {
+      "main": [
+        [
+          {
+            "node": "Build Explicit Retry Batch",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Wait View Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Explicit Retry Batch": {
+      "main": [
+        [
+          {
+            "node": "Has Explicit Retry Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Explicit Retry Tasks": {
+      "main": [
+        [
+          {
+            "node": "Submit Explicit Retry Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Download Batch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Submit Explicit Retry Tasks": {
+      "main": [
+        [
+          {
+            "node": "Initialize Retry Polling",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Initialize Retry Polling": {
+      "main": [
+        [
+          {
+            "node": "Wait Retry Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait Retry Tasks": {
+      "main": [
+        [
+          {
+            "node": "Check Retry Tasks Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Retry Tasks Status": {
+      "main": [
+        [
+          {
+            "node": "Evaluate Retry Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate Retry Tasks": {
+      "main": [
+        [
+          {
+            "node": "All Retry Tasks Terminal",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "All Retry Tasks Terminal": {
+      "main": [
+        [
+          {
+            "node": "Build Download Batch",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Wait Retry Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Download Batch": {
+      "main": [
+        [
+          {
+            "node": "Ensure Download Folder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  }
+}

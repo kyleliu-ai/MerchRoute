@@ -1,0 +1,192 @@
+{
+  "id": "x8D4EHfqI2DHcgL7",
+  "name": "S015-v01-Render-主图生视频-加logo",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## S015-v01-Render-主图生视频-加logo\n\n仅负责 E004 视频渲染：严格校验图片、输出、FFmpeg、Logo、音乐和数值参数边界；先生成同目录临时 MP4，再用 FFprobe 验证 H.264、AAC（配置音乐时）、分辨率、帧率、时长和容器，成功后才发布最终文件。\n\n- 直接调用同样受来源目录、输出目录和最大图片数约束。\n- 显式的 `0` 音量、淡入淡出与转场时长不会被默认值覆盖。\n- 成功结果不返回已删除的临时视频，也不重复保存完整 FFmpeg stderr。\n- `_render_spec.json`、`_render_output.partial.mp4` 与 `_video_only.mp4` 仅为临时文件；成功后清理。",
+        "height": 300,
+        "width": 620,
+        "color": 5
+      },
+      "id": "fe8067b6-d3cc-49b6-ae56-fd40d575afde",
+      "name": "Workflow Summary",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1984,
+        1184
+      ]
+    },
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "imagePaths",
+              "type": "array"
+            },
+            {
+              "name": "outputVideoPath"
+            },
+            {
+              "name": "outputSubDir"
+            },
+            {
+              "name": "effectPreset"
+            },
+            {
+              "name": "params",
+              "type": "object"
+            },
+            {
+              "name": "sourceChildDir"
+            },
+            {
+              "name": "sourceChildName"
+            },
+            {
+              "name": "jobJsonPath"
+            }
+          ]
+        }
+      },
+      "id": "249cb616-665f-4890-a844-465c00e4d906",
+      "name": "Render Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        1984,
+        1552
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const fs = require('fs');\nconst path = require('path');\nconst job = $input.first().json || {};\nconst params = job.params || {};\n\nconst presets = {\n  case1: { name: 'zoom_fade_720_square', width: 720, height: 720, fps: 30, targetDuration: 10, transitionDuration: 0.5, motion: { type: 'zoom_in', zoomMax: 1.06, zoomStep: 0.0012 }, transition: { type: 'fade' }, audio: { enabled: true, volume: 0.25, fadeIn: 0.8, fadeOut: 2 } },\n  case2: { name: 'slide_right_wipeleft_720_square', width: 720, height: 720, fps: 30, targetDuration: 10, transitionDuration: 0.5, motion: { type: 'slide_right', overscale: 1.15 }, transition: { type: 'wipeleft' }, audio: { enabled: true, volume: 0.25, fadeIn: 0.8, fadeOut: 2 } },\n  case3: { name: 'zoom_dissolve_720_square', width: 720, height: 720, fps: 30, targetDuration: 10, transitionDuration: 0.5, motion: { type: 'zoom_in', zoomMax: 1.04, zoomStep: 0.001 }, transition: { type: 'dissolve' }, audio: { enabled: true, volume: 0.25, fadeIn: 0.8, fadeOut: 2 } },\n};\n\nfunction normalizeUserPath(value, options = {}) {\n  const trimTrailingSlash = options.trimTrailingSlash === true;\n  let result = String(value ?? '').trim();\n  if (result.length >= 2) {\n    const first = result[0];\n    const last = result[result.length - 1];\n    if ((first === '\"' && last === '\"') || (first === \"'\" && last === \"'\")) result = result.slice(1, -1).trim();\n  }\n  result = result.replace(/\\\\+/g, '/').replace(/^([A-Za-z]:)\\/+/, '$1/');\n  if (trimTrailingSlash) while (result.length > 1 && result.endsWith('/') && !/^[A-Za-z]:\\/$/.test(result)) result = result.slice(0, -1);\n  return result;\n}\n\nfunction normalizeEffectPreset(value) {\n  const raw = String(value || 'case1').trim();\n  const compact = raw.replace(/\\s+/g, '');\n  const lower = compact.toLowerCase();\n  const caseMatch = lower.match(/^case[-_]?(\\d+)$/);\n  if (caseMatch) return 'case' + Number(caseMatch[1]);\n  const zhMatch = compact.match(/^(效果|特效)-?(\\d+)$/);\n  if (zhMatch) return 'case' + Number(zhMatch[2]);\n  return raw;\n}\n\nfunction strictNumber(value, label, minimum, maximum, options = {}) {\n  const number = Number(value);\n  if (!Number.isFinite(number) || number < minimum || number > maximum || (options.integer && !Number.isInteger(number))) {\n    throw new Error(label + ' 必须是 ' + minimum + '–' + maximum + (options.integer ? ' 的整数。' : ' 的有限数值。'));\n  }\n  return number;\n}\n\nfunction optionalNumber(value, fallback, label, minimum, maximum, options = {}) {\n  if (value === undefined || value === null || value === '') return fallback;\n  return strictNumber(value, label, minimum, maximum, options);\n}\n\nfunction strictBoolean(value, label) {\n  if (value === true || value === false) return value;\n  const text = String(value ?? '').trim().toLowerCase();\n  if (['true', '1', 'yes', 'y', 'on'].includes(text)) return true;\n  if (['false', '0', 'no', 'n', 'off'].includes(text)) return false;\n  throw new Error(label + ' 必须是明确的布尔值。');\n}\n\nfunction isInside(root, target) {\n  const relative = path.relative(root, target);\n  return relative === '' || (relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative));\n}\n\nfunction requireRealDirectory(value, label) {\n  const resolved = path.resolve(value);\n  if (!fs.existsSync(resolved)) throw new Error(label + ' 不存在：' + resolved);\n  const stats = fs.lstatSync(resolved);\n  if (stats.isSymbolicLink() || !stats.isDirectory()) throw new Error(label + ' 必须是真实目录：' + resolved);\n  return { resolved, real: fs.realpathSync(resolved) };\n}\n\nfunction requireRealFile(value, label, options = {}) {\n  const resolved = path.resolve(value);\n  if (!fs.existsSync(resolved)) throw new Error(label + ' 不存在：' + resolved);\n  const stats = fs.lstatSync(resolved);\n  if (stats.isSymbolicLink() && !options.allowSymlink) throw new Error(label + ' 禁止使用符号链接：' + resolved);\n  const real = fs.realpathSync(resolved);\n  if (!fs.statSync(real).isFile()) throw new Error(label + ' 必须指向普通文件：' + resolved);\n  return { resolved, real };\n}\n\nconst rawEffectPreset = job.effectPreset || params.effectPreset || 'case1';\nconst key = normalizeEffectPreset(rawEffectPreset);\nconst basePreset = presets[key];\nif (!basePreset) throw new Error('Unknown effectPreset: ' + rawEffectPreset + '. Supported presets: ' + Object.keys(presets).join(', '));\nconst preset = JSON.parse(JSON.stringify(basePreset));\n\npreset.width = optionalNumber(params.width, preset.width, 'width', 16, 4096, { integer: true });\npreset.height = optionalNumber(params.height, preset.height, 'height', 16, 4096, { integer: true });\nif (preset.width % 2 !== 0 || preset.height % 2 !== 0) throw new Error('width 和 height 必须是偶数，以兼容 yuv420p/libx264。');\npreset.fps = optionalNumber(params.fps, preset.fps, 'fps', 1, 60, { integer: true });\npreset.targetDuration = optionalNumber(params.targetDuration, preset.targetDuration, 'targetDuration', 0.5, 300);\npreset.transitionDuration = optionalNumber(params.transitionDuration, preset.transitionDuration, 'transitionDuration', 0, 5);\nif (preset.transitionDuration >= preset.targetDuration) throw new Error('transitionDuration 必须小于 targetDuration。');\npreset.audio.volume = optionalNumber(params.audioVolume, preset.audio.volume, 'audioVolume', 0, 2);\npreset.audio.fadeIn = optionalNumber(params.audioFadeIn, preset.audio.fadeIn, 'audioFadeIn', 0, preset.targetDuration);\npreset.audio.fadeOut = optionalNumber(params.audioFadeOut, preset.audio.fadeOut, 'audioFadeOut', 0, preset.targetDuration);\n\npreset.effectPreset = key;\npreset.musicPath = normalizeUserPath(params.musicPath || '');\npreset.ffmpegPath = normalizeUserPath(params.ffmpegPath || '');\npreset.enableLogo = strictBoolean(params.enableLogo, 'enableLogo');\npreset.logoPath = normalizeUserPath(params.logoPath || '');\npreset.logoWidth = optionalNumber(params.logoWidth, 90, 'logoWidth', 1, preset.width, { integer: true });\npreset.logoMarginX = optionalNumber(params.logoMarginX, 12, 'logoMarginX', 0, preset.width - 1, { integer: true });\npreset.logoMarginY = optionalNumber(params.logoMarginY, 12, 'logoMarginY', 0, preset.height - 1, { integer: true });\npreset.logoOpacity = optionalNumber(params.logoOpacity, 1, 'logoOpacity', 0, 1);\n\nconst rawLogoPosition = String(params.logoPosition || 'top_left').trim().toLowerCase().replace(/-/g, '_');\nconst logoAliases = { bottom_let: 'bottom_left', left_top: 'top_left', right_top: 'top_right', left_bottom: 'bottom_left', right_bottom: 'bottom_right' };\npreset.logoPosition = logoAliases[rawLogoPosition] || rawLogoPosition;\nif (!['top_left', 'top_right', 'bottom_left', 'bottom_right'].includes(preset.logoPosition)) throw new Error('logoPosition 无效：' + params.logoPosition);\nif (preset.enableLogo && !preset.logoPath) throw new Error('enableLogo=true 时 logoPath 必填。');\nif (!preset.enableLogo) preset.logoPath = '';\n\nconst imagePaths = Array.isArray(job.imagePaths) ? job.imagePaths.map((value) => normalizeUserPath(value || '')).filter(Boolean) : [];\nconst maxImageCount = strictNumber(params.maxImageCount, 'maxImageCount', 1, 100, { integer: true });\nif (imagePaths.length < 1 || imagePaths.length > maxImageCount) throw new Error('S015 图片数量必须在 1–' + maxImageCount + ' 之间。');\nif (!job.outputVideoPath || !job.outputSubDir || !job.sourceChildDir || !params.outputParentDir) throw new Error('S015 缺少 outputVideoPath、outputSubDir、sourceChildDir 或 outputParentDir。');\nif (!preset.ffmpegPath) throw new Error('params.ffmpegPath is required.');\n\nconst sourceRoot = requireRealDirectory(normalizeUserPath(job.sourceChildDir), 'sourceChildDir');\nfor (const [index, imagePath] of imagePaths.entries()) {\n  const image = requireRealFile(imagePath, 'imagePaths[' + index + ']');\n  if (!isInside(sourceRoot.real, image.real)) throw new Error('imagePaths[' + index + '] 超出 sourceChildDir。');\n}\nconst outputParent = requireRealDirectory(normalizeUserPath(params.outputParentDir), 'outputParentDir');\nconst outputSubDir = requireRealDirectory(normalizeUserPath(job.outputSubDir, { trimTrailingSlash: true }), 'outputSubDir');\nif (!isInside(outputParent.real, outputSubDir.real) || outputParent.real === outputSubDir.real) throw new Error('outputSubDir 超出 outputParentDir。');\nconst outputVideoPath = path.resolve(normalizeUserPath(job.outputVideoPath));\nif (!isInside(outputSubDir.resolved, outputVideoPath) || path.dirname(outputVideoPath) !== outputSubDir.resolved || path.extname(outputVideoPath).toLowerCase() !== '.mp4') throw new Error('outputVideoPath 必须是 outputSubDir 内的直接 .mp4 文件。');\n\nconst ffmpeg = requireRealFile(preset.ffmpegPath, 'ffmpegPath', { allowSymlink: true });\nif (!/^ffmpeg(?:\\.exe)?$/i.test(path.basename(ffmpeg.real))) throw new Error('ffmpegPath 必须指向 ffmpeg 或 ffmpeg.exe。');\npreset.ffmpegPath = normalizeUserPath(ffmpeg.resolved);\nif (preset.logoPath) preset.logoPath = normalizeUserPath(requireRealFile(preset.logoPath, 'logoPath').resolved);\nif (preset.musicPath) preset.musicPath = normalizeUserPath(requireRealFile(preset.musicPath, 'musicPath').resolved);\npreset.audio.enabled = Boolean(preset.musicPath);\n\nreturn [{ json: {\n  ...job,\n  imagePaths,\n  sourceChildDir: normalizeUserPath(sourceRoot.resolved),\n  outputVideoPath: normalizeUserPath(outputVideoPath),\n  outputSubDir: normalizeUserPath(outputSubDir.resolved, { trimTrailingSlash: true }),\n  effectPreset: key,\n  preset,\n} }];"
+      },
+      "id": "5deb21e2-fe86-41cd-a5b6-ff07f327aeee",
+      "name": "Load Preset Config",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2224,
+        1552
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const __hiddenFs = require('fs');\nconst __hiddenPath = require('path');\nconst __HIDDEN_PS_TEMPLATE = \"$ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue';[Console]::OutputEncoding=New-Object System.Text.UTF8Encoding $false;$OutputEncoding=[Console]::OutputEncoding;function q([string]$a){if($null -eq $a){return '\\\"\\\"'}if($a.Length -eq 0){return '\\\"\\\"'}if($a -notmatch '[\\\\s\\\"]'){return $a}$r='\\\"';$b=0;foreach($c in $a.ToCharArray()){if($c -eq '\\\\'){$b++;continue}if($c -eq '\\\"'){$r+=('\\\\'*($b*2+1))+'\\\"';$b=0;continue}if($b -gt 0){$r+='\\\\'*$b;$b=0}$r+=$c}if($b -gt 0){$r+='\\\\'*($b*2)}return $r+'\\\"'};$sp=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__SPEC_PATH_B64__'));$o=[IO.Path]::GetTempFileName();$e=[IO.Path]::GetTempFileName();try{$s=Get-Content -LiteralPath $sp -Raw -Encoding UTF8|ConvertFrom-Json;$av=@();foreach($x in $s.args){$av+=[string]$x};$al=($av|%{q $_}) -join ' ';$p=Start-Process -FilePath ([string]$s.executable) -ArgumentList $al -WindowStyle Hidden -Wait -PassThru -RedirectStandardOutput $o -RedirectStandardError $e;$out=if(Test-Path -LiteralPath $o){[IO.File]::ReadAllText($o,[Text.Encoding]::UTF8)}else{''};$err=if(Test-Path -LiteralPath $e){[IO.File]::ReadAllText($e,[Text.Encoding]::UTF8)}else{''};if($out){[Console]::Out.Write($out)};if($err){[Console]::Error.Write($err)};exit $p.ExitCode}finally{Remove-Item -LiteralPath $o,$e -Force -ErrorAction SilentlyContinue;if(Test-Path -LiteralPath $sp){Remove-Item -LiteralPath $sp -Force -ErrorAction SilentlyContinue}}\";\nfunction __hiddenB64Utf8(value) { return Buffer.from(String(value ?? ''), 'utf8').toString('base64'); }\nfunction __hiddenShQuote(value) { const text = String(value ?? ''); return \"'\" + text.replace(/'/g, \"'\\\"'\\\"'\") + \"'\"; }\nfunction __useWindowsHiddenCommand() { return __hiddenPath.sep === '\\\\'; }\nfunction __buildHiddenCommand(executable, args) {\n  const __isWin = __useWindowsHiddenCommand();\n  const __tempRoot = __isWin ? '__MERCHROUTE_TEMP_DIR__' : '/tmp';\n  const dir = __hiddenPath.join(__tempRoot, 'n8n-hidden-command-specs');\n  __hiddenFs.mkdirSync(dir, { recursive: true });\n  const specPath = __hiddenPath.join(dir, 'cmd-' + Date.now() + '-' + Math.random().toString(36).slice(2, 10) + '.json');\n  const spec = { executable: String(executable), args: args.map((arg) => String(arg ?? '')), createdAt: new Date().toISOString(), version: 'n8n-hidden-cli-v1' };\n  __hiddenFs.writeFileSync(specPath, JSON.stringify(spec), 'utf8');\n  const psScript = __HIDDEN_PS_TEMPLATE.replace('__SPEC_PATH_B64__', __hiddenB64Utf8(specPath));\n  return 'powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -OutputFormat Text -EncodedCommand ' + Buffer.from(psScript, 'utf16le').toString('base64');\n}\nfunction __buildNodeCommand(args) {\n  const normalizedArgs = args.map((arg) => String(arg ?? ''));\n  if (__useWindowsHiddenCommand()) return __buildHiddenCommand('node', normalizedArgs);\n  return ['node', ...normalizedArgs.map(__hiddenShQuote)].join(' ');\n}\nfunction __buildNodeEvalCommand(scriptBase64, scriptArgs = []) {\n  return __buildNodeCommand(['-e', \"eval(Buffer.from(process.argv[1],'base64').toString('utf8'))\", scriptBase64, ...scriptArgs.map((arg) => String(arg ?? ''))]);\n}\nfunction __buildNodeGzipEvalCommand(scriptBase64, scriptArgs = []) {\n  return __buildNodeCommand(['-e', \"eval(require('zlib').gunzipSync(Buffer.from(process.argv[1],'base64')).toString('utf8'))\", scriptBase64, ...scriptArgs.map((arg) => String(arg ?? ''))]);\n}\n\nconst S015_RENDER_SCRIPT_GZIP_BASE64 = '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';\n\nconst fs = require('fs');\nconst path = require('path');\nconst job = $input.first().json || {};\nconst preset = job.preset || {};\n\nfunction normalizePath(value) {\n  let result = String(value ?? '').trim();\n  if (result.length >= 2) {\n    const first = result[0];\n    const last = result[result.length - 1];\n    if ((first === '\"' && last === '\"') || (first === \"'\" && last === \"'\")) result = result.slice(1, -1).trim();\n  }\n  return result.replace(/\\\\+/g, '/').replace(/^([A-Za-z]:)\\/+/, '$1/');\n}\n\nfunction framesFor(seconds, fps) { return Math.max(1, Math.round(seconds * fps)); }\nfunction buildZoomInFilter(inputIndex, imageIndex, config, clipDuration, frames) {\n  const width = Number(config.width), height = Number(config.height), fps = Number(config.fps);\n  const motion = config.motion || {}, zoomMax = Number(motion.zoomMax || 1.06), zoomStep = Number(motion.zoomStep || 0.001);\n  return '[' + inputIndex + ':v]scale=' + width + ':' + height + ':force_original_aspect_ratio=increase,crop=' + width + ':' + height + \",zoompan=z='min(1+on*\" + zoomStep + ',' + zoomMax + \")':d=\" + frames + \":x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=\" + width + 'x' + height + ':fps=' + fps + ',trim=duration=' + clipDuration.toFixed(3) + ',setpts=PTS-STARTPTS[v' + imageIndex + ']';\n}\nfunction buildSlideRightFilter(inputIndex, imageIndex, config, clipDuration, frames) {\n  const width = Number(config.width);\n  const height = Number(config.height);\n  const fps = Number(config.fps);\n  const motion = config.motion || {};\n  const wide = Math.ceil(width * Number(motion.overscale || 1.15));\n  const denominator = Math.max(1, frames - 1);\n  const xExpression = '(iw-' + width + ')*on/' + denominator;\n  const yExpression = '(ih-' + height + ')/2';\n  return '[' + inputIndex + ':v]' +\n    'scale=' + wide + ':' + height + ':force_original_aspect_ratio=increase,' +\n    'crop=' + wide + ':' + height + ',' +\n    \"zoompan=z=1:d=\" + frames + \":x='\" + xExpression + \"':y='\" + yExpression + \"':s=\" + width + 'x' + height + ':fps=' + fps + ',' +\n    'trim=duration=' + clipDuration.toFixed(3) + ',setpts=PTS-STARTPTS[v' + imageIndex + ']';\n}\nfunction buildStaticFilter(inputIndex, imageIndex, config, clipDuration, frames) {\n  const width = Number(config.width), height = Number(config.height), fps = Number(config.fps);\n  return '[' + inputIndex + ':v]scale=' + width + ':' + height + ':force_original_aspect_ratio=increase,crop=' + width + ':' + height + ',zoompan=z=1:d=' + frames + ':x=0:y=0:s=' + width + 'x' + height + ':fps=' + fps + ',trim=duration=' + clipDuration.toFixed(3) + ',setpts=PTS-STARTPTS[v' + imageIndex + ']';\n}\nfunction validateMotionFilter(filter, type, imageIndex) {\n  const label = 'motion.type=' + type + ', imageIndex=' + imageIndex;\n  const singleQuoteCount = (filter.match(/'/g) || []).length;\n  if (singleQuoteCount % 2 !== 0) {\n    throw new Error('Invalid FFmpeg motion filter (' + label + '): unbalanced single quotes.');\n  }\n  if (!filter.endsWith('[v' + imageIndex + ']')) {\n    throw new Error('Invalid FFmpeg motion filter (' + label + '): missing output label [v' + imageIndex + '].');\n  }\n  if (type === 'slide_right' && !/:x='[^']+':y='[^']+'/.test(filter)) {\n    throw new Error('Invalid FFmpeg slide_right filter (' + label + '): x/y expressions are malformed.');\n  }\n  return filter;\n}\n\nfunction buildMotionFilter(inputIndex, imageIndex, config, clipDuration, frames) {\n  const type = (config.motion && config.motion.type) || 'static';\n  let filter;\n  if (type === 'zoom_in') filter = buildZoomInFilter(inputIndex, imageIndex, config, clipDuration, frames);\n  else if (type === 'slide_right') filter = buildSlideRightFilter(inputIndex, imageIndex, config, clipDuration, frames);\n  else if (type === 'static') filter = buildStaticFilter(inputIndex, imageIndex, config, clipDuration, frames);\n  else throw new Error('Unsupported motion.type: ' + type);\n  return validateMotionFilter(filter, type, imageIndex);\n}\n\nfunction validateFilterComplex(filterComplex, imageCount) {\n  if (!filterComplex || typeof filterComplex !== 'string') {\n    throw new Error('Invalid FFmpeg filter_complex: expected a non-empty string.');\n  }\n  const singleQuoteCount = (filterComplex.match(/'/g) || []).length;\n  if (singleQuoteCount % 2 !== 0) {\n    throw new Error('Invalid FFmpeg filter_complex: unbalanced single quotes.');\n  }\n  for (let index = 0; index < imageCount; index += 1) {\n    if (!filterComplex.includes('[v' + index + ']')) {\n      throw new Error('Invalid FFmpeg filter_complex: missing motion output [v' + index + '].');\n    }\n  }\n  if (!filterComplex.includes('[vout]')) {\n    throw new Error('Invalid FFmpeg filter_complex: missing final output [vout].');\n  }\n  return filterComplex;\n}\nfunction buildXfadeChain(imageCount, config, clipDuration) {\n  const transition = (config.transition && config.transition.type) || 'fade', duration = Number(config.transitionDuration ?? 0);\n  if (imageCount === 1) return '[v0]format=yuv420p[vbase]';\n  if (duration === 0) return Array.from({ length: imageCount }, (_, index) => '[v' + index + ']').join('') + 'concat=n=' + imageCount + ':v=1:a=0,format=yuv420p[vbase]';\n  const parts = []; let previous = 'v0';\n  for (let index = 1; index < imageCount; index += 1) {\n    const output = index === imageCount - 1 ? 'vxfinal' : 'vx' + index;\n    const offset = Math.max(0, index * clipDuration - index * duration);\n    parts.push('[' + previous + '][v' + index + ']xfade=transition=' + transition + ':duration=' + duration.toFixed(3) + ':offset=' + offset.toFixed(3) + '[' + output + ']'); previous = output;\n  }\n  parts.push('[' + previous + ']format=yuv420p[vbase]'); return parts.join(';');\n}\nfunction buildLogoOverlayFilter(imageCount, config) {\n  if (!config.enableLogo || !config.logoPath) return '[vbase]copy[vout]';\n  const logoWidth = Math.max(1, Math.round(Number(config.logoWidth ?? 90))), marginX = Math.max(0, Math.round(Number(config.logoMarginX ?? 12))), marginY = Math.max(0, Math.round(Number(config.logoMarginY ?? 12))), opacity = Math.max(0, Math.min(1, Number(config.logoOpacity ?? 1)));\n  let position = String(config.logoPosition || 'top_left').trim().toLowerCase().replace(/-/g, '_'); if (position === 'bottom_let') position = 'bottom_left';\n  let x = String(marginX), y = String(marginY); if (position === 'top_right') x = 'W-w-' + marginX; else if (position === 'bottom_left') y = 'H-h-' + marginY; else if (position === 'bottom_right') { x = 'W-w-' + marginX; y = 'H-h-' + marginY; }\n  return '[' + imageCount + ':v]scale=' + logoWidth + ':-1,format=rgba,colorchannelmixer=aa=' + opacity + '[logo];[vbase][logo]overlay=' + x + ':' + y + ':format=auto[vout]';\n}\n\nconst imagePaths = Array.isArray(job.imagePaths) ? job.imagePaths.map(normalizePath).filter(Boolean) : [];\nif (!imagePaths.length) throw new Error('Render workflow requires at least one image path.');\nconst outputSubDir = normalizePath(job.outputSubDir), outputVideoPath = normalizePath(job.outputVideoPath), ffmpegPath = normalizePath(preset.ffmpegPath);\nif (!outputSubDir || !outputVideoPath || !ffmpegPath) throw new Error('outputSubDir, outputVideoPath and params.ffmpegPath are required.');\nconst targetDuration = Number(preset.targetDuration), fps = Number(preset.fps), transitionDuration = imagePaths.length > 1 ? Number(preset.transitionDuration ?? 0) : 0;\nconst clipDuration = imagePaths.length === 1 ? targetDuration : (targetDuration + (imagePaths.length - 1) * transitionDuration) / imagePaths.length;\nconst frames = framesFor(clipDuration, fps), filters = [];\nfor (let index = 0; index < imagePaths.length; index += 1) filters.push(buildMotionFilter(index, index, preset, clipDuration, frames));\nfilters.push(buildXfadeChain(imagePaths.length, preset, clipDuration)); filters.push(buildLogoOverlayFilter(imagePaths.length, preset));\nconst filterComplex = validateFilterComplex(filters.join(';'), imagePaths.length);\nconst musicPath = preset.audio?.enabled ? normalizePath(preset.musicPath || '') : '';\nconst logoPath = preset.enableLogo ? normalizePath(preset.logoPath || '') : '';\nconst partialOutputPath = normalizePath(path.join(outputSubDir, '_render_output.partial.mp4'));\nconst videoOnlyPath = musicPath ? normalizePath(path.join(outputSubDir, '_video_only.mp4')) : partialOutputPath;\nconst fadeOut = Number((preset.audio || {}).fadeOut ?? 2), fadeOutStart = Math.max(0, targetDuration - fadeOut);\nconst audioFilterParts = ['volume=' + Number((preset.audio || {}).volume ?? 0.25)];\nconst fadeIn = Number((preset.audio || {}).fadeIn ?? 0.8);\nif (fadeIn > 0) audioFilterParts.push('afade=t=in:st=0:d=' + fadeIn);\nif (fadeOut > 0) audioFilterParts.push('afade=t=out:st=' + fadeOutStart.toFixed(3) + ':d=' + fadeOut);\nconst audioFilter = '[1:a]' + audioFilterParts.join(',') + '[a]';\nfs.mkdirSync(outputSubDir, { recursive: true });\nconst renderSpecPath = normalizePath(path.join(outputSubDir, '_render_spec.json'));\nconst ffprobePath = normalizePath(path.join(path.dirname(ffmpegPath), /\\.exe$/i.test(ffmpegPath) ? 'ffprobe.exe' : 'ffprobe'));\nconst renderSpec = { ffmpegPath, ffprobePath, sourceChildDir: normalizePath(job.sourceChildDir), outputParentDir: normalizePath(job.params?.outputParentDir), imagePaths, logoPath, musicPath, outputSubDir, outputVideoPath, partialOutputPath, videoOnlyPath, filterComplex, audioFilter, fps, width: Number(preset.width), height: Number(preset.height), targetDuration, maxImageCount: Number(job.params?.maxImageCount), expectAudio: Boolean(musicPath), effectPreset: job.effectPreset || preset.effectPreset || 'case1' };\nconst renderSpecTemporaryPath = renderSpecPath + '.tmp-' + String($execution.id || Date.now());\nlet renderSpecWritten = false;\ntry {\n  fs.writeFileSync(renderSpecTemporaryPath, JSON.stringify(renderSpec, null, 2) + '\\n', { encoding: 'utf8', flag: 'wx', mode: 0o600 });\n  fs.renameSync(renderSpecTemporaryPath, renderSpecPath);\n  renderSpecWritten = true;\n} finally {\n  if (!renderSpecWritten && fs.existsSync(renderSpecTemporaryPath)) fs.rmSync(renderSpecTemporaryPath, { force: true });\n}\nconst command = __buildNodeGzipEvalCommand(S015_RENDER_SCRIPT_GZIP_BASE64, [Buffer.from(renderSpecPath, 'utf8').toString('base64')]);\nconst verifyScriptSource = \"const fs=require('fs'),path=require('path'),{spawnSync}=require('child_process');const p=JSON.parse(Buffer.from(process.argv[1]||'','base64').toString('utf8'));const out=path.resolve(p.outputVideoPath);if(!fs.existsSync(out)){console.error('output_missing');process.exit(2);}const st=fs.lstatSync(out);if(st.isSymbolicLink()||!st.isFile()||st.size<=0){console.error('output_invalid');process.exit(3);}const r=spawnSync(p.ffprobePath,['-v','error','-show_streams','-show_format','-of','json',out],{shell:false,windowsHide:true,encoding:'utf8',maxBuffer:8*1024*1024});if(r.error||r.status!==0){console.error(String(r.stderr||r.error?.message||'ffprobe_failed'));process.exit(4);}let q;try{q=JSON.parse(r.stdout||'{}');}catch{console.error('ffprobe_json_invalid');process.exit(5);}const streams=Array.isArray(q.streams)?q.streams:[];const v=streams.find(s=>s.codec_type==='video');const a=streams.find(s=>s.codec_type==='audio');if(!v||String(v.codec_name).toLowerCase()!=='h264'||(p.expectAudio&&(!a||String(a.codec_name).toLowerCase()!=='aac'))){console.error('media_stream_contract_failed');process.exit(6);}const rate=String(v.avg_frame_rate||v.r_frame_rate||'0/1').split('/').map(Number);const fps=rate[1]?rate[0]/rate[1]:0;const duration=Number(q.format?.duration||v.duration||0);const mediaProbe={videoCodec:String(v.codec_name||''),audioCodec:a?String(a.codec_name||''):null,width:Number(v.width),height:Number(v.height),fps:Number(fps.toFixed(3)),durationSeconds:Number(duration.toFixed(3)),formatName:String(q.format?.format_name||'')};console.log(JSON.stringify({success:true,outputVideoPath:out.replace(/\\\\\\\\/g,'/'),sizeBytes:st.size,mediaProbe}));\";\nconst verifyPayload = Buffer.from(JSON.stringify({ outputVideoPath, ffprobePath, expectAudio: Boolean(musicPath) }), 'utf8').toString('base64');\nreturn [{ json: { ...job, preset, command, verifyCommand: __buildNodeCommand(['-e', verifyScriptSource, verifyPayload]), partialOutputPath, videoOnlyPath, clipDuration, framesPerClip: frames, totalDuration: targetDuration, renderSpecPath, runnerCommandLength: command.length, renderInvocation: { mode: 'spawnSync-shell-false', renderer: 'ffmpeg', verifier: 'ffprobe', imageCount: imagePaths.length, logo: Boolean(logoPath), music: Boolean(musicPath) } } }];"
+      },
+      "id": "64de24e3-8f6d-4d3c-bf95-b9a07e037d1f",
+      "name": "Build FFmpeg Command",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2464,
+        1552
+      ]
+    },
+    {
+      "parameters": {
+        "command": "={{ $json.command }}"
+      },
+      "id": "4ff5ecc2-91f1-4ea1-8104-e27e949036cc",
+      "name": "Run FFmpeg Render",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        2704,
+        1552
+      ]
+    },
+    {
+      "parameters": {
+        "command": "={{ $(\"Build FFmpeg Command\").first().json.verifyCommand }}"
+      },
+      "id": "fd034a3f-39c6-446e-9dac-3decddaa7299",
+      "name": "Verify Output Video",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        2944,
+        1552
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const verify = $input.first().json || {};\nconst renderRun = $('Run FFmpeg Render').first().json || {};\nconst commandInfo = $('Build FFmpeg Command').first().json || {};\n\nfunction parseLastJson(text) {\n  const lines = String(text || '').split(/\\r?\\n/).map((line) => line.trim()).filter(Boolean).reverse();\n  for (const line of lines) {\n    try {\n      const parsed = JSON.parse(line);\n      if (parsed && typeof parsed === 'object') return parsed;\n    } catch {}\n  }\n  return null;\n}\n\nconst runnerSummary = parseLastJson(renderRun.stdout) || {};\nconst verifySummary = parseLastJson(verify.stdout) || {};\nif (runnerSummary.success !== true) throw new Error('S015_RENDER_RUNNER_RESULT_INVALID: ' + (renderRun.stderr || renderRun.stdout || 'no runner summary'));\nif (verifySummary.success !== true) throw new Error('S015_OUTPUT_VERIFY_RESULT_INVALID: ' + (verify.stderr || verify.stdout || 'no verify summary'));\nif (runnerSummary.outputVideoPath !== verifySummary.outputVideoPath) throw new Error('S015_OUTPUT_PATH_MISMATCH');\nif (Number(runnerSummary.sizeBytes) !== Number(verifySummary.sizeBytes)) throw new Error('S015_OUTPUT_SIZE_CHANGED_AFTER_RENDER');\n\nconst diagnosticsTail = String(runnerSummary.diagnosticsTail || '').slice(-4000);\nreturn [{ json: {\n  success: true,\n  ok: true,\n  outputVideoPath: verifySummary.outputVideoPath,\n  outputSubDir: commandInfo.outputSubDir,\n  sizeBytes: Number(verifySummary.sizeBytes),\n  durationSeconds: Number(verifySummary.mediaProbe?.durationSeconds || runnerSummary.durationSeconds || commandInfo.totalDuration || 0),\n  effectPreset: commandInfo.effectPreset,\n  imageCount: Array.isArray(commandInfo.imagePaths) ? commandInfo.imagePaths.length : 0,\n  mediaProbe: verifySummary.mediaProbe || runnerSummary.mediaProbe || null,\n  logo: {\n    enabled: Boolean(commandInfo.preset?.enableLogo),\n    logoPath: commandInfo.preset?.logoPath || '',\n    logoWidth: commandInfo.preset?.logoWidth ?? 0,\n    logoMarginX: commandInfo.preset?.logoMarginX ?? 0,\n    logoMarginY: commandInfo.preset?.logoMarginY ?? 0,\n    logoOpacity: commandInfo.preset?.logoOpacity ?? 1,\n    logoPosition: commandInfo.preset?.logoPosition || 'top_left',\n  },\n  renderInvocation: commandInfo.renderInvocation,\n  diagnosticsTail,\n} }];"
+      },
+      "id": "b69df695-f74b-4bd4-b496-8f179d06ddf5",
+      "name": "Build Render Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3184,
+        1552
+      ]
+    }
+  ],
+  "connections": {
+    "Render Trigger": {
+      "main": [
+        [
+          {
+            "node": "Load Preset Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Preset Config": {
+      "main": [
+        [
+          {
+            "node": "Build FFmpeg Command",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build FFmpeg Command": {
+      "main": [
+        [
+          {
+            "node": "Run FFmpeg Render",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run FFmpeg Render": {
+      "main": [
+        [
+          {
+            "node": "Verify Output Video",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify Output Video": {
+      "main": [
+        [
+          {
+            "node": "Build Render Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  }
+}

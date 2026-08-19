@@ -1,0 +1,76 @@
+const fs = require('fs');
+const path = require('path');
+const render = $input.first().json || {};
+const job = $('Collect Image Files').first().json || {};
+const packageState = $('Parse Stable Result').first().json || {};
+
+if (render.success !== true || render.ok !== true) {
+  throw new Error('E004_RENDER_RESULT_INVALID: success=' + String(render.success) + ', ok=' + String(render.ok));
+}
+if (!job.readySubmissionId) throw new Error('E004_RENDER_RESULT_MISSING_SUBMISSION_ID');
+if (!render.outputVideoPath || Number(render.sizeBytes || 0) <= 0) throw new Error('E004_RENDER_OUTPUT_INVALID');
+
+function atomicWriteJson(target, value) {
+  const temporary = target + '.tmp-' + String($execution.id || Date.now());
+  let completed = false;
+  try {
+    fs.writeFileSync(temporary, JSON.stringify(value, null, 2) + '\n', { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+    fs.renameSync(temporary, target);
+    completed = true;
+  } finally {
+    if (!completed && fs.existsSync(temporary)) fs.rmSync(temporary, { force: true });
+  }
+}
+
+const outputSubDir = path.resolve(String(job.outputSubDir || ''));
+const outputVideoPath = path.resolve(String(render.outputVideoPath || ''));
+const relativeOutput = path.relative(outputSubDir, outputVideoPath);
+if (!relativeOutput || relativeOutput === '..' || relativeOutput.startsWith('..' + path.sep) || path.isAbsolute(relativeOutput)) {
+  throw new Error('E004_RENDER_OUTPUT_OUTSIDE_DIRECTORY');
+}
+const completedAt = new Date().toISOString();
+const completionPath = path.join(outputSubDir, '_COMPLETE.json');
+atomicWriteJson(completionPath, {
+  schemaVersion: 1,
+  workflowCode: 'E004',
+  status: 'COMPLETED',
+  submissionId: job.readySubmissionId,
+  n8nExecutionId: String(job.n8nExecutionId || $execution.id || ''),
+  completedAt,
+  outputVideoPath: outputVideoPath.replace(/\\/g, '/'),
+  sizeBytes: Number(render.sizeBytes),
+  durationSeconds: Number(render.durationSeconds || 0),
+  mediaProbe: render.mediaProbe || null,
+});
+
+const state = $getWorkflowStaticData('global');
+if (!state.e004CompletedSubmissions || typeof state.e004CompletedSubmissions !== 'object' || Array.isArray(state.e004CompletedSubmissions)) state.e004CompletedSubmissions = {};
+const now = Date.now();
+const keepMs = 30 * 24 * 60 * 60 * 1000;
+for (const [key, completedTimestamp] of Object.entries(state.e004CompletedSubmissions)) {
+  if (!Number.isFinite(Number(completedTimestamp)) || now - Number(completedTimestamp) > keepMs) delete state.e004CompletedSubmissions[key];
+}
+state.e004CompletedSubmissions[job.readySubmissionId] = now;
+
+const lockPath = path.resolve(String(packageState.e004RenderLockPath || ''));
+const sourceRoot = path.resolve(String(job.sourceChildDir || ''));
+if (lockPath && path.dirname(lockPath) === sourceRoot && path.basename(lockPath) === '._E004_RENDER.lock') {
+  fs.rmSync(lockPath, { force: true });
+}
+
+return [{ json: {
+  success: true,
+  submissionId: job.readySubmissionId,
+  parameterFileName: job.parameterFileName || '',
+  sourceChildDir: job.sourceChildDir,
+  sourceChildName: job.sourceChildName,
+  imageCount: job.imageCount,
+  effectPreset: job.effectPreset,
+  outputSubDir: job.outputSubDir,
+  outputVideoPath: render.outputVideoPath,
+  outputSizeBytes: Number(render.sizeBytes),
+  durationSeconds: Number(render.durationSeconds || job.params?.targetDuration || 0),
+  completionFile: completionPath.replace(/\\/g, '/'),
+  completedAt,
+  render,
+} }];

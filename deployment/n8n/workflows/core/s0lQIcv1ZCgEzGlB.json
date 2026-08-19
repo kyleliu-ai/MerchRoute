@@ -1,0 +1,1446 @@
+{
+  "id": "s0lQIcv1ZCgEzGlB",
+  "name": "E003-v09-即梦-5生7-电商套图",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "jsCode": "const resultItems = $input.all();\nconst taskItems = $('Wait For Directory Setup').all();\nconst outputs = [];\nconst manifest = [];\nconst prompts = [];\n\nfunction collectUrls(value, urls = []) {\n  if (!value) return urls;\n  if (typeof value === 'string') {\n    if (/^https?:\\/\\//i.test(value)) urls.push(value);\n    return urls;\n  }\n  if (Array.isArray(value)) {\n    for (const item of value) collectUrls(item, urls);\n    return urls;\n  }\n  if (typeof value === 'object') {\n    for (const key of ['url', 'image_url', 'imageUrl', 'image', 'remoteUrl']) {\n      if (value[key]) collectUrls(value[key], urls);\n    }\n    for (const key of ['data', 'images', 'image_urls', 'urls', 'result', 'output', 'rawResponse']) {\n      if (value[key]) collectUrls(value[key], urls);\n    }\n  }\n  return urls;\n}\n\nfunction unique(values) {\n  return [...new Set(values.filter(Boolean))];\n}\n\nfunction text(value) {\n  return value === undefined || value === null ? '' : String(value);\n}\n\nfunction readError(value) {\n  if (!value || typeof value !== 'object') return '';\n  return text(\n    value.errorMessage ||\n    value.message ||\n    value.error?.message ||\n    value.error?.errorMessage ||\n    value.rawResponse?.errorMessage ||\n    value.rawResponse?.error?.message ||\n    ''\n  ).trim();\n}\n\nfunction buildReferenceImages(task) {\n  const viewImages = Array.isArray(task.viewImages)\n    ? task.viewImages.filter(Boolean)\n    : [task.viewImageAdd1, task.viewImageAdd2, task.viewImageAdd3, task.viewImageAdd4, task.viewImageAdd5].filter(Boolean);\n  return {\n    image1: task.viewImageAdd1 || '',\n    image2: task.viewImageAdd2 || '',\n    image3: task.viewImageAdd3 || '',\n    image4: task.viewImageAdd4 || '',\n    image5: task.viewImageAdd5 || '',\n    viewImages,\n    viewImageMeta: Array.isArray(task.viewImageMeta) ? task.viewImageMeta : [],\n    imageCount: Number.isFinite(Number(task.imageCount)) ? Number(task.imageCount) : viewImages.length,\n    infoFileName: task.infoFileName || '',\n    infoFilePath: task.infoFilePath || '',\n  };\n}\n\nfunction pushTextFile({ task, type, folderPath, fileName, contentText, mimeType }) {\n  outputs.push({\n    json: {\n      type,\n      fileKind: 'text',\n      fileUrl: '',\n      contentText: text(contentText),\n      folderPath,\n      fileName,\n      mimeType,\n      taskIndex: task?.taskIndex,\n      sceneKey: task?.sceneKey,\n      title: task?.title,\n      titleDescription: task?.titleDescription,\n      productAppearance: task?.productAppearance,\n      localPath: `${folderPath}/${fileName}`,\n    },\n  });\n}\n\nfor (let i = 0; i < taskItems.length; i += 1) {\n  const task = taskItems[i]?.json || {};\n  const response = resultItems[i]?.json || null;\n  const imageRecords = [];\n  const prompt = text(task.prompt).trim();\n  const negativePrompt = text(task.negativePrompt).trim();\n  let status = 'success';\n  let error = '';\n\n  if (!prompt) {\n    status = 'failed';\n    error = '缺少 S011 子工作流返回的图生图提示词 prompt';\n  }\n\n  const promptText = [\n    '正向提示词：',\n    prompt,\n    '',\n    '反向提示词：',\n    negativePrompt,\n  ].join('\\n');\n\n  pushTextFile({\n    task,\n    type: 'prompt',\n    folderPath: task.taskDir,\n    fileName: task.promptFileName || `${task.sceneKey || 'scene'}-图生图提示词.txt`,\n    contentText: promptText,\n    mimeType: 'text/plain; charset=utf-8',\n  });\n\n  prompts.push({\n    taskIndex: task.taskIndex,\n    sceneKey: task.sceneKey,\n    sceneTitle: task.sceneTitle,\n    title: task.title,\n    titleDescription: task.titleDescription,\n    scenePrompt: task.scenePrompt,\n    productAppearance: task.productAppearance,\n    targetPlatform: task.targetPlatform,\n    targetMarket: task.targetMarket,\n    ratio: task.ratio,\n    referenceImages: buildReferenceImages(task),\n    promptFile: task.promptFilePath,\n    productDetailFile: task.productDetailFilePath,\n    productDetailFileName: task.productDetailFileName,\n    prompt,\n    negativePrompt,\n  });\n\n  if (task.dryRun) {\n    status = status === 'failed' ? status : 'dry-run';\n  } else if (status !== 'failed') {\n    if (!response) {\n      status = 'failed';\n      error = 'S003 子工作流未返回结果';\n    } else {\n      const urls = unique(collectUrls(response)).slice(0, 4);\n      const responseError = readError(response);\n      if (response.ok === false && urls.length > 0) {\n        status = 'partial';\n        error = responseError || 'S003 标记失败，但返回了可下载图片 URL';\n      } else if (response.ok === false) {\n        status = 'failed';\n        error = responseError || 'S003 子工作流生图失败';\n      } else if (!urls.length) {\n        status = 'failed';\n        error = responseError || 'S003 子工作流返回结果中没有可下载图片 URL';\n      }\n\n      for (let n = 0; n < urls.length; n += 1) {\n        const remoteUrl = urls[n];\n        const imageNo = String(n + 1).padStart(2, '0');\n        const fileName = `${task.sceneKey}-${imageNo}.png`;\n        const localPath = `${task.taskDir}/${fileName}`;\n        imageRecords.push({\n          imageNo: n + 1,\n          fileName,\n          remoteUrl,\n          localPath,\n          status: 'pending-download',\n        });\n        outputs.push({\n          json: {\n            type: 'image',\n            fileKind: 'image',\n            fileUrl: remoteUrl,\n            contentText: '',\n            folderPath: task.taskDir,\n            fileName,\n            mimeType: 'image/png',\n            taskIndex: task.taskIndex,\n            sceneKey: task.sceneKey,\n            imageNo: n + 1,\n            remoteUrl,\n            localPath,\n          },\n        });\n      }\n    }\n  }\n\n  manifest.push({\n    workflowId: task.workflowId,\n    SKU: task.SKU,\n    productName: task.productName,\n    variants: task.variants,\n    productDescription: task.productDescription,\n    productAppearance: task.productAppearance,\n    sellingPoints: task.sellingPoints,\n    targetPlatform: task.targetPlatform,\n    targetMarket: task.targetMarket,\n    ratio: task.ratio,\n    timestamp: task.timestamp,\n    rootOutputDir: task.rootOutputDir,\n    taskIndex: task.taskIndex,\n    sceneKey: task.sceneKey,\n    sceneTitle: task.sceneTitle,\n    title: task.title,\n    titleDescription: task.titleDescription,\n    scenePrompt: task.scenePrompt,\n    referenceImages: buildReferenceImages(task),\n    taskDir: task.taskDir,\n    promptFile: task.promptFilePath,\n    productDetailFile: task.productDetailFilePath,\n    productDetailFileName: task.productDetailFileName,\n    prompt,\n    negativePrompt,\n    imageCount: imageRecords.length,\n    images: imageRecords,\n    status,\n    error,\n    rawResponse: response,\n  });\n}\n\nconst rootOutputDir = taskItems[0]?.json?.rootOutputDir || resultItems[0]?.json?.rootOutputDir || '';\nconst firstTask = taskItems[0]?.json || {};\nconst detailContent = text(firstTask.productDetailDescription).trim();\nif (detailContent) {\n  pushTextFile({\n    task: firstTask,\n    type: 'product-detail',\n    folderPath: rootOutputDir,\n    fileName: firstTask.productDetailFileName || `01-${text(firstTask.productName).trim() || 'product'}-${text(firstTask.Language).trim() || '俄文'}-详情描述.txt`,\n    contentText: detailContent,\n    mimeType: 'text/plain; charset=utf-8',\n  });\n}\nif (typeof firstTask.SKU !== 'string' || !/^\\d{7}$/.test(firstTask.SKU.trim())) throw new Error('输出任务缺少合法 String SKU。');\nif (typeof firstTask.productName !== 'string' || !firstTask.productName.trim()) throw new Error('输出任务缺少合法 String productName。');\nif (typeof firstTask.variants !== 'string' || !firstTask.variants.trim()) throw new Error('输出任务缺少合法 String variants。');\npushTextFile({\n  task: firstTask,\n  type: 'task-context',\n  folderPath: rootOutputDir,\n  fileName: 'task-context.json',\n  contentText: JSON.stringify({\n    schemaVersion: 1,\n    workflowCode: 'E003',\n    SKU: firstTask.SKU.trim(),\n    productName: firstTask.productName.trim(),\n    variants: firstTask.variants.trim(),\n    ...(firstTask.variantId ? { variantId: String(firstTask.variantId) } : {}),\n    ...(firstTask.sourceSubmissionId ? { sourceSubmissionId: String(firstTask.sourceSubmissionId) } : {}),\n    n8nExecutionId: String($execution.id || ''),\n  }, null, 2),\n  mimeType: 'application/json; charset=utf-8',\n});\npushTextFile({\n  task: taskItems[0]?.json || {},\n  type: 'manifest',\n  folderPath: rootOutputDir,\n  fileName: 'manifest.json',\n  contentText: JSON.stringify(manifest, null, 2),\n  mimeType: 'application/json; charset=utf-8',\n});\npushTextFile({\n  task: taskItems[0]?.json || {},\n  type: 'prompts',\n  folderPath: rootOutputDir,\n  fileName: 'prompts.json',\n  contentText: JSON.stringify(prompts, null, 2),\n  mimeType: 'application/json; charset=utf-8',\n});\n\nreturn outputs;"
+      },
+      "id": "39c733a2-e1d0-4ed8-a0cc-c38acd284de6",
+      "name": "Download Data Prepare",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -80,
+        0
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "content": "",
+        "height": 480,
+        "width": 2484,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -1696,
+        -256
+      ],
+      "typeVersion": 1,
+      "id": "db39854d-8819-4f79-80e2-dffc66da0da3",
+      "name": "Sticky Note1"
+    },
+    {
+      "parameters": {
+        "jsCode": "const sourceInput = $('Attach SiliconFlow Image URLs').first().json || {};\nconst sceneResult = $input.first().json || {};\n\nconst productDetailDescription = extractProductDetailDescription(sceneResult.messageContent ?? sceneResult.chatResponse).trim();\nif (!productDetailDescription) {\n  throw new Error('S008 未返回 messageContent，无法保存俄文详情描述');\n}\n\nfunction text(value) {\n  return value === undefined || value === null ? '' : String(value).trim();\n}\n\nfunction extractProductDetailDescription(value) {\n  if (value === undefined || value === null) return '';\n\n  if (typeof value === 'object' && !Array.isArray(value)) {\n    for (const key of ['messageContent', 'chatResponse', 'content', 'text']) {\n      if (value[key] !== undefined && value[key] !== null) {\n        return extractProductDetailDescription(value[key]);\n      }\n    }\n    return JSON.stringify(value);\n  }\n\n  const raw = String(value).trim();\n  if (!raw) return '';\n\n  if ((raw.startsWith('{') && raw.endsWith('}')) || (raw.startsWith('[') && raw.endsWith(']'))) {\n    try {\n      return extractProductDetailDescription(JSON.parse(raw));\n    } catch (error) {\n      return raw;\n    }\n  }\n\n  return raw;\n}\n\nfunction requiredText(name, value) {\n  const result = text(value);\n  if (!result) {\n    throw new Error(`缺少必填输入字段: ${name}`);\n  }\n  return result;\n}\n\nfunction requiredIdentityString(name, value) {\n  if (typeof value !== 'string') throw new Error(`n8n_setParameter_xxx.json 的 ${name} 必须是 String。`);\n  const result = value.trim();\n  if (!result) throw new Error(`n8n_setParameter_xxx.json 的 ${name} 不能为空。`);\n  return result;\n}\n\nfunction normalizeRatio(value) {\n  return requiredText('ratio', value)\n    .replace(/[：﹕︰]/g, ':')\n    .replace(/\\s*:\\s*/g, ':')\n    .replace(/\\s+/g, '');\n}\n\nfunction trimTrailingSlash(value) {\n  return text(value).replace(/[\\\\/]+$/g, '');\n}\n\nfunction sanitizePathPart(value) {\n  return requiredText('pathPart', value)\n    .replace(/[<>:\"|?*\\x00-\\x1F]/g, '-')\n    .replace(/[\\\\/]+/g, '-')\n    .replace(/\\s+/g, ' ')\n    .trim();\n}\n\nfunction makeTimestamp() {\n  const d = new Date();\n  const pad = (n) => String(n).padStart(2, '0');\n  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;\n}\n\nfunction toBoolean(value, defaultValue = false) {\n  if (value === undefined || value === null || value === '') return defaultValue;\n\n  if (typeof value === 'boolean') return value;\n\n  const normalized = String(value).trim().toLowerCase();\n\n  if (['true', '1', 'yes', 'y'].includes(normalized)) return true;\n  if (['false', '0', 'no', 'n'].includes(normalized)) return false;\n\n  return defaultValue;\n}\n\nconst SKU = requiredIdentityString('SKU', sourceInput.SKU);\nif (!/^\\d{7}$/.test(SKU)) throw new Error('n8n_setParameter_xxx.json 的 SKU 必须是保留前导零的 7 位数字。');\nconst productName = requiredIdentityString('productName', sourceInput.productName);\nconst variants = requiredIdentityString('variants', sourceInput.variants);\nconst productDescription = text(sourceInput.productDescription);\nconst productAppearance = text(sceneResult.productAppearance) || text(sourceInput.productAppearance) || productDescription;\n\nconst targetPlatform = requiredText('targetPlatform', sourceInput.targetPlatform).toUpperCase();\nconst Country = text(sourceInput.Country || sourceInput.country);\nconst Language = text(sourceInput.Language || sourceInput.language) || '俄文';\nconst styleDirection = text(sourceInput.styleDirection);\nconst targetMarket = text(sceneResult.targetMarket) || text(sourceInput.targetMarket);\nconst ratio = normalizeRatio(sourceInput.ratio);\n\nconst outputConfig = $('setParameter').first().json || {};\nconst configuredBaseOutputDir = trimTrailingSlash(requiredText('setParameter.baseOutputDir', outputConfig.baseOutputDir));\nconst downloadFatherFolder = text(sourceInput.downloadFatherFolder);\nconst baseOutputDirOriginal = trimTrailingSlash(downloadFatherFolder || configuredBaseOutputDir);\nconst baseOutputDirWindows = '';\nconst baseOutputDir = baseOutputDirOriginal;\n\nconst timestamp = makeTimestamp();\nconst executionId = String($execution.id || '').trim();\nif (!/^\\d+$/.test(executionId)) throw new Error('当前工作流 executionId 无效。');\nconst rootOutputDir = `${baseOutputDir}/${SKU}-${sanitizePathPart(productName)}-${executionId}`;\n\nconst productDetailFileName = `01-${sanitizePathPart(productName)}-${sanitizePathPart(Language)}-详情描述.txt`;\nconst productDetailFilePath = `${rootOutputDir}/${productDetailFileName}`;\n\nconst maxImagesPerTask = Number.isFinite(Number(sourceInput.maxImagesPerTask))\n  ? Math.max(1, Math.min(4, Number(sourceInput.maxImagesPerTask)))\n  : 4;\n\nconst dryRun = toBoolean(sourceInput.dryRun, false);\n\nconst titleLength = sourceInput.titleLength;\nconst titleDescriptionLength = sourceInput.titleDescriptionLength;\n\nconst viewImageAdd1 = requiredText('viewImageAdd1', sourceInput.viewImageAdd1);\nconst viewImageAdd2 = requiredText('viewImageAdd2', sourceInput.viewImageAdd2);\nconst viewImageAdd3 = requiredText('viewImageAdd3', sourceInput.viewImageAdd3);\nconst viewImageAdd4 = text(sourceInput.viewImageAdd4);\nconst viewImageAdd5 = text(sourceInput.viewImageAdd5);\n\nconst viewImages = Array.isArray(sourceInput.viewImages)\n  ? sourceInput.viewImages.filter(Boolean).map((value) => String(value).trim())\n  : [viewImageAdd1, viewImageAdd2, viewImageAdd3, viewImageAdd4, viewImageAdd5].filter(Boolean);\n\nconst imageCount = Number.isFinite(Number(sourceInput.imageCount))\n  ? Number(sourceInput.imageCount)\n  : viewImages.length;\n\nconst viewImageMeta = Array.isArray(sourceInput.viewImageMeta)\n  ? sourceInput.viewImageMeta\n  : [];\n\nconst sellingPoints = Array.isArray(sceneResult.sellingPoints)\n  ? sceneResult.sellingPoints\n  : (Array.isArray(sourceInput.sellingPoints) ? sourceInput.sellingPoints : []);\n\nconst sceneKeys = [\n  '01-main',\n  '02-selling-point',\n  '03-selling-point',\n  '04-selling-point',\n  '05-lifestyle',\n  '06-scene',\n  '07-lifestyle'\n];\n\nconst outputs = [];\n\nfor (let index = 0; index < 7; index += 1) {\n  const sceneNumber = String(index + 1).padStart(2, '0');\n  const sceneObj = sceneResult[`scenePrompt${sceneNumber}`];\n\n  if (!sceneObj || typeof sceneObj !== 'object' || Array.isArray(sceneObj)) {\n    throw new Error(`S013 返回缺少对象字段: scenePrompt${sceneNumber}`);\n  }\n\n  const scenePrompt = requiredText(`scenePrompt${sceneNumber}.prompt`, sceneObj.prompt);\n\n  const taskIndex = index + 1;\n  const sceneKey = sceneKeys[index] || `${sceneNumber}-scene`;\n\n  /**\n   * 修改说明：\n   *\n   * 父工作流不再判断当前场景是否为细节展示场景或特写场景。\n   * 不再根据 prompt 关键词清空 title 和 titleDescription。\n   *\n   * 所有场景均直接保留 S013 返回的：\n   * - title\n   * - titleDescription\n   *\n   * 如果 S013 返回空字符串，则保持空字符串。\n   * 如果 S013 返回了标题和描述，则完整保留。\n   */\n  const title = text(sceneObj.title);\n  const titleDescription = text(sceneObj.titleDescription);\n\n  const taskDir = `${rootOutputDir}/第${taskIndex}组-${timestamp}`;\n  const promptFileName = `${sceneKey}-图生图提示词.txt`;\n\n  outputs.push({\n    json: {\n      workflowId: 'iaWVJzc3LMoDNaWF',\n\n      SKU,\n      productName,\n      variants,\n      n8nExecutionId: executionId,\n      productDescription,\n      productAppearance,\n      sellingPoints,\n\n      targetPlatform,\n      Country,\n      Language,\n      targetMarket,\n      styleDirection,\n      ratio,\n\n      maxImagesPerTask,\n      dryRun,\n\n      titleLength,\n      titleDescriptionLength,\n      titleLenth: titleLength,\n      titleDescriptionLenth: titleDescriptionLength,\n\n      viewImageAdd1,\n      viewImageAdd2,\n      viewImageAdd3,\n      viewImageAdd4,\n      viewImageAdd5,\n      viewImages,\n      imageCount,\n      viewImageMeta,\n\n      infoFileName: sourceInput.infoFileName || '',\n      infoFilePath: sourceInput.infoFilePath || '',\n      infoFileExtension: sourceInput.infoFileExtension || '',\n      folderPath: sourceInput.folderPath || '',\n      globPath: sourceInput.globPath || '',\n\n      inputWarnings: Array.isArray(sourceInput.warnings) ? sourceInput.warnings : [],\n\n      baseOutputDir,\n      baseOutputDirOriginal,\n      baseOutputDirWindows,\n      rootOutputDir,\n      timestamp,\n\n      taskIndex,\n      sceneIndex: taskIndex,\n      sceneKey,\n\n      // 为兼容下游字段保留，但父工作流不再判断细节场景。\n      isDetailScene: false,\n\n      sceneTitle: title,\n      scenePrompt,\n      title,\n      titleDescription,\n      scenePromptObj: sceneObj,\n\n      taskDir,\n      promptFileName,\n      promptFilePath: `${taskDir}/${promptFileName}`,\n\n      productDetailDescription,\n      productDetailFileName,\n      productDetailFilePath\n    },\n    pairedItem: {\n      item: 0\n    }\n  });\n}\n\nreturn outputs;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        592,
+        -512
+      ],
+      "id": "903f754d-5b40-448e-b4a2-9e9c9a87f3f5",
+      "name": "Code in JavaScript",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByFields",
+        "advanced": false,
+        "fieldsToMatchString": "taskIndex",
+        "joinMode": "keepMatches",
+        "outputDataFrom": "both",
+        "options": {}
+      },
+      "id": "3ad20dfa-a025-467f-adbe-96844f411973",
+      "name": "Merge S011 Prompt With Tasks",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        -1424,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nfunction cleanPath(value) {\n  return String(value ?? '').trim().replace(/\\\\/g, '/').replace(/\\/+$/g, '');\n}\n\nconst dirs = [...new Set(\n  items\n    .flatMap((item) => [item.json.rootOutputDir, item.json.taskDir])\n    .map(cleanPath)\n    .filter(Boolean)\n)];\n\nif (!dirs.length) {\n  throw new Error('没有可创建的输出目录：rootOutputDir/taskDir 均为空');\n}\n\nreturn [{\n  json: {\n    directoryCount: dirs.length,\n    directories: dirs,\n  },\n}];"
+      },
+      "id": "7be6d948-f6ca-41c7-8102-b4cab534c3c8",
+      "name": "Prepare Directory Command",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1200,
+        -96
+      ],
+      "notes": "仅生成去重后的目录清单；命令/Base64 构造逻辑已移除。"
+    },
+    {
+      "parameters": {
+        "jsCode": "const fs = require('fs');\nconst path = require('path');\n\nconst items = $input.all();\nif (items.length !== 1) {\n  throw new Error(`Create Output Directories expects exactly 1 item, received ${items.length}.`);\n}\n\nconst sourceDirs = items[0]?.json?.directories;\nif (!Array.isArray(sourceDirs) || sourceDirs.length < 1) {\n  throw new Error('directories must be a non-empty array');\n}\n\nconst directories = [...new Set(sourceDirs.map((value, index) => {\n  if (typeof value !== 'string' || !value.trim()) {\n    throw new Error(`directories[${index}] must be a non-empty string`);\n  }\n  return path.normalize(value.trim());\n}))];\n\nfor (const directory of directories) {\n  fs.mkdirSync(directory, { recursive: true });\n  if (!fs.statSync(directory).isDirectory()) {\n    throw new Error(`Output path exists but is not a directory: ${directory}`);\n  }\n}\n\nconst result = { ok: true, created: directories.length, dirs: directories };\nreturn [{\n  json: {\n    ...result,\n    stdout: `${JSON.stringify(result)}\\n`,\n    stderr: '',\n    exitCode: 0,\n  },\n}];"
+      },
+      "id": "81502391-0dfd-4416-8f3d-dc77462a4e19",
+      "name": "Create Output Directories",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -976,
+        -96
+      ],
+      "onError": "continueErrorOutput",
+      "notes": "使用 fs/path 创建根目录与第n组目录；保留错误输出分支和旧命令节点返回字段。"
+    },
+    {
+      "parameters": {},
+      "id": "214092c1-c65a-4677-ba91-dd04e413e454",
+      "name": "Pass Jobs After Directory Plan",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        -1024,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "chooseBranch",
+        "useDataOfInput": 2
+      },
+      "id": "b20e0d94-1a6e-4767-8972-644faa3646d9",
+      "name": "Wait For Directory Setup",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        -752,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst batchItems = items\n  .map((item) => item.json || {})\n  .filter((job) => job.folderPath && job.fileName && (job.fileUrl || Object.prototype.hasOwnProperty.call(job, 'contentText')))\n  .map((job) => ({ ...job }));\n\nif (!batchItems.length) {\n  throw new Error('No download jobs produced by Download Data Prepare');\n}\n\nreturn [{\n  json: {\n    batchItems,\n    concurrency: 8,\n    totalJobs: batchItems.length,\n    imageJobs: batchItems.filter((job) => job.fileUrl).length,\n    textJobs: batchItems.filter((job) => !job.fileUrl).length,\n  },\n}];"
+      },
+      "id": "6c85bcd3-f66c-4591-a231-c46dd51a0d15",
+      "name": "Prepare S001 Batch Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        144,
+        0
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "KmZ1AibtVGxzCgzc",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/KmZ1AibtVGxzCgzc",
+          "cachedResultName": "S001-Url文件下载-v02"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "batchItems": "={{ $json.batchItems }}",
+            "concurrency": "={{ $json.concurrency }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "fileUrl",
+              "displayName": "fileUrl",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "folderPath",
+              "displayName": "folderPath",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "fileName",
+              "displayName": "fileName",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "contentText",
+              "displayName": "contentText",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "mimeType",
+              "displayName": "mimeType",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "fileKind",
+              "displayName": "fileKind",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "batchItems",
+              "displayName": "batchItems",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "array",
+              "removed": false
+            },
+            {
+              "id": "concurrency",
+              "displayName": "concurrency",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "number",
+              "removed": false
+            },
+            {
+              "id": "supportFolderPath",
+              "displayName": "supportFolderPath",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "95881122-86bc-4a74-a5f3-804545623546",
+      "name": "Call 'S001-Url文件下载-v02'",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        368,
+        0
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "content": "## E003-v09-即梦-电商-7套图\n\n### 主要功能\n监听产品资料文件夹新增事件，等待内容稳定后读取产品信息和 3-5 张参考图；参考图只批量上传一次到 SiliconFlow，再把同一组 HTTP(S) URL 供 7 个电商场景调用即梦图生图，并下载图片、提示词和详情描述。\n\n### 配置与输入\n- 输出父目录：在 setParameter（节点 2cc026）顶部的 BASE_OUTPUT_DIR 配置。\n- 文件夹稳定检查：最长 120 秒、每 1 秒检查、连续稳定 5 秒后继续；临时下载文件存在时不会放行。\n- S014 读取并标准化产品资料，输出 3-5 个本地参考图路径。\n- S005 使用 filePaths 批量上传，上传并发为 5；按 inputIndex + sourceFileName 校验回配，任一上传失败时整批停止。\n- 7 个场景复用同一组 SiliconFlow URL，不重复上传 7 次。\n\n### 即梦调用\n- S003 / ieWnRGeC7KdeS1GT 使用 URL 直通模式，把 SiliconFlow URL 与 prompt、negativePrompt、model、ratio、resolution 一起提交给即梦。\n- S003 仅重试失败的即梦任务一次，重试继续沿用原 URL。\n- S003 的旧本地路径/Base64模式仍保留，兼容其他调用方。\n\n### 输出\n- 根目录：BASE_OUTPUT_DIR/SKU-产品名-n8nExecutionId。\n- 任务目录：第1组-时间戳 到 第7组-时间戳。\n- 每组保存生成图片和图生图提示词，同时保存详情描述、manifest.json 与 prompts.json。\n\n### 关键子工作流\n- S014 / DSXe7OXHqa1IsQxx：读取产品文件夹并标准化输入。\n- S005 / 5fKlIwJWfXJM1y4E：本地参考图批量上传并返回 URL。\n- S013 / JEl0xCKTgtiIP9UT：生成 7 个场景。\n- S008 / TOSzxIPPKZHQPtYT：生成俄文产品详情描述。\n- S011 / KtjTu0u08rZJNtyM：组装单场景图生图提示词。\n- S003 / ieWnRGeC7KdeS1GT：即梦图生图，兼容 URL 和旧本地路径。\n- S001 / KmZ1AibtVGxzCgzc：批量下载文件。",
+        "height": 880,
+        "width": 576
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -2352,
+        -656
+      ],
+      "typeVersion": 1,
+      "id": "751c15ad-c2f5-4a0d-a9c5-2ac18093e883",
+      "name": "Sticky Note2"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "TOSzxIPPKZHQPtYT",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/TOSzxIPPKZHQPtYT",
+          "cachedResultName": "S008-产品详情-俄文-生成子流"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "productAppearance": "={{ $json.productAppearance }}",
+            "sellingPoints": "={{ Array.isArray($json.sellingPoints) ? JSON.stringify($json.sellingPoints) : String($json.sellingPoints ?? '') }}",
+            "temperature": "0.25",
+            "productName": "={{ $json.productName }}",
+            "top_p": "0.6"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "productName",
+              "displayName": "productName",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "productAppearance",
+              "displayName": "productAppearance",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "sellingPoints",
+              "displayName": "sellingPoints",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "temperature",
+              "displayName": "temperature",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "top_p",
+              "displayName": "top_p",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        144,
+        -432
+      ],
+      "id": "311b6bad-dabd-404b-a1d9-50239663512b",
+      "name": "Call 'S008-产品详情-俄文-生成子流'",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "id": "797b511f-77ee-4919-bb9f-6091be2b74be",
+      "name": "Merge Product Detail With Scenes",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        368,
+        -512
+      ]
+    },
+    {
+      "parameters": {
+        "triggerOn": "folder",
+        "path": "__MERCHROUTE_DATA_ROOT__/01_monitorFolder/E003-5生7-监听",
+        "events": [
+          "addDir"
+        ],
+        "options": {
+          "awaitWriteFinish": true,
+          "ignored": ".staging",
+          "ignoreInitial": true,
+          "depth": 0,
+          "ignoreMode": "contain"
+        }
+      },
+      "type": "n8n-nodes-base.localFileTrigger",
+      "typeVersion": 1,
+      "position": [
+        -1648,
+        -512
+      ],
+      "id": "72571871-59c6-426b-b8fb-816bf7ed37f8",
+      "name": "Local File Trigger"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "DSXe7OXHqa1IsQxx",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/DSXe7OXHqa1IsQxx",
+          "cachedResultName": "S014-v03-读取文件夹-输出JSON参数表"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "folderPath": "={{ $json.folderPath || $('Local File Trigger').first().json.path }}"
+          },
+          "matchingColumns": [
+            "folderPath"
+          ],
+          "schema": [
+            {
+              "id": "folderPath",
+              "displayName": "folderPath",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        -752,
+        -512
+      ],
+      "id": "22eff480-14aa-488a-ad6b-8d036cbe48de",
+      "name": "Call 'S014-03-读取产品文件夹并标准化输入'",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "KtjTu0u08rZJNtyM",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/KtjTu0u08rZJNtyM",
+          "cachedResultName": "S011-v03-Qwen-提示词-组装"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "productName": "={{ $json.productName }}",
+            "productAppearance": "={{ $json.productAppearance }}",
+            "Country": "={{ $json.Country }}",
+            "targetPlatform": "={{ $json.targetPlatform }}",
+            "styleDirection": "={{ $json.styleDirection }}",
+            "targetMarket": "={{ $json.targetMarket }}",
+            "scenePrompt": "={{ $json.scenePrompt }}",
+            "title": "={{ $json.title }}",
+            "titleDescription": "={{ $json.titleDescription }}",
+            "viewImageAdd1": "={{ $json.viewImageAdd1 }}",
+            "viewImageAdd2": "={{ $json.viewImageAdd2 }}",
+            "viewImageAdd3": "={{ $json.viewImageAdd3 }}",
+            "ratio": "={{ $json.ratio }}",
+            "taskIndex": "={{ $json.taskIndex }}",
+            "sceneIndex": "={{ $json.sceneIndex }}",
+            "sceneKey": "={{ $json.sceneKey }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "productName",
+              "displayName": "productName",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "productAppearance",
+              "displayName": "productAppearance",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "Country",
+              "displayName": "Country",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "targetPlatform",
+              "displayName": "targetPlatform",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "styleDirection",
+              "displayName": "styleDirection",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "targetMarket",
+              "displayName": "targetMarket",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "scenePrompt",
+              "displayName": "scenePrompt",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "title",
+              "displayName": "title",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "titleDescription",
+              "displayName": "titleDescription",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "viewImageAdd1",
+              "displayName": "viewImageAdd1",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "viewImageAdd2",
+              "displayName": "viewImageAdd2",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "viewImageAdd3",
+              "displayName": "viewImageAdd3",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "ratio",
+              "displayName": "ratio",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "removed": false,
+              "id": "taskIndex",
+              "displayName": "taskIndex",
+              "type": "number"
+            },
+            {
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "removed": false,
+              "id": "sceneIndex",
+              "displayName": "sceneIndex",
+              "type": "number"
+            },
+            {
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "removed": false,
+              "id": "sceneKey",
+              "displayName": "sceneKey",
+              "type": "string"
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "mode": "each",
+        "options": {}
+      },
+      "id": "8c186ab8-7ca2-481e-9eb0-af0ca38b15c3",
+      "name": "Call S011-03-Prompt Builder",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        -1648,
+        -64
+      ],
+      "notesInFlow": true,
+      "onError": "stopWorkflow",
+      "notes": "图生图提示词\nQwen3.7-plus"
+    },
+    {
+      "parameters": {
+        "content": "",
+        "height": 400,
+        "width": 2484,
+        "color": 2
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -1696,
+        -640
+      ],
+      "typeVersion": 1,
+      "id": "fbfaec2e-e85e-457f-9023-c21c7a75f728",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst expectedTaskCount = 7;\n\nif (items.length !== expectedTaskCount) {\n  throw new Error(\n    'Prepare S003 Batch Input: expected ' + expectedTaskCount +\n    ' prompt tasks, received ' + items.length + '.'\n  );\n}\n\nconst seenTaskIndexes = new Set();\nconst batchItems = items.map((item, position) => {\n  const task = item.json || {};\n  const taskIndex = Number(task.taskIndex);\n  const prompt = String(task.prompt ?? '').trim();\n\n  if (!Number.isInteger(taskIndex) || taskIndex < 1 || taskIndex > expectedTaskCount) {\n    throw new Error(\n      'Prepare S003 Batch Input: invalid taskIndex at item ' +\n      (position + 1) + ': ' + String(task.taskIndex)\n    );\n  }\n\n  if (seenTaskIndexes.has(taskIndex)) {\n    throw new Error('Prepare S003 Batch Input: duplicate taskIndex ' + taskIndex + '.');\n  }\n  seenTaskIndexes.add(taskIndex);\n\n  if (!prompt) {\n    throw new Error('Prepare S003 Batch Input: taskIndex ' + taskIndex + ' is missing prompt.');\n  }\n\n  return {\n    ...task,\n    taskIndex,\n    prompt,\n    negativePrompt: String(task.negativePrompt ?? '').trim(),\n  };\n});\n\nconst missingTaskIndexes = Array.from(\n  { length: expectedTaskCount },\n  (_, index) => index + 1\n).filter((taskIndex) => !seenTaskIndexes.has(taskIndex));\n\nif (missingTaskIndexes.length) {\n  throw new Error(\n    'Prepare S003 Batch Input: missing taskIndex value(s): ' +\n    missingTaskIndexes.join(', ') + '.'\n  );\n}\n\nbatchItems.sort((left, right) => left.taskIndex - right.taskIndex);\n\nreturn [{\n  json: {\n    batchItems,\n    generationConcurrency: 7,\n    rootOutputDir: batchItems[0].rootOutputDir || '',\n    productName: batchItems[0].productName || '',\n    taskCount: batchItems.length,\n  },\n}];"
+      },
+      "id": "29335558-d1f5-4ea0-9eb1-b1154c4cdda0",
+      "name": "Prepare S003 Batch Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -528,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const BASE_OUTPUT_DIR = \"__MERCHROUTE_DATA_ROOT__/02_GenerateFolder/E003-7套图-下载\";\n\n\nconst FOLDER_STABLE_MAX_WAIT_MS = 120000;\nconst FOLDER_STABLE_INTERVAL_MS = 1000;\nconst FOLDER_STABLE_STABLE_MS = 5000;\nconst FOLDER_STABLE_SCRIPT_BASE64 = 'Y29uc3QgZnM9cmVxdWlyZSgnZnMnKSxwYXRoPXJlcXVpcmUoJ3BhdGgnKTtjb25zdCBmb2xkZXI9QnVmZmVyLmZyb20ocHJvY2Vzcy5hcmd2WzJdfHwnJywnYmFzZTY0JykudG9TdHJpbmcoJ3V0ZjgnKTtjb25zdCBtYXhXYWl0TXM9TnVtYmVyKHByb2Nlc3MuYXJndlszXXx8JzEyMDAwMCcpO2NvbnN0IGludGVydmFsTXM9TnVtYmVyKHByb2Nlc3MuYXJndls0XXx8JzEwMDAnKTtjb25zdCBzdGFibGVNcz1OdW1iZXIocHJvY2Vzcy5hcmd2WzVdfHwnNTAwMCcpO2NvbnN0IHRlbXBQYXR0ZXJuPS9cLih0bXB8cGFydHxjcmRvd25sb2FkfGRvd25sb2FkKSQvaTtjb25zdCBzbGVlcD0obXMpPT5uZXcgUHJvbWlzZSgocmVzb2x2ZSk9PnNldFRpbWVvdXQocmVzb2x2ZSxtcykpO2Z1bmN0aW9uIG5vcm1hbGl6ZSh2YWx1ZSl7cmV0dXJuIFN0cmluZyh2YWx1ZXx8JycpLnJlcGxhY2UoL1xcL2csJy8nKTt9ZnVuY3Rpb24gc25hcHNob3Qocm9vdCl7aWYoIXJvb3QpdGhyb3cgbmV3IEVycm9yKCdmb2xkZXJQYXRoIGlzIHJlcXVpcmVkJyk7aWYoIWZzLmV4aXN0c1N5bmMocm9vdCkpdGhyb3cgbmV3IEVycm9yKCdEaXJlY3RvcnkgZG9lcyBub3QgZXhpc3Q6ICcrcm9vdCk7Y29uc3Qgcm9vdFN0YXQ9ZnMuc3RhdFN5bmMocm9vdCk7aWYoIXJvb3RTdGF0LmlzRGlyZWN0b3J5KCkpdGhyb3cgbmV3IEVycm9yKCdQYXRoIGlzIG5vdCBhIGRpcmVjdG9yeTogJytyb290KTtjb25zdCByb3dzPVtdO2xldCB0b3RhbEJ5dGVzPTAsbmV3ZXN0TXRpbWVNcz0wLGhhc1RlbXBGaWxlcz1mYWxzZTtmdW5jdGlvbiB3YWxrKGN1cnJlbnQpe2NvbnN0IGVudHJpZXM9ZnMucmVhZGRpclN5bmMoY3VycmVudCx7d2l0aEZpbGVUeXBlczp0cnVlfSkuc29ydCgoYSxiKT0+YS5uYW1lLmxvY2FsZUNvbXBhcmUoYi5uYW1lKSk7Zm9yKGNvbnN0IGVudHJ5IG9mIGVudHJpZXMpe2NvbnN0IGZ1bGxQYXRoPXBhdGguam9pbihjdXJyZW50LGVudHJ5Lm5hbWUpO2NvbnN0IHJlbFBhdGg9bm9ybWFsaXplKHBhdGgucmVsYXRpdmUocm9vdCxmdWxsUGF0aCkpO2lmKGVudHJ5LmlzRGlyZWN0b3J5KCkpe3dhbGsoZnVsbFBhdGgpO2NvbnRpbnVlO31pZighZW50cnkuaXNGaWxlKCkpY29udGludWU7Y29uc3Qgc3RhdD1mcy5zdGF0U3luYyhmdWxsUGF0aCk7dG90YWxCeXRlcys9c3RhdC5zaXplO25ld2VzdE10aW1lTXM9TWF0aC5tYXgobmV3ZXN0TXRpbWVNcyxNYXRoLmZsb29yKHN0YXQubXRpbWVNcykpO2lmKHRlbXBQYXR0ZXJuLnRlc3QoZW50cnkubmFtZSkpaGFzVGVtcEZpbGVzPXRydWU7cm93cy5wdXNoKHJlbFBhdGgrJzonK3N0YXQuc2l6ZSsnOicrTWF0aC5mbG9vcihzdGF0Lm10aW1lTXMpKTt9fXdhbGsocm9vdCk7cmV0dXJue3NpZ25hdHVyZTpyb3dzLmpvaW4oJ3wnKSxmaWxlQ291bnQ6cm93cy5sZW5ndGgsdG90YWxCeXRlcyxuZXdlc3RNdGltZU1zLGhhc1RlbXBGaWxlc307fShhc3luYygpPT57Y29uc3Qgc3RhcnRlZEF0PURhdGUubm93KCk7bGV0IHByZXZpb3VzU2lnbmF0dXJlPScnLHN0YWJsZVNpbmNlPTAsY3VycmVudD1udWxsLGNoZWNrcz0wO3doaWxlKERhdGUubm93KCktc3RhcnRlZEF0PD1tYXhXYWl0TXMpe2N1cnJlbnQ9c25hcHNob3QoZm9sZGVyKTtjaGVja3MrPTE7Y29uc3QgY2FuQmVTdGFibGU9Y3VycmVudC5maWxlQ291bnQ+MCYmIWN1cnJlbnQuaGFzVGVtcEZpbGVzO2lmKGNhbkJlU3RhYmxlJiZjdXJyZW50LnNpZ25hdHVyZT09PXByZXZpb3VzU2lnbmF0dXJlKXtpZighc3RhYmxlU2luY2Upc3RhYmxlU2luY2U9RGF0ZS5ub3coKTtpZihEYXRlLm5vdygpLXN0YWJsZVNpbmNlPj1zdGFibGVNcyl7Y29uc29sZS5sb2coSlNPTi5zdHJpbmdpZnkoe29rOnRydWUsZm9sZGVyUGF0aDpub3JtYWxpemUoZm9sZGVyKSx3YWl0ZWRNczpEYXRlLm5vdygpLXN0YXJ0ZWRBdCxzdGFibGVNcyxpbnRlcnZhbE1zLG1heFdhaXRNcyxjaGVja3MsZmlsZUNvdW50OmN1cnJlbnQuZmlsZUNvdW50LHRvdGFsQnl0ZXM6Y3VycmVudC50b3RhbEJ5dGVzLG5ld2VzdE10aW1lTXM6Y3VycmVudC5uZXdlc3RNdGltZU1zfSkpO3JldHVybjt9fWVsc2V7cHJldmlvdXNTaWduYXR1cmU9Y3VycmVudC5zaWduYXR1cmU7c3RhYmxlU2luY2U9MDt9YXdhaXQgc2xlZXAoaW50ZXJ2YWxNcyk7fWNvbnNvbGUuZXJyb3IoSlNPTi5zdHJpbmdpZnkoe29rOmZhbHNlLGZvbGRlclBhdGg6bm9ybWFsaXplKGZvbGRlciksd2FpdGVkTXM6RGF0ZS5ub3coKS1zdGFydGVkQXQsc3RhYmxlTXMsaW50ZXJ2YWxNcyxtYXhXYWl0TXMsY2hlY2tzLGZpbGVDb3VudDpjdXJyZW50P2N1cnJlbnQuZmlsZUNvdW50OjAsdG90YWxCeXRlczpjdXJyZW50P2N1cnJlbnQudG90YWxCeXRlczowLGhhc1RlbXBGaWxlczpjdXJyZW50P2N1cnJlbnQuaGFzVGVtcEZpbGVzOmZhbHNlLGVycm9yOidEaXJlY3RvcnkgZGlkIG5vdCBiZWNvbWUgc3RhYmxlIGJlZm9yZSB0aW1lb3V0J30pKTtwcm9jZXNzLmV4aXQoMik7fSkoKS5jYXRjaCgoZXJyb3IpPT57Y29uc29sZS5lcnJvcihKU09OLnN0cmluZ2lmeSh7b2s6ZmFsc2UsZm9sZGVyUGF0aDpub3JtYWxpemUoZm9sZGVyKSxlcnJvcjplcnJvci5tZXNzYWdlfSkpO3Byb2Nlc3MuZXhpdCgxKTt9KTs=';\nconst FOLDER_STABLE_BOOTSTRAP = \"eval(Buffer.from(process.argv[1],'base64').toString('utf8'))\";\n\nconst __hiddenFs = require('fs');\nconst __hiddenPath = require('path');\nconst __HIDDEN_PS_TEMPLATE = \"$ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue';[Console]::OutputEncoding=New-Object System.Text.UTF8Encoding $false;$OutputEncoding=[Console]::OutputEncoding;function q([string]$a){if($null -eq $a){return '\\\"\\\"'}if($a.Length -eq 0){return '\\\"\\\"'}if($a -notmatch '[\\\\s\\\"]'){return $a}$r='\\\"';$b=0;foreach($c in $a.ToCharArray()){if($c -eq '\\\\'){$b++;continue}if($c -eq '\\\"'){$r+=('\\\\'*($b*2+1))+'\\\"';$b=0;continue}if($b -gt 0){$r+='\\\\'*$b;$b=0}$r+=$c}if($b -gt 0){$r+='\\\\'*($b*2)}return $r+'\\\"'};$sp=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__SPEC_PATH_B64__'));$o=[IO.Path]::GetTempFileName();$e=[IO.Path]::GetTempFileName();try{$s=Get-Content -LiteralPath $sp -Raw -Encoding UTF8|ConvertFrom-Json;$av=@();foreach($x in $s.args){$av+=[string]$x};$al=($av|%{q $_}) -join ' ';$p=Start-Process -FilePath ([string]$s.executable) -ArgumentList $al -WindowStyle Hidden -Wait -PassThru -RedirectStandardOutput $o -RedirectStandardError $e;$out=if(Test-Path -LiteralPath $o){[IO.File]::ReadAllText($o,[Text.Encoding]::UTF8)}else{''};$err=if(Test-Path -LiteralPath $e){[IO.File]::ReadAllText($e,[Text.Encoding]::UTF8)}else{''};if($out){[Console]::Out.Write($out)};if($err){[Console]::Error.Write($err)};exit $p.ExitCode}finally{Remove-Item -LiteralPath $o,$e -Force -ErrorAction SilentlyContinue;if(Test-Path -LiteralPath $sp){Remove-Item -LiteralPath $sp -Force -ErrorAction SilentlyContinue}}\";\nfunction __hiddenB64Utf8(value) { return Buffer.from(String(value ?? ''), 'utf8').toString('base64'); }\nfunction __hiddenShQuote(value) { const text = String(value ?? ''); return \"'\" + text.replace(/'/g, \"'\\\"'\\\"'\") + \"'\"; }\nfunction __useWindowsHiddenCommand() { return __hiddenPath.sep === '\\\\'; }\nfunction __buildHiddenCommand(executable, args) {\n  const __isWin = __useWindowsHiddenCommand();\n  const __tempRoot = __isWin ? '__MERCHROUTE_TEMP_DIR__' : '/tmp';\n  const dir = __hiddenPath.join(__tempRoot, 'n8n-hidden-command-specs');\n  __hiddenFs.mkdirSync(dir, { recursive: true });\n  const specPath = __hiddenPath.join(dir, 'cmd-' + Date.now() + '-' + Math.random().toString(36).slice(2, 10) + '.json');\n  const spec = { executable: String(executable), args: args.map((arg) => String(arg ?? '')), createdAt: new Date().toISOString(), version: 'n8n-hidden-cli-v1' };\n  __hiddenFs.writeFileSync(specPath, JSON.stringify(spec), 'utf8');\n  const psScript = __HIDDEN_PS_TEMPLATE.replace('__SPEC_PATH_B64__', __hiddenB64Utf8(specPath));\n  return 'powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -OutputFormat Text -EncodedCommand ' + Buffer.from(psScript, 'utf16le').toString('base64');\n}\nfunction __buildNodeCommand(args) {\n  const normalizedArgs = args.map((arg) => String(arg ?? ''));\n  if (__useWindowsHiddenCommand()) return __buildHiddenCommand('node', normalizedArgs);\n  return ['node', ...normalizedArgs.map(__hiddenShQuote)].join(' ');\n}\nfunction __buildNodeEvalCommand(scriptBase64, scriptArgs = []) {\n  return __buildNodeCommand(['-e', \"eval(Buffer.from(process.argv[1],'base64').toString('utf8'))\", scriptBase64, ...scriptArgs.map((arg) => String(arg ?? ''))]);\n}\nfunction __buildNodeGzipEvalCommand(scriptBase64, scriptArgs = []) {\n  return __buildNodeCommand(['-e', \"eval(require('zlib').gunzipSync(Buffer.from(process.argv[1],'base64')).toString('utf8'))\", scriptBase64, ...scriptArgs.map((arg) => String(arg ?? ''))]);\n}\n\nconst items = $input.all();\n\nfunction text(value) {\n  return value === undefined || value === null ? '' : String(value).trim();\n}\n\nfunction positiveInteger(value, fallback) {\n  const numberValue = Number(value);\n  return Number.isFinite(numberValue) && numberValue > 0 ? Math.floor(numberValue) : fallback;\n}\n\nfunction isWindowsPath(value) {\n  const candidate = text(value);\n  return /^[a-zA-Z]:[\\\\/]/.test(candidate) || /^\\\\\\\\/.test(candidate);\n}\n\nfunction buildFolderStableCommand(folderPath, folderPathBase64, maxWaitMs, intervalMs, stableMs) {\n  return __buildNodeEvalCommand(FOLDER_STABLE_SCRIPT_BASE64, [\n    folderPathBase64,\n    String(maxWaitMs),\n    String(intervalMs),\n    String(stableMs),\n  ]);\n}\n\nreturn items.map((item, index) => {\n  const input = item.json || {};\n  const folderPath = text(input.folderPath || input.path || input.fullPath || input.filePath);\n  if (!folderPath) {\n    throw new Error('setParameter: missing folderPath/path from trigger item.');\n  }\n  if (!text(BASE_OUTPUT_DIR)) {\n    throw new Error('setParameter: BASE_OUTPUT_DIR is required.');\n  }\n\n  const folderPathBase64 = Buffer.from(folderPath, 'utf8').toString('base64');\n  const folderStableMaxWaitMs = positiveInteger(input.folderStableMaxWaitMs, FOLDER_STABLE_MAX_WAIT_MS);\n  const folderStableIntervalMs = positiveInteger(input.folderStableIntervalMs, FOLDER_STABLE_INTERVAL_MS);\n  const folderStableStableMs = positiveInteger(input.folderStableStableMs, FOLDER_STABLE_STABLE_MS);\n\n  return {\n    json: {\n      ...input,\n      baseOutputDir: text(BASE_OUTPUT_DIR),\n      folderPath,\n      folderPathBase64,\n      folderStableMaxWaitMs,\n      folderStableIntervalMs,\n      folderStableStableMs,\n      folderStableCommand: buildFolderStableCommand(\n        folderPath,\n        folderPathBase64,\n        folderStableMaxWaitMs,\n        folderStableIntervalMs,\n        folderStableStableMs,\n      ),\n    },\n    pairedItem: item.pairedItem || { item: index },\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1424,
+        -512
+      ],
+      "id": "2cc026fa-1ea3-49bb-b327-ff8738c5f375",
+      "name": "setParameter"
+    },
+    {
+      "parameters": {
+        "command": "={{ $json.folderStableCommand }}"
+      },
+      "id": "4a8b1cf1-dafb-4fca-8f1c-7d7db4d05735",
+      "name": "Wait New Folder Stable",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        -1200,
+        -512
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const current = $input.first().json || {};\nconst upstream = $('setParameter').first().json || {};\nconst stdout = String(current.stdout ?? '').trim();\nconst stderr = String(current.stderr ?? '').trim();\nconst exitCode = current.exitCode ?? 'unknown';\n\nfunction parseLastJson(value) {\n  if (!value) return null;\n  const lines = String(value).split(/\\r?\\n/).map((line) => line.trim()).filter(Boolean);\n  for (let i = lines.length - 1; i >= 0; i -= 1) {\n    try {\n      return JSON.parse(lines[i]);\n    } catch (error) {}\n  }\n  try {\n    return JSON.parse(value);\n  } catch (error) {\n    return null;\n  }\n}\n\nfunction preview(value) {\n  return String(value || '').replace(/\\s+/g, ' ').slice(0, 500);\n}\n\nif (!stdout && !stderr) {\n  throw new Error(`New folder stable check failed: Wait New Folder Stable returned empty stdout/stderr. exitCode=${exitCode}. This usually means Execute Command shell quoting or output capture failed.`);\n}\n\nconst result = parseLastJson(stdout) || parseLastJson(stderr);\nif (!result) {\n  throw new Error(`New folder stable check failed: Wait New Folder Stable output is not valid JSON. exitCode=${exitCode}. stdout=${preview(stdout)} stderr=${preview(stderr)}`);\n}\n\nif (result.ok !== true) {\n  const message = result.error || stderr || stdout || 'Wait New Folder Stable did not return ok:true.';\n  const details = [\n    `exitCode=${exitCode}`,\n    result.waitedMs !== undefined ? `waitedMs=${result.waitedMs}` : '',\n    result.fileCount !== undefined ? `fileCount=${result.fileCount}` : '',\n    result.hasTempFiles !== undefined ? `hasTempFiles=${result.hasTempFiles}` : '',\n  ].filter(Boolean).join(' ');\n  throw new Error(`New folder stable check failed: ${message}${details ? ` (${details})` : ''}`);\n}\n\nreturn [{\n  json: {\n    ...upstream,\n    folderStable: true,\n    folderStableResult: result,\n    folderStableWaitedMs: Number(result.waitedMs || 0),\n    folderStableChecks: Number(result.checks || 0),\n    folderStableFileCount: Number(result.fileCount || 0),\n    folderStableTotalBytes: Number(result.totalBytes || 0),\n    folderStableNewestMtimeMs: Number(result.newestMtimeMs || 0),\n  },\n}];"
+      },
+      "id": "d05e1a62-b579-4884-b82c-b271f7788638",
+      "name": "Parse New Folder Stable Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -976,
+        -512
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "JEl0xCKTgtiIP9UT",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/JEl0xCKTgtiIP9UT",
+          "cachedResultName": "S013-v04-主图场景-编排子流"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "productName": "={{ $json.productName }}",
+            "productDescription": "={{ $json.productDescription }}",
+            "targetPlatform": "={{ $json.targetPlatform }}",
+            "Country": "={{ $json.Country }}",
+            "Language": "={{ $json.Language }}",
+            "titleDescriptionLenth": "={{ $json.titleDescriptionLength }}",
+            "viewImageAdd1": "={{ $json.viewImageAdd1 }}",
+            "viewImageAdd2": "={{ $json.viewImageAdd2 }}",
+            "viewImageAdd3": "={{ $json.viewImageAdd3 }}",
+            "ratio": "={{ $json.ratio }}",
+            "titleLength": "={{ $json.titleLength }}",
+            "Category": "={{ $json.Category }}",
+            "viewImageAdd4": "={{ $json.viewImageAdd4 }}",
+            "viewImageAdd5": "={{ $json.viewImageAdd5 }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Category",
+              "displayName": "Category",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "productName",
+              "displayName": "productName",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "productDescription",
+              "displayName": "productDescription",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "targetPlatform",
+              "displayName": "targetPlatform",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "Country",
+              "displayName": "Country",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "Language",
+              "displayName": "Language",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "titleLength",
+              "displayName": "titleLength",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "number",
+              "removed": false
+            },
+            {
+              "id": "titleDescriptionLenth",
+              "displayName": "titleDescriptionLenth",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "number",
+              "removed": false
+            },
+            {
+              "id": "viewImageAdd1",
+              "displayName": "viewImageAdd1",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "viewImageAdd2",
+              "displayName": "viewImageAdd2",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "viewImageAdd3",
+              "displayName": "viewImageAdd3",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "viewImageAdd4",
+              "displayName": "viewImageAdd4",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "viewImageAdd5",
+              "displayName": "viewImageAdd5",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "ratio",
+              "displayName": "ratio",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "viewImageAdds",
+              "displayName": "viewImageAdds",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "array",
+              "removed": false
+            },
+            {
+              "id": "imageUrls",
+              "displayName": "imageUrls",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "array",
+              "removed": false
+            },
+            {
+              "id": "images",
+              "displayName": "images",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "array",
+              "removed": false
+            },
+            {
+              "id": "viewImages",
+              "displayName": "viewImages",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "array",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        -80,
+        -512
+      ],
+      "id": "267b1047-e74e-40d3-8e5e-bebf3fd59844",
+      "name": "Call 'S013-v04-主图场景-编排子流'",
+      "onError": "stopWorkflow"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "5fKlIwJWfXJM1y4E",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/5fKlIwJWfXJM1y4E",
+          "cachedResultName": "S005-文件上传-转URL-硅基API-v4"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "filePath": "",
+            "folderPath": "",
+            "filePaths": "={{ Array.isArray($json.viewImages) && $json.viewImages.length ? $json.viewImages : [$json.viewImageAdd1, $json.viewImageAdd2, $json.viewImageAdd3, $json.viewImageAdd4, $json.viewImageAdd5].filter(Boolean) }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "filePath",
+              "displayName": "filePath",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "folderPath",
+              "displayName": "folderPath",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "filePaths",
+              "displayName": "filePaths",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "array",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "b2024906-24e4-4afe-b920-04dc42de2fa2",
+      "name": "Call 'S005-文件上传-转URL-硅基API-v4'",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        -528,
+        -512
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const source = $(\"Call 'S014-03-读取产品文件夹并标准化输入'\").first().json || {};\nconst uploadedItems = $input.all();\n\nfunction cleanString(value) {\n  return String(value ?? '').trim();\n}\n\nfunction requiredPositiveInteger(name, value) {\n  const numberValue = Number(value);\n  if (!Number.isInteger(numberValue) || numberValue <= 0) {\n    throw new Error(name + ' must be a positive integer, received: ' + String(value ?? ''));\n  }\n  return numberValue;\n}\n\nfunction baseName(value) {\n  return cleanString(value).replace(/\\\\/g, '/').split('/').filter(Boolean).pop() || '';\n}\n\nfunction isHttpUrl(value) {\n  return /^https?:\\/\\//i.test(cleanString(value));\n}\n\nconst sourcePaths = Array.isArray(source.viewImages) && source.viewImages.length\n  ? source.viewImages.map(cleanString).filter(Boolean)\n  : [source.viewImageAdd1, source.viewImageAdd2, source.viewImageAdd3, source.viewImageAdd4, source.viewImageAdd5]\n      .map(cleanString)\n      .filter(Boolean);\n\nif (sourcePaths.length < 3 || sourcePaths.length > 5) {\n  throw new Error('S014 must return 3-5 source image paths, received ' + sourcePaths.length);\n}\nif (uploadedItems.length !== sourcePaths.length) {\n  throw new Error('SiliconFlow upload count mismatch: expected ' + sourcePaths.length + ', received ' + uploadedItems.length);\n}\n\nconst urlsByIndex = new Map();\nfor (const [position, item] of uploadedItems.entries()) {\n  const row = item.json || {};\n  const inputIndex = Number(row.inputIndex);\n  const sourceFileName = cleanString(row.sourceFileName);\n  const url = cleanString(row.url);\n  if (!Number.isInteger(inputIndex) || inputIndex < 0 || inputIndex >= sourcePaths.length) {\n    throw new Error('Invalid SiliconFlow inputIndex at result ' + (position + 1) + ': ' + row.inputIndex);\n  }\n  if (urlsByIndex.has(inputIndex)) throw new Error('Duplicate SiliconFlow inputIndex: ' + inputIndex);\n  const expectedFileName = baseName(sourcePaths[inputIndex]);\n  if (!sourceFileName || sourceFileName !== expectedFileName) {\n    throw new Error('SiliconFlow filename mismatch at inputIndex ' + inputIndex + ': expected ' + expectedFileName + ', received ' + (sourceFileName || '(empty)'));\n  }\n  if (!isHttpUrl(url)) throw new Error('SiliconFlow URL is missing or invalid for ' + expectedFileName);\n  urlsByIndex.set(inputIndex, url);\n}\n\nconst viewImages = sourcePaths.map((filePath, index) => {\n  const url = urlsByIndex.get(index);\n  if (!url) throw new Error('Missing SiliconFlow URL for ' + baseName(filePath));\n  return url;\n});\n\nconst titleLength = requiredPositiveInteger('titleLength/titleLenth', source.titleLength ?? source.titleLenth);\nconst titleDescriptionLength = requiredPositiveInteger('titleDescriptionLength/titleDescriptionLenth', source.titleDescriptionLength ?? source.titleDescriptionLenth);\n\nreturn [{\n  json: {\n    ...source,\n    titleLength,\n    titleDescriptionLength,\n    titleLenth: titleLength,\n    titleDescriptionLenth: titleDescriptionLength,\n    sourceViewImages: sourcePaths,\n    viewImages,\n    imageCount: viewImages.length,\n    viewImageAdd1: viewImages[0] || '',\n    viewImageAdd2: viewImages[1] || '',\n    viewImageAdd3: viewImages[2] || '',\n    viewImageAdd4: viewImages[3] || '',\n    viewImageAdd5: viewImages[4] || '',\n  },\n}];"
+      },
+      "id": "97dbe730-4cd4-4dc6-abcf-91a2bcb93a1f",
+      "name": "Attach SiliconFlow Image URLs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -304,
+        -512
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "ieWnRGeC7KdeS1GT",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/ieWnRGeC7KdeS1GT",
+          "cachedResultName": "S003-v8-即梦4.5-5图生7图"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "batchItems": "={{ $json.batchItems }}",
+            "generationConcurrency": "={{ $json.generationConcurrency }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "image-1",
+              "displayName": "image-1",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "image-2",
+              "displayName": "image-2",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "image-3",
+              "displayName": "image-3",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "image-4",
+              "displayName": "image-4",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "image-5",
+              "displayName": "image-5",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "prompt",
+              "displayName": "prompt",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "negativePrompt",
+              "displayName": "negativePrompt",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "model",
+              "displayName": "model",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "image_count",
+              "displayName": "image_count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "resolution",
+              "displayName": "resolution",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "ratio",
+              "displayName": "ratio",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "batchItems",
+              "displayName": "batchItems",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "array",
+              "removed": false
+            },
+            {
+              "id": "generationConcurrency",
+              "displayName": "generationConcurrency",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "number",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        -304,
+        0
+      ],
+      "id": "8933b312-c1a3-45e7-a687-961aefc30b62",
+      "name": "Call 'S003-v8-即梦4.5-5图生7图'",
+      "onError": "continueErrorOutput"
+    }
+  ],
+  "connections": {
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Merge S011 Prompt With Tasks",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Call S011-03-Prompt Builder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge S011 Prompt With Tasks": {
+      "main": [
+        [
+          {
+            "node": "Prepare Directory Command",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Pass Jobs After Directory Plan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Directory Command": {
+      "main": [
+        [
+          {
+            "node": "Create Output Directories",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Output Directories": {
+      "main": [
+        [
+          {
+            "node": "Wait For Directory Setup",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Pass Jobs After Directory Plan": {
+      "main": [
+        [
+          {
+            "node": "Wait For Directory Setup",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Wait For Directory Setup": {
+      "main": [
+        [
+          {
+            "node": "Prepare S003 Batch Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Data Prepare": {
+      "main": [
+        [
+          {
+            "node": "Prepare S001 Batch Input",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Prepare S001 Batch Input": {
+      "main": [
+        [
+          {
+            "node": "Call 'S001-Url文件下载-v02'",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Call 'S008-产品详情-俄文-生成子流'": {
+      "main": [
+        [
+          {
+            "node": "Merge Product Detail With Scenes",
+            "type": "main",
+            "index": 1
+          }
+        ],
+        []
+      ]
+    },
+    "Merge Product Detail With Scenes": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Local File Trigger": {
+      "main": [
+        [
+          {
+            "node": "setParameter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call 'S014-03-读取产品文件夹并标准化输入'": {
+      "main": [
+        [
+          {
+            "node": "Call 'S005-文件上传-转URL-硅基API-v4'",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call S011-03-Prompt Builder": {
+      "main": [
+        [
+          {
+            "node": "Merge S011 Prompt With Tasks",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Call 'S001-Url文件下载-v02'": {
+      "main": [
+        [],
+        []
+      ]
+    },
+    "Prepare S003 Batch Input": {
+      "main": [
+        [
+          {
+            "node": "Call 'S003-v8-即梦4.5-5图生7图'",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "setParameter": {
+      "main": [
+        [
+          {
+            "node": "Wait New Folder Stable",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait New Folder Stable": {
+      "main": [
+        [
+          {
+            "node": "Parse New Folder Stable Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse New Folder Stable Result": {
+      "main": [
+        [
+          {
+            "node": "Call 'S014-03-读取产品文件夹并标准化输入'",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call 'S013-v04-主图场景-编排子流'": {
+      "main": [
+        [
+          {
+            "node": "Merge Product Detail With Scenes",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Call 'S008-产品详情-俄文-生成子流'",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call 'S005-文件上传-转URL-硅基API-v4'": {
+      "main": [
+        [
+          {
+            "node": "Attach SiliconFlow Image URLs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Attach SiliconFlow Image URLs": {
+      "main": [
+        [
+          {
+            "node": "Call 'S013-v04-主图场景-编排子流'",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call 'S003-v8-即梦4.5-5图生7图'": {
+      "main": [
+        [
+          {
+            "node": "Download Data Prepare",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  }
+}

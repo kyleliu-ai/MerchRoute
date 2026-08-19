@@ -1,0 +1,105 @@
+const fs = require('fs');
+const path = require('path');
+
+const current = $input.first().json || {};
+const upstream = $('Normalize Trigger Path').first().json || {};
+const stdout = String(current.stdout || '').trim();
+const stderr = String(current.stderr || '').trim();
+
+function parseLastJson(text) {
+  const lines = String(text || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean).reverse();
+  for (const line of lines) {
+    try {
+      const parsed = JSON.parse(line);
+      if (parsed && typeof parsed === 'object') return parsed;
+    } catch {}
+  }
+  return null;
+}
+
+const stable = parseLastJson(stdout);
+if (!stable || stable.stable !== true) {
+  const detail = stable?.reason || stable?.error || stderr || stdout || 'Wait node did not return stable JSON.';
+  throw new Error('E004_PACKAGE_NOT_READY: ' + detail);
+}
+
+const submissionId = String(stable.submissionId || '').trim();
+const parameterFileName = String(stable.parameterFileName || '').trim();
+if (!submissionId) throw new Error('E004_SUBMISSION_ID_MISSING');
+if (!parameterFileName.toLowerCase().endsWith('.json')) throw new Error('E004_PARAMETER_FILE_INVALID');
+if (String(stable.targetStageId || '') !== 'E004') throw new Error('E004_TARGET_STAGE_MISMATCH');
+
+const state = $getWorkflowStaticData('global');
+if (!state.e004CompletedSubmissions || typeof state.e004CompletedSubmissions !== 'object' || Array.isArray(state.e004CompletedSubmissions)) {
+  state.e004CompletedSubmissions = {};
+}
+if (state.p007CompletedSubmissions && typeof state.p007CompletedSubmissions === 'object' && !Array.isArray(state.p007CompletedSubmissions)) {
+  for (const [key, completedAt] of Object.entries(state.p007CompletedSubmissions)) {
+    if (!Object.prototype.hasOwnProperty.call(state.e004CompletedSubmissions, key)) state.e004CompletedSubmissions[key] = completedAt;
+  }
+  delete state.p007CompletedSubmissions;
+}
+
+const now = Date.now();
+const completedKeepMs = 30 * 24 * 60 * 60 * 1000;
+for (const [key, completedAt] of Object.entries(state.e004CompletedSubmissions)) {
+  if (!Number.isFinite(Number(completedAt)) || now - Number(completedAt) > completedKeepMs) delete state.e004CompletedSubmissions[key];
+}
+if (state.e004CompletedSubmissions[submissionId]) {
+  throw new Error('E004_SUBMISSION_ALREADY_COMPLETED: submissionId=' + submissionId + ', completedAt=' + new Date(Number(state.e004CompletedSubmissions[submissionId])).toISOString());
+}
+
+const sourceChildDir = path.resolve(String(upstream.sourceChildDir || ''));
+if (!sourceChildDir || !fs.existsSync(sourceChildDir) || !fs.lstatSync(sourceChildDir).isDirectory()) {
+  throw new Error('E004_SOURCE_DIRECTORY_INVALID');
+}
+if (fs.lstatSync(sourceChildDir).isSymbolicLink()) throw new Error('E004_SOURCE_DIRECTORY_SYMLINK_FORBIDDEN');
+const lockPath = path.join(sourceChildDir, '._E004_RENDER.lock');
+const lockTtlMs = 30 * 60 * 1000;
+
+if (fs.existsSync(lockPath)) {
+  const lockStat = fs.lstatSync(lockPath);
+  if (lockStat.isSymbolicLink() || !lockStat.isFile()) throw new Error('E004_RENDER_LOCK_INVALID');
+  let lock = {};
+  try { lock = JSON.parse(fs.readFileSync(lockPath, 'utf8')); } catch {}
+  const startedAt = Date.parse(String(lock.startedAt || ''));
+  if (!Number.isFinite(startedAt) || now - startedAt > lockTtlMs) {
+    fs.rmSync(lockPath, { force: true });
+  } else {
+    throw new Error('E004_SUBMISSION_IN_PROGRESS: submissionId=' + String(lock.submissionId || 'unknown') + ', executionId=' + String(lock.executionId || 'unknown'));
+  }
+}
+
+let descriptor;
+try {
+  descriptor = fs.openSync(lockPath, 'wx', 0o600);
+  fs.writeFileSync(descriptor, JSON.stringify({
+    schemaVersion: 1,
+    workflowCode: 'E004',
+    submissionId,
+    executionId: String($execution.id || ''),
+    startedAt: new Date(now).toISOString(),
+  }, null, 2), 'utf8');
+} catch (error) {
+  if (error?.code === 'EEXIST') throw new Error('E004_SUBMISSION_IN_PROGRESS: concurrent lock acquired');
+  throw error;
+} finally {
+  if (descriptor !== undefined) fs.closeSync(descriptor);
+}
+
+return [{
+  json: {
+    ...upstream,
+    readySubmissionId: submissionId,
+    parameterFileName,
+    parameterFilePrefix: parameterFileName.slice(0, -5),
+    e004RenderLockPath: lockPath.replace(/\\/g, '/'),
+    folderStable: true,
+    folderStableResult: stable,
+    imagePathsFromStable: Array.isArray(stable.imageFiles) ? stable.imageFiles : [],
+    folderStableImageCount: Number(stable.imageCount || 0),
+    folderStableWaitedSeconds: Number(stable.waitedSeconds || 0),
+    folderStableChecks: Number(stable.checks || 0),
+    folderStableContentSha256: String(stable.contentSha256 || ''),
+  },
+}];

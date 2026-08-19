@@ -1,0 +1,689 @@
+{
+  "id": "aj5sD7nSxxpTuRMh",
+  "name": "E005-v07-图片加logo-Resize",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "fileSelector": "={{ $('Normalize User Paths').item.json.sourceSelector }}",
+        "options": {
+          "dataPropertyName": "data"
+        }
+      },
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        3104,
+        2224
+      ],
+      "id": "dbe0060a-2b6c-4b1e-b1cd-6c99f5b68d52",
+      "name": "Read/Write Files from Disk",
+      "notesInFlow": true,
+      "notes": "读产品图片"
+    },
+    {
+      "parameters": {
+        "jsCode": "const path = require('path');\n\nconst params = $('Normalize User Paths').first().json || {};\nconst supportedExtensions = ['jpg', 'jpeg', 'png', 'webp'];\nconst collator = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' });\n\nfunction normalizeLocalPath(value) {\n  let text = value == null ? '' : String(value).trim();\n  if ((text.startsWith('\"') && text.endsWith('\"')) || (text.startsWith(\"'\") && text.endsWith(\"'\"))) {\n    text = text.slice(1, -1).trim();\n  }\n  text = text.replace(/^file:\\/\\/localhost\\//i, '').replace(/^file:\\/\\//i, '');\n  if (/^\\/[A-Za-z]:\\//.test(text)) text = text.slice(1);\n  return text.replace(/\\\\/g, '/').replace(/\\/+/g, '/').replace(/\\/+$/, '');\n}\n\nfunction joinPath(...parts) {\n  return parts\n    .filter((part) => part != null && String(part).trim() !== '')\n    .map((part, index) => {\n      let text = normalizeLocalPath(part);\n      if (index > 0) text = text.replace(/^\\/+/, '');\n      return text.replace(/\\/+$/, '');\n    })\n    .join('/');\n}\n\nfunction pathLeaf(value) {\n  const normalized = normalizeLocalPath(value);\n  const parts = normalized.split('/').filter(Boolean);\n  return parts[parts.length - 1] || '';\n}\n\nfunction relativeFromRoot(root, absolutePath, label) {\n  const absoluteRoot = path.resolve(root);\n  const resolved = path.resolve(absolutePath);\n  const relative = path.relative(absoluteRoot, resolved);\n  if (!relative || relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) {\n    throw new Error(label + ' 超出来源目录：' + absolutePath);\n  }\n  return relative.split(path.sep).join('/');\n}\n\nfunction extractImageNumbers(baseName, index) {\n  const groupMatch = baseName.match(/__(\\d+)(?=-|$)/)\n    || baseName.match(/^第(\\d+)组(?:-|_|$)/)\n    || baseName.match(/^(\\d+)(?=-|_|$)/);\n  const subMatch = baseName.match(/-(\\d+)$/);\n  const groupNumber = groupMatch ? Number(groupMatch[1]) : index + 1;\n  const subNumber = subMatch ? Number(subMatch[1]) : index + 1;\n  return {\n    outputNumber: String(groupNumber).padStart(2, '0'),\n    outputSubNumber: String(subNumber).padStart(2, '0'),\n  };\n}\n\nconst sourceFolderDir = normalizeLocalPath(params.sourceFolderDir || params.folderPath || '');\nif (!sourceFolderDir) throw new Error('sourceFolderDir is required.');\nconst rawItems = $input.all().map((item, originalIndex) => {\n  const binary = item.binary && item.binary.data ? item.binary.data : {};\n  const sourceDirectory = normalizeLocalPath(binary.directory || item.json.sourceDirectory || sourceFolderDir);\n  const sourceFileName = String(binary.fileName || item.json.fileName || '');\n  if (!sourceFileName) throw new Error('读取到的第 ' + originalIndex + ' 个图片缺少 fileName。');\n  const absolutePath = path.resolve(sourceDirectory, sourceFileName);\n  const sourceRelativePath = relativeFromRoot(sourceFolderDir, absolutePath, '读取图片');\n  const sourceExtension = String(binary.fileExtension || item.json.fileExtension || sourceFileName.split('.').pop() || '').toLowerCase();\n  if (!supportedExtensions.includes(sourceExtension)) throw new Error('读取到不支持的图片类型：' + sourceRelativePath);\n  return { item, originalIndex, sourceDirectory, sourceFileName, sourceRelativePath, sourceExtension };\n});\n\nconst actualByRelativePath = new Map();\nfor (const entry of rawItems) {\n  if (actualByRelativePath.has(entry.sourceRelativePath)) throw new Error('读取结果包含重复图片：' + entry.sourceRelativePath);\n  actualByRelativePath.set(entry.sourceRelativePath, entry);\n}\n\nconst manifestFiles = Array.isArray(params.orderedSelectedFiles) ? params.orderedSelectedFiles : null;\nlet orderedItems;\nif (manifestFiles) {\n  if (manifestFiles.length !== rawItems.length) {\n    throw new Error('读取到的图片数量与 selection-manifest.json 不一致：manifest=' + manifestFiles.length + '，实际=' + rawItems.length + '。');\n  }\n  orderedItems = manifestFiles.map((manifestEntry, index) => {\n    if (!manifestEntry || manifestEntry.sortOrder !== index) throw new Error('Normalize User Paths 输出的 sortOrder 不连续。');\n    const relativePath = String(manifestEntry.targetRelativePath || '');\n    const actual = actualByRelativePath.get(relativePath);\n    if (!actual) throw new Error('selection-manifest.json 中的图片未被读取：' + relativePath);\n    return { ...actual, manifestEntry };\n  });\n  const manifestTargets = new Set(manifestFiles.map((entry) => String(entry.targetRelativePath || '')));\n  const extras = rawItems.filter((entry) => !manifestTargets.has(entry.sourceRelativePath));\n  if (extras.length) throw new Error('来源目录包含 manifest 未登记图片：' + extras.map((entry) => entry.sourceRelativePath).join(', '));\n} else {\n  orderedItems = [...rawItems]\n    .sort((left, right) => collator.compare(left.sourceRelativePath, right.sourceRelativePath))\n    .map((entry) => ({ ...entry, manifestEntry: null }));\n}\n\nconst outputNames = new Set();\nreturn orderedItems.map((entry, index) => {\n  const { item, originalIndex, sourceDirectory, sourceFileName, sourceRelativePath, sourceExtension, manifestEntry } = entry;\n  const baseName = sourceFileName.replace(/\\.[^.]+$/, '');\n  const { outputNumber, outputSubNumber } = extractImageNumbers(baseName, index);\n  const outputFileName = outputNumber + '-' + outputSubNumber + '.png';\n  if (outputNames.has(outputFileName)) {\n    throw new Error('按现有命名规则生成了重复输出文件名：' + outputFileName + '；为避免覆盖，本次已停止。');\n  }\n  outputNames.add(outputFileName);\n\n  const outputSubDir = normalizeLocalPath(params.defaultOutputSubDir || '');\n  if (!outputSubDir) throw new Error('defaultOutputSubDir is required.');\n  const outputPath = joinPath(outputSubDir, outputFileName);\n  return {\n    json: {\n      ...item.json,\n      sourceDirectory,\n      sourceDirectoryName: pathLeaf(sourceDirectory) || params.sourceFolderName || 'output',\n      sourceFileName,\n      sourceRelativePath,\n      sourceOriginalRelativePath: manifestEntry && manifestEntry.sourceRelativePath ? manifestEntry.sourceRelativePath : sourceRelativePath,\n      sourceExtension,\n      baseName,\n      shouldProcess: true,\n      sortOrder: index,\n      mediaOrderSource: params.mediaOrderSource || 'filename-natural-legacy',\n      outputParentDir: params.outputParentDir,\n      SKU: params.SKU,\n      productName: params.productName,\n      variants: params.variants,\n      n8nExecutionId: params.n8nExecutionId,\n      variantId: params.variantId,\n      sourceSubmissionId: params.sourceSubmissionId,\n      sourceManifestTaskId: params.sourceManifestTaskId,\n      sourceManifestStageId: params.sourceManifestStageId,\n      outputTimestamp: params.outputTimestamp,\n      outputNumber,\n      outputSubNumber,\n      outputFileName,\n      outputSubDir,\n      outputPath,\n    },\n    binary: item.binary,\n    pairedItem: { item: originalIndex },\n  };\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3360,
+        2224
+      ],
+      "id": "d8086d9a-7b74-4c6d-a426-492b562298e3",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "1d34e9d5-b31d-4981-a00f-18a9547dbbe8",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "leftValue": "={{ $json.shouldProcess }}",
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        3584,
+        2224
+      ],
+      "id": "07316105-018a-4cfb-b73e-c7ede4fbf808",
+      "name": "If Should Process"
+    },
+    {
+      "parameters": {
+        "fileSelector": "={{ $json.logoNormalized }}",
+        "options": {
+          "dataPropertyName": "logo"
+        }
+      },
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        2208,
+        2640
+      ],
+      "id": "2266b0e6-f56a-4786-a465-6fcd67f64d49",
+      "name": "Read/Write Files from Disk2",
+      "notesInFlow": true,
+      "notes": "读取logo文件"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineAll",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2560,
+        2528
+      ],
+      "id": "8c10a0ae-3a5a-48bd-acb0-19289edb8264",
+      "name": "Merge Image With Logo",
+      "notesInFlow": true,
+      "notes": "把每张图片与同一个 logo 二进制组合。不能用 combineByPosition，否则多张图片 + 1 个 logo 会被截断。"
+    },
+    {
+      "parameters": {
+        "operations": {
+          "operations": [
+            {
+              "operation": "resize",
+              "width": "={{ $('Set Parameter').item.json.maxSidePx }}",
+              "height": "={{ $('Set Parameter').item.json.maxSidePx }}"
+            },
+            {
+              "operation": "composite",
+              "positionX": 5,
+              "positionY": 1,
+              "dataPropertyNameComposite": "logo"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-vmtech-edit-image.vmtechEditImage",
+      "typeVersion": 1,
+      "position": [
+        2784,
+        2528
+      ],
+      "id": "bc2323b1-abf9-417b-a9ba-2bda4d0ae0ad",
+      "name": "VMTech Edit Image",
+      "notes": "\n✓ серебристая блестящая кожа\n✓ водонепроницаемый материал\n► Быстрая зарядка\n► Низкий уровень шума\n★ Премиум качество\n★ Прочный материал\n● Серебристая кожа\n● Высокая прочность\n① ② ③ ④ ⑤ ⑥ ⑦ ⑧ ⑨\n\n\n\n"
+    },
+    {
+      "parameters": {
+        "operation": "write",
+        "fileName": "={{ $json.outputPath }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        3408,
+        2528
+      ],
+      "id": "90cb855f-d9ac-4e04-9575-13b0d7af248b",
+      "name": "Read/Write Files from Disk1"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "e70d415c-3ed0-4fca-b470-b0fbc8dd93b4",
+              "name": "outputParentDir",
+              "value": "={{ $json.data.outputParentDir }}",
+              "type": "string"
+            },
+            {
+              "id": "274223cc-caf1-4391-a641-d575842a20c9",
+              "name": "SKU",
+              "value": "={{ $json.data.SKU }}",
+              "type": "string"
+            },
+            {
+              "id": "a0d9d032-152b-491a-8847-ca3d4d8a9c52",
+              "name": "productName",
+              "value": "={{ $json.data.productName }}",
+              "type": "string"
+            },
+            {
+              "id": "382b945b-949a-42cd-a0e7-216a2eabdf9c",
+              "name": "maxSidePx",
+              "value": "={{ $json.data.maxSidePx }}",
+              "type": "number"
+            },
+            {
+              "id": "b2197ccf-df01-4ae8-a090-bb7ef592ec43",
+              "name": "logo",
+              "value": "={{ $json.data.logo }}",
+              "type": "string"
+            },
+            {
+              "id": "0e1fad14-f633-47fb-90ec-59237d1f76a4",
+              "name": "folderPath",
+              "value": "={{ $('Local File Trigger').item.json.path }}",
+              "type": "string"
+            },
+            {
+              "id": "merchroute-runtime-variants-e005",
+              "name": "variants",
+              "value": "={{ (() => { if (typeof $json.data.variants !== 'string' || !$json.data.variants.trim()) throw new Error('n8n_setParameter_xxx.json 的 variants 必须是非空 String。'); return $json.data.variants.trim(); })() }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2608,
+        2224
+      ],
+      "id": "e29695f9-b5cf-4bbe-9169-3915c0ae2b59",
+      "name": "Set Parameter",
+      "notesInFlow": true,
+      "notes": "文件夹地址"
+    },
+    {
+      "parameters": {
+        "triggerOn": "folder",
+        "path": "__MERCHROUTE_DATA_ROOT__/01_monitorFolder/E005-主图加-LOGO-监听",
+        "events": [
+          "addDir"
+        ],
+        "options": {
+          "awaitWriteFinish": true,
+          "ignored": ".staging",
+          "ignoreInitial": true,
+          "depth": 0,
+          "ignoreMode": "contain"
+        }
+      },
+      "type": "n8n-nodes-base.localFileTrigger",
+      "typeVersion": 1,
+      "position": [
+        1984,
+        2224
+      ],
+      "id": "2bc6cc6e-9937-4c38-b7e6-c82106cbf6b8",
+      "name": "Local File Trigger"
+    },
+    {
+      "parameters": {
+        "content": "## E005-文件夹遍历-图片加logo\n\n### 主要功能\n监听新增源文件夹，递归读取文件夹内图片，对所有符合条件的图片执行 resize + 叠加 logo，并输出到指定父目录下的新子目录。\n\n### 输入\n- Local File Trigger：监听新增文件夹。\n- Set Parameter.outputParentDir：输出图片父目录。\n- folderPath：来自触发事件 path。\n- logo：本地 logo 路径或 HTTP URL。\n- maxSidePx：最大边尺寸，默认 768。\n\n### 输出目录规则\n输出子目录名 = 源文件夹名-时间戳。\n示例：\nG:/.../E005-输出/03-包包-7套图-20260708-183404-366\n\n### 处理逻辑\n- Normalize User Paths：统一标准化用户输入路径。\n- Read/Write Files from Disk：读取 jpg/jpeg/png/webp。\n- Code in JavaScript：提取源文件名中的数字编号，生成 outputSubDir/outputPath；输出图片命名为 组编号-子编号.png（例如 01-01.png、01-02.png、06-02.png、06-03.png）。\n- logo 分支只读取 1 次 logo。\n- Merge Image With Logo：用 combineAll，把每张图片与同一个 logo 组合，避免按位置合并截断。\n- Create Output Directory：使用系统 mkdir/PowerShell 创建输出目录，不在 Code 节点使用 fs。\n- Merge After Mkdir：Choose Branch，等待建目录完成，但只输出图片流。\n- Read/Write Files from Disk1：写出所有处理后的图片。",
+        "height": 728,
+        "width": 548
+      },
+      "id": "0f1587e3-cf41-48d6-9c85-64b2968cbfd7",
+      "name": "工作流说明便签",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1328,
+        2096
+      ]
+    },
+    {
+      "parameters": {
+        "content": "",
+        "height": 368,
+        "width": 1860,
+        "color": 2
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        1888,
+        2096
+      ],
+      "typeVersion": 1,
+      "id": "a47cf8d2-a3cd-4c19-adb1-94affc8d2eb7",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "jsCode": "const fs = require('fs');\nconst path = require('path');\n\nconst imageExtensions = ['jpg', 'jpeg', 'png', 'webp'];\nconst imageGlob = '**/*.{jpg,jpeg,png,webp,JPG,JPEG,PNG,WEBP}';\n\nfunction cleanInput(value) {\n  let text = value == null ? '' : String(value).trim();\n  if ((text.startsWith('\"') && text.endsWith('\"')) || (text.startsWith(\"'\") && text.endsWith(\"'\"))) {\n    text = text.slice(1, -1).trim();\n  }\n  return text;\n}\n\nfunction safeDecode(value) {\n  try {\n    return decodeURIComponent(value);\n  } catch (error) {\n    return value;\n  }\n}\n\nfunction normalizeFileUrl(value) {\n  const match = value.match(/^file:\\/\\/(.*)$/i);\n  if (!match) return value;\n  let filePath = safeDecode(match[1]);\n  filePath = filePath.replace(/^localhost\\//i, '');\n  if (/^\\/[A-Za-z]:\\//.test(filePath)) filePath = filePath.slice(1);\n  return filePath;\n}\n\nfunction normalizeLocalPath(value, { keepTrailingSlash = false } = {}) {\n  let text = cleanInput(value);\n  text = normalizeFileUrl(text);\n  text = safeDecode(text);\n  text = text.replace(/\\\\/g, '/').replace(/\\/+/g, '/');\n  if (!keepTrailingSlash) text = text.replace(/\\/+$/, '');\n  return text;\n}\n\nfunction joinPath(...parts) {\n  return parts\n    .filter((part) => part != null && String(part).trim() !== '')\n    .map((part, index) => {\n      let text = normalizeLocalPath(part);\n      if (index > 0) text = text.replace(/^\\/+/, '');\n      return text.replace(/\\/+$/, '');\n    })\n    .join('/');\n}\n\nfunction pathLeaf(value) {\n  const normalized = normalizeLocalPath(value);\n  if (!normalized) return '';\n  const parts = normalized.split('/').filter(Boolean);\n  return parts[parts.length - 1] || '';\n}\n\nfunction cleanPathPart(value) {\n  return String(value || '').trim().replace(/[<>:\"/\\\\|?*\\x00-\\x1F]/g, '_').replace(/[. ]+$/g, '');\n}\n\nfunction timestampForFolderName() {\n  const now = new Date();\n  const pad = (number, length = 2) => String(number).padStart(length, '0');\n  return [now.getFullYear(), pad(now.getMonth() + 1), pad(now.getDate())].join('')\n    + '-'\n    + [pad(now.getHours()), pad(now.getMinutes()), pad(now.getSeconds())].join('')\n    + '-'\n    + pad(now.getMilliseconds(), 3);\n}\n\nfunction isHttpUrl(value) {\n  return /^https?:\\/\\//i.test(value);\n}\n\nfunction isImageFilePath(value) {\n  const clean = value.split(/[?#]/)[0];\n  const ext = clean.includes('.') ? clean.split('.').pop().toLowerCase() : '';\n  return imageExtensions.includes(ext);\n}\n\nfunction normalizeRelativePath(value, label) {\n  const normalized = normalizeLocalPath(value).replace(/^\\.\\/+/, '');\n  if (!normalized || normalized.startsWith('/') || /^[A-Za-z]:\\//.test(normalized)) {\n    throw new Error(label + ' 必须是非空相对路径。');\n  }\n  const segments = normalized.split('/');\n  if (segments.some((segment) => !segment || segment === '.' || segment === '..')) {\n    throw new Error(label + ' 包含不安全的路径片段：' + normalized);\n  }\n  return segments.join('/');\n}\n\nfunction resolveInside(root, relativePath, label) {\n  const absoluteRoot = path.resolve(root);\n  const absoluteTarget = path.resolve(absoluteRoot, ...relativePath.split('/'));\n  const relative = path.relative(absoluteRoot, absoluteTarget);\n  if (!relative || relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) {\n    throw new Error(label + ' 超出来源目录：' + relativePath);\n  }\n  return absoluteTarget;\n}\n\nfunction readJsonIfExists(filePath, label) {\n  if (!fs.existsSync(filePath)) return null;\n  try {\n    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));\n    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('根节点必须是对象');\n    return parsed;\n  } catch (error) {\n    throw new Error('读取 ' + label + ' 失败：' + (error && error.message ? error.message : String(error)));\n  }\n}\n\nfunction orderManifestFiles(manifest) {\n  if (!manifest || !Array.isArray(manifest.selectedFiles) || manifest.selectedFiles.length === 0) {\n    throw new Error('selection-manifest.json 的 selectedFiles 必须是非空数组。');\n  }\n  const files = manifest.selectedFiles.map((entry, index) => {\n    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {\n      throw new Error('selection-manifest.json 的 selectedFiles[' + index + '] 无效。');\n    }\n    return { ...entry };\n  });\n  const hasSortOrder = files.map((entry) => Object.prototype.hasOwnProperty.call(entry, 'sortOrder'));\n  const anySortOrder = hasSortOrder.some(Boolean);\n  const allSortOrder = hasSortOrder.every(Boolean);\n  if (anySortOrder && !allSortOrder) throw new Error('selection-manifest.json 的 sortOrder 不得部分缺失。');\n  if (!allSortOrder) return { files, orderSource: 'selection-manifest-array' };\n\n  const seen = new Set();\n  for (const [index, entry] of files.entries()) {\n    if (!Number.isInteger(entry.sortOrder) || entry.sortOrder < 0) {\n      throw new Error('selection-manifest.json 的 selectedFiles[' + index + '].sortOrder 必须是非负整数。');\n    }\n    if (seen.has(entry.sortOrder)) throw new Error('selection-manifest.json 的 sortOrder 重复：' + entry.sortOrder);\n    seen.add(entry.sortOrder);\n  }\n  const ordered = [...files].sort((left, right) => left.sortOrder - right.sortOrder);\n  ordered.forEach((entry, index) => {\n    if (entry.sortOrder !== index) throw new Error('selection-manifest.json 的 sortOrder 必须从 0 连续递增。');\n  });\n  return { files: ordered, orderSource: 'selection-manifest-sortOrder' };\n}\n\nreturn $input.all().map((item, index) => {\n  const input = item.json || {};\n  const folderPath = normalizeLocalPath(input.folderPath || input.path || input.sourcePath || input.filePath || '');\n  const outputParentDir = normalizeLocalPath(input.outputParentDir || '');\n  if (typeof input.SKU !== 'string') throw new Error('n8n_setParameter_xxx.json 的 SKU 必须是 String。');\n  if (typeof input.productName !== 'string') throw new Error('n8n_setParameter_xxx.json 的 productName 必须是 String。');\n  if (typeof input.variants !== 'string') throw new Error('n8n_setParameter_xxx.json 的 variants 必须是 String。');\n  const SKU = input.SKU.trim();\n  const productName = input.productName.trim();\n  const variants = input.variants.trim();\n  const executionId = String($execution.id || '').trim();\n  if (!/^\\d{7}$/.test(SKU)) throw new Error('n8n_setParameter_xxx.json 的 SKU 必须是保留前导零的 7 位数字。');\n  if (!productName) throw new Error('n8n_setParameter_xxx.json 的 productName 不能为空。');\n  if (!variants) throw new Error('n8n_setParameter_xxx.json 的 variants 不能为空。');\n  if (!/^\\d+$/.test(executionId)) throw new Error('当前工作流 executionId 无效。');\n  const safeProductName = cleanPathPart(productName);\n  if (!safeProductName) throw new Error('n8n_setParameter_xxx.json 的 productName 清理后为空。');\n\n  const logoRaw = cleanInput(input.logo || input.logoPath || input.logoUrl || '');\n  const logoIsRemote = isHttpUrl(logoRaw);\n  const logoNormalized = logoIsRemote ? safeDecode(logoRaw) : normalizeLocalPath(logoRaw);\n  if (!folderPath) throw new Error('folderPath is empty after normalization');\n  if (isHttpUrl(folderPath)) throw new Error('Source image only supports local path or file:// URL, not HTTP URL');\n  if (!outputParentDir) throw new Error('outputParentDir is empty after normalization');\n  if (isHttpUrl(outputParentDir)) throw new Error('outputParentDir only supports local path or file:// URL, not HTTP URL');\n  if (!logoNormalized) throw new Error('logo path/url is empty after normalization');\n\n  const sourceInputType = isImageFilePath(folderPath) ? 'file' : 'folder';\n  const sourceSelector = sourceInputType === 'file' ? folderPath : joinPath(folderPath, imageGlob);\n  const sourceFolderDir = sourceInputType === 'file' ? normalizeLocalPath(path.dirname(folderPath)) : folderPath;\n  const sourceFolderName = pathLeaf(sourceFolderDir) || 'output';\n  const outputTimestamp = input.outputTimestamp || timestampForFolderName();\n  const defaultOutputSubDir = joinPath(outputParentDir, SKU + '-' + safeProductName + '-' + executionId);\n  const logoInputType = logoIsRemote ? 'httpUrl' : 'localFile';\n\n  const selectionManifestPath = path.join(sourceFolderDir, 'selection-manifest.json');\n  const taskContextPath = path.join(sourceFolderDir, 'task-context.json');\n  const handoffPath = path.join(sourceFolderDir, 'handoff.json');\n  const selectionManifest = sourceInputType === 'folder' ? readJsonIfExists(selectionManifestPath, 'selection-manifest.json') : null;\n  const sourceTaskContext = sourceInputType === 'folder' ? readJsonIfExists(taskContextPath, 'task-context.json') : null;\n  const sourceHandoff = sourceInputType === 'folder' ? readJsonIfExists(handoffPath, 'handoff.json') : null;\n\n  let orderedSelectedFiles = null;\n  let mediaOrderSource = 'filename-natural-legacy';\n  if (selectionManifest) {\n    const ordered = orderManifestFiles(selectionManifest);\n    const seenTargets = new Set();\n    orderedSelectedFiles = ordered.files.map((entry, orderIndex) => {\n      const targetRelativePath = normalizeRelativePath(entry.targetRelativePath, 'selectedFiles[' + orderIndex + '].targetRelativePath');\n      const extension = targetRelativePath.includes('.') ? targetRelativePath.split('.').pop().toLowerCase() : '';\n      if (!imageExtensions.includes(extension)) throw new Error('manifest 包含不支持的图片类型：' + targetRelativePath);\n      if (seenTargets.has(targetRelativePath)) throw new Error('manifest 包含重复的 targetRelativePath：' + targetRelativePath);\n      seenTargets.add(targetRelativePath);\n      const absolutePath = resolveInside(sourceFolderDir, targetRelativePath, 'selectedFiles[' + orderIndex + '].targetRelativePath');\n      let stat;\n      try {\n        stat = fs.statSync(absolutePath);\n      } catch (error) {\n        throw new Error('manifest 图片不存在：' + targetRelativePath);\n      }\n      if (!stat.isFile() || stat.size <= 0) throw new Error('manifest 图片不是有效的非空文件：' + targetRelativePath);\n      return {\n        sortOrder: orderIndex,\n        targetRelativePath,\n        sourceRelativePath: entry.sourceRelativePath == null ? null : normalizeRelativePath(entry.sourceRelativePath, 'selectedFiles[' + orderIndex + '].sourceRelativePath'),\n      };\n    });\n    mediaOrderSource = ordered.orderSource;\n  }\n\n  const sourceSubmissionId = String(\n    input.sourceSubmissionId\n    || (sourceTaskContext && sourceTaskContext.sourceSubmissionId)\n    || (sourceHandoff && sourceHandoff.submissionId)\n    || '',\n  ).trim();\n\n  return {\n    json: {\n      ...input,\n      folderPath,\n      SKU,\n      productName,\n      variants,\n      n8nExecutionId: executionId,\n      sourceSelector,\n      sourceInputType,\n      sourceFolderDir,\n      sourceFolderName,\n      outputParentDir,\n      outputTimestamp,\n      defaultOutputSubDir,\n      logoNormalized,\n      logoInputType,\n      logoIsRemote,\n      sourceSubmissionId,\n      sourceManifestTaskId: selectionManifest && selectionManifest.taskId ? String(selectionManifest.taskId) : '',\n      sourceManifestStageId: selectionManifest && selectionManifest.sourceStageId ? String(selectionManifest.sourceStageId) : '',\n      selectionManifestPath: selectionManifest ? normalizeLocalPath(selectionManifestPath) : '',\n      orderedSelectedFiles,\n      mediaOrderSource,\n    },\n    binary: item.binary,\n    pairedItem: item.pairedItem ?? { item: index },\n  };\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2848,
+        2224
+      ],
+      "id": "10c5c758-9ae0-4417-9d10-3d2098c86b93",
+      "name": "Normalize User Paths"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "478280ca-7e1f-41f0-90bf-521c8b50abb6",
+              "leftValue": "={{ $('Normalize User Paths').item.json.logoIsRemote }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1952,
+        2592
+      ],
+      "id": "57be06c5-a285-4d6f-aebf-200ff8ae0c5b",
+      "name": "If Logo Remote"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.logoNormalized }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "logo"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2208,
+        2496
+      ],
+      "id": "ed56407d-e401-42be-8325-627608da82d1",
+      "name": "HTTP Request Logo"
+    },
+    {
+      "parameters": {
+        "content": "",
+        "height": 368,
+        "width": 1856,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        1888,
+        2464
+      ],
+      "typeVersion": 1,
+      "id": "8b372cec-8050-4cce-8d41-e0cca491438a",
+      "name": "Sticky Note1"
+    },
+    {
+      "parameters": {
+        "amount": 2
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2192,
+        2224
+      ],
+      "id": "3399502d-866c-4b40-8064-570d8c71e247",
+      "name": "Wait"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const fs = require('fs');\nconst path = require('path');\n\nconst items = $input.all();\nif (items.length === 0) {\n  throw new Error('Create Output Directory: no input items received.');\n}\n\nconst first = items[0].json || {};\nconst outputSubDir = String(first.outputSubDir || '').trim();\nconst SKU = typeof first.SKU === 'string' ? first.SKU.trim() : '';\nconst productName = typeof first.productName === 'string' ? first.productName.trim() : '';\nconst variants = typeof first.variants === 'string' ? first.variants.trim() : '';\nconst n8nExecutionId = String(first.n8nExecutionId || $execution.id || '').trim();\n\nif (!outputSubDir) {\n  throw new Error('Create Output Directory: outputSubDir is empty.');\n}\nif (!/^\\d{7}$/.test(SKU)) {\n  throw new Error('Create Output Directory: SKU must be a 7-digit String.');\n}\nif (!productName) {\n  throw new Error('Create Output Directory: productName must be a non-empty String.');\n}\nif (!variants) {\n  throw new Error('Create Output Directory: variants must be a non-empty String.');\n}\nif (!/^\\d+$/.test(n8nExecutionId)) {\n  throw new Error('Create Output Directory: n8nExecutionId must be numeric.');\n}\n\nfor (let index = 0; index < items.length; index += 1) {\n  const json = items[index].json || {};\n  if (String(json.outputSubDir || '').trim() !== outputSubDir) {\n    throw new Error(`Create Output Directory: item ${index} has a different outputSubDir.`);\n  }\n  if (String(json.SKU || '').trim() !== SKU) {\n    throw new Error(`Create Output Directory: item ${index} has a different SKU.`);\n  }\n  if (String(json.productName || '').trim() !== productName) {\n    throw new Error(`Create Output Directory: item ${index} has a different productName.`);\n  }\n  if (String(json.variants || '').trim() !== variants) {\n    throw new Error(`Create Output Directory: item ${index} has different variants.`);\n  }\n}\n\nconst taskContext = {\n  schemaVersion: 1,\n  workflowCode: 'E005',\n  SKU,\n  productName,\n  variants,\n  ...(first.variantId ? { variantId: String(first.variantId) } : {}),\n  ...(first.sourceSubmissionId ? { sourceSubmissionId: String(first.sourceSubmissionId) } : {}),\n  n8nExecutionId,\n};\n\nconst target = path.join(outputSubDir, 'task-context.json');\n\ntry {\n  fs.mkdirSync(outputSubDir, { recursive: true });\n  fs.writeFileSync(target, JSON.stringify(taskContext, null, 2), 'utf8');\n\n  const saved = JSON.parse(fs.readFileSync(target, 'utf8'));\n  if (\n    saved.SKU !== taskContext.SKU\n    || saved.productName !== taskContext.productName\n    || saved.variants !== taskContext.variants\n    || saved.n8nExecutionId !== taskContext.n8nExecutionId\n  ) {\n    throw new Error('task-context verification failed.');\n  }\n} catch (error) {\n  const code = error && error.code ? ` [${error.code}]` : '';\n  const message = error && error.message ? error.message : String(error);\n  throw new Error(`Create Output Directory failed${code}: ${message}`);\n}\n\nreturn [{\n  json: {\n    ok: true,\n    outputSubDir,\n    target,\n    taskContext,\n  },\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2992,
+        2672
+      ],
+      "id": "70a15e36-c26f-4f3c-8c68-33ae4e2b6e9e",
+      "name": "Create Output Directory",
+      "notesInFlow": true,
+      "notes": "使用允许的 fs/path 内置模块直接创建 outputSubDir，并以 UTF-8 写入和回读校验 task-context.json。节点运行一次并输出单个状态 item；Merge After Mkdir 继续透传原始图片数据。兼容 Windows 与 macOS/POSIX。"
+    },
+    {
+      "parameters": {
+        "mode": "chooseBranch"
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        3200,
+        2528
+      ],
+      "id": "ad349c73-e12f-4991-bec6-fd9b03203e59",
+      "name": "Merge After Mkdir",
+      "notesInFlow": true,
+      "notes": "等待 Create Output Directory 完成，但只输出 Input 1 的图片数据，避免按位置合并造成只剩 1 张。"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "gDMR3Mxnm9dKQJtO",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/gDMR3Mxnm9dKQJtO",
+          "cachedResultName": "S016-JSON文件-解析"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "folderPath": "={{ $json.path }}",
+            "filePrefix": "n8n_setParameter",
+            "fileExtension": "json",
+            "returnMode": "latest"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "folderPath",
+              "displayName": "folderPath",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "filePrefix",
+              "displayName": "filePrefix",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "fileExtension",
+              "displayName": "fileExtension",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "returnMode",
+              "displayName": "returnMode",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "5f548a65-62f7-4915-b3c5-951c842ac345",
+      "name": "Call 'S016-JSON文件-解析'",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        2400,
+        2224
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const fs = require('fs');\nconst path = require('path');\n\nfunction normalizeLocalPath(value) {\n  return String(value == null ? '' : value).trim().replace(/\\\\/g, '/').replace(/\\/+/g, '/').replace(/\\/+$/, '');\n}\n\nfunction stableOrderProjection(manifest) {\n  return (Array.isArray(manifest && manifest.selectedFiles) ? manifest.selectedFiles : []).map((entry) => ({\n    sortOrder: entry.sortOrder,\n    sourceRelativePath: entry.sourceRelativePath,\n    targetRelativePath: entry.targetRelativePath,\n  }));\n}\n\nconst items = $input.all();\nif (items.length === 0) throw new Error('Finalize Ordered Output Manifest: no output images received.');\nconst ordered = [...items].sort((left, right) => Number(left.json.sortOrder) - Number(right.json.sortOrder));\nordered.forEach((item, index) => {\n  if (!Number.isInteger(item.json.sortOrder) || item.json.sortOrder !== index) {\n    throw new Error('Finalize Ordered Output Manifest: sortOrder must be unique, contiguous, and start at 0.');\n  }\n});\n\nconst first = ordered[0].json || {};\nconst outputSubDir = normalizeLocalPath(first.outputSubDir || '');\nif (!outputSubDir) throw new Error('Finalize Ordered Output Manifest: outputSubDir is empty.');\nconst selectedFiles = [];\nconst seenOutputNames = new Set();\nfor (const [index, item] of ordered.entries()) {\n  const json = item.json || {};\n  if (normalizeLocalPath(json.outputSubDir || '') !== outputSubDir) {\n    throw new Error('Finalize Ordered Output Manifest: item ' + index + ' has a different outputSubDir.');\n  }\n  const outputFileName = String(json.outputFileName || '').trim();\n  if (!outputFileName || outputFileName.includes('/') || outputFileName.includes('\\\\')) {\n    throw new Error('Finalize Ordered Output Manifest: item ' + index + ' has an invalid outputFileName.');\n  }\n  if (seenOutputNames.has(outputFileName)) throw new Error('Finalize Ordered Output Manifest: duplicate output file ' + outputFileName + '.');\n  seenOutputNames.add(outputFileName);\n  const outputPath = path.resolve(String(json.outputPath || path.join(outputSubDir, outputFileName)));\n  const relativeOutputPath = path.relative(path.resolve(outputSubDir), outputPath);\n  if (!relativeOutputPath || relativeOutputPath === '..' || relativeOutputPath.startsWith('..' + path.sep) || path.isAbsolute(relativeOutputPath)) {\n    throw new Error('Finalize Ordered Output Manifest: output path escapes outputSubDir: ' + outputFileName);\n  }\n  let stat;\n  try {\n    stat = fs.statSync(outputPath);\n  } catch (error) {\n    throw new Error('Finalize Ordered Output Manifest: output image is missing: ' + outputFileName);\n  }\n  if (!stat.isFile() || stat.size <= 0) throw new Error('Finalize Ordered Output Manifest: output image is empty or invalid: ' + outputFileName);\n  selectedFiles.push({\n    sortOrder: index,\n    sourceRelativePath: String(json.sourceOriginalRelativePath || json.sourceRelativePath || json.sourceFileName || ''),\n    targetRelativePath: outputFileName,\n    fileName: outputFileName,\n    sizeBytes: stat.size,\n    lastModifiedAt: stat.mtime.toISOString(),\n  });\n}\n\nconst sourceSubmissionId = String(first.sourceSubmissionId || '').trim();\nconst taskContextPath = path.join(outputSubDir, 'task-context.json');\nlet taskContext;\ntry {\n  taskContext = JSON.parse(fs.readFileSync(taskContextPath, 'utf8'));\n} catch (error) {\n  throw new Error('Finalize Ordered Output Manifest: cannot read task-context.json: ' + (error && error.message ? error.message : String(error)));\n}\nif (sourceSubmissionId && String(taskContext.sourceSubmissionId || '') !== sourceSubmissionId) {\n  throw new Error('Finalize Ordered Output Manifest: task-context.json did not retain sourceSubmissionId.');\n}\n\nconst manifest = {\n  schemaVersion: '1.0',\n  taskId: String(first.sourceManifestTaskId || ''),\n  sourceStageId: String(first.sourceManifestStageId || 'E003'),\n  targetStageId: 'E005',\n  packageMode: 'flatten',\n  sourceFolderName: String(first.sourceDirectoryName || ''),\n  sourceSubmissionId,\n  selectedImageCount: selectedFiles.length,\n  selectedFiles,\n  imageOrderSource: String(first.mediaOrderSource || 'filename-natural-legacy'),\n  productSku: String(first.SKU || ''),\n  productName: String(first.productName || ''),\n  variantId: first.variantId == null ? null : String(first.variantId),\n  variantName: String(first.variants || ''),\n  n8nExecutionId: String(first.n8nExecutionId || $execution.id || ''),\n  createdAt: new Date().toISOString(),\n};\n\nconst target = path.join(outputSubDir, 'selection-manifest.json');\nif (fs.existsSync(target)) {\n  let existing;\n  try {\n    existing = JSON.parse(fs.readFileSync(target, 'utf8'));\n  } catch (error) {\n    throw new Error('Finalize Ordered Output Manifest: existing selection-manifest.json is invalid.');\n  }\n  if (JSON.stringify(stableOrderProjection(existing)) !== JSON.stringify(stableOrderProjection(manifest))) {\n    throw new Error('Finalize Ordered Output Manifest: existing manifest has a different ordered selection; refusing to overwrite it.');\n  }\n} else {\n  const temporary = target + '.__tmp__' + String($execution.id || Date.now());\n  try {\n    fs.writeFileSync(temporary, JSON.stringify(manifest, null, 2), 'utf8');\n    const readback = JSON.parse(fs.readFileSync(temporary, 'utf8'));\n    if (JSON.stringify(stableOrderProjection(readback)) !== JSON.stringify(stableOrderProjection(manifest))) {\n      throw new Error('temporary manifest readback verification failed.');\n    }\n    fs.renameSync(temporary, target);\n  } finally {\n    if (fs.existsSync(temporary)) fs.unlinkSync(temporary);\n  }\n}\n\nconst saved = JSON.parse(fs.readFileSync(target, 'utf8'));\nif (JSON.stringify(stableOrderProjection(saved)) !== JSON.stringify(stableOrderProjection(manifest))) {\n  throw new Error('Finalize Ordered Output Manifest: final readback verification failed.');\n}\n\nreturn [{\n  json: {\n    ok: true,\n    outputSubDir,\n    selectionManifestPath: normalizeLocalPath(target),\n    sourceSubmissionId,\n    selectedImageCount: selectedFiles.length,\n    selectedFiles,\n  },\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3632,
+        2528
+      ],
+      "id": "5d88a854-75e3-4e9a-8fa0-e53a55cf3273",
+      "name": "Finalize Ordered Output Manifest",
+      "notesInFlow": true,
+      "notes": "按 sortOrder 校验输出图片并原子写入 selection-manifest.json；保留 E003 sourceSubmissionId，供 E005 审核和 WB/OZON 上品继续使用相同顺序。"
+    }
+  ],
+  "connections": {
+    "Read/Write Files from Disk": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "If Should Process",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Should Process": {
+      "main": [
+        [
+          {
+            "node": "Merge Image With Logo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read/Write Files from Disk2": {
+      "main": [
+        [
+          {
+            "node": "Merge Image With Logo",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "VMTech Edit Image": {
+      "main": [
+        [
+          {
+            "node": "Merge After Mkdir",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Create Output Directory",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Parameter": {
+      "main": [
+        [
+          {
+            "node": "Normalize User Paths",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Local File Trigger": {
+      "main": [
+        [
+          {
+            "node": "Wait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize User Paths": {
+      "main": [
+        [
+          {
+            "node": "Read/Write Files from Disk",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "If Logo Remote",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Logo Remote": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request Logo",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Read/Write Files from Disk2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request Logo": {
+      "main": [
+        [
+          {
+            "node": "Merge Image With Logo",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Wait": {
+      "main": [
+        [
+          {
+            "node": "Call 'S016-JSON文件-解析'",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Output Directory": {
+      "main": [
+        [
+          {
+            "node": "Merge After Mkdir",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge After Mkdir": {
+      "main": [
+        [
+          {
+            "node": "Read/Write Files from Disk1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Image With Logo": {
+      "main": [
+        [
+          {
+            "node": "VMTech Edit Image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call 'S016-JSON文件-解析'": {
+      "main": [
+        [
+          {
+            "node": "Set Parameter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read/Write Files from Disk1": {
+      "main": [
+        [
+          {
+            "node": "Finalize Ordered Output Manifest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  }
+}

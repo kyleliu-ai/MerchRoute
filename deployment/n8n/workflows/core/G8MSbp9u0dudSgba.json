@@ -1,0 +1,963 @@
+{
+  "id": "G8MSbp9u0dudSgba",
+  "name": "E007-v01-1688产品媒体下载",
+  "active": true,
+  "nodes": [
+    {
+      "id": "7b1c62c3-7cf7-49b0-ae24-e60ee008eeb7",
+      "name": "Workflow Summary",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -1160,
+        -500
+      ],
+      "parameters": {
+        "color": 4,
+        "width": 900,
+        "height": 460,
+        "content": "## E007-v01-1688产品媒体下载\n\n使用系统 Chrome 和 E007 专用 Profile 下载已获授权的 1688 商品主图、详情图和视频，并生成 `详情长图.png`。\n\n- Webhook：`POST /1688-product-media-download`，`responseNode` 模式。\n- Webhook 只读取 body 中的 `SKU`、`productName`、`parentOutputDir`、`productUrl`、`downloadJobId`；query 和其他运行配置不会覆盖可信默认值。\n- `downloadJobId` 采用 UUID；幂等状态写入 `parentOutputDir/.download-idempotency/v1/E007`，同一任务重放不会创建第二个下载目录。\n- Webhook 不启用额外认证，仅供本机 MerchRoute 通过 loopback 地址调用；不要暴露到公网或不可信局域网。\n- Webhook 固定使用 headless Chrome 后台运行；Manual Trigger 使用 headed Chrome。\n- Execute Command 只传 UTF-8 JSON Base64；复杂浏览器和文件逻辑均位于外部 CJS。\n- Webhook 遇到登录或安全验证立即失败；Manual Trigger 可在可视浏览器中人工处理。\n- 不破解验证、不伪造指纹、不轮换代理；只关闭本任务启动的 Chrome context。\n- 人工登录：`node \"__MERCHROUTE_N8N_RUNTIME_DIR__/scripts/1688-login.cjs\" \"https://www.1688.com/\" \"__MERCHROUTE_BROWSER_PROFILE_ROOT__/1688\" \"__MERCHROUTE_BROWSER_EXECUTABLE__\"`。"
+      }
+    },
+    {
+      "id": "10df3135-4c6a-4325-a20a-a6e017f23ffb",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -1160,
+        40
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "2f5a85d0-cd99-4f32-8b07-6a2ef753d054",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -1160,
+        240
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "1688-product-media-download",
+        "authentication": "none",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "1765e349-a79a-4b64-8c53-c27baf7e3e8d",
+      "name": "setParameter",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -920,
+        140
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "1c802d38-ee88-4936-a65d-a1cad046de32",
+              "name": "SKU",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "id": "a63dd194-c926-4033-999d-9d9252cd5bce",
+              "name": "productName",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "id": "42f5e3d2-bf36-492f-986c-224727b1edba",
+              "name": "productUrl",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "id": "50d17eeb-d40c-4329-b87f-4a0064df4429",
+              "name": "parentOutputDir",
+              "value": "__MERCHROUTE_DATA_ROOT__/03-1688ProductMedia",
+              "type": "string"
+            },
+            {
+              "id": "59b2ba46-cbb0-4652-a38d-942216d939b1",
+              "name": "allowedOutputRoots",
+              "value": [
+                "__MERCHROUTE_DATA_ROOT__"
+              ],
+              "type": "array"
+            },
+            {
+              "id": "ab87a761-0e9f-4416-b5f4-d4562f5fa29c",
+              "name": "projectRootDir",
+              "value": "__MERCHROUTE_N8N_RUNTIME_DIR__",
+              "type": "string"
+            },
+            {
+              "id": "82aa9bc7-4bdc-4d04-b19f-473bf354955f",
+              "name": "browserControlMode",
+              "value": "persistentContext",
+              "type": "string"
+            },
+            {
+              "id": "6b7ade26-8a12-45c8-98cf-f3115b3f1e3d",
+              "name": "sourceBrowserUserDataDir",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "id": "faed9915-5dc8-4b2c-abfa-5f30c0630f4b",
+              "name": "sourceBrowserProfileDirectory",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "id": "1dc44e5e-bd4f-416a-abec-279819c769d6",
+              "name": "syncDefaultProfileBeforeRun",
+              "value": false,
+              "type": "boolean"
+            },
+            {
+              "id": "0892d50e-7dad-4293-a550-92ad3d342fb8",
+              "name": "closeEdgeBeforeSync",
+              "value": false,
+              "type": "boolean"
+            },
+            {
+              "id": "232e8216-46c3-4b8f-a544-db289d1878fa",
+              "name": "preserveTargetLogin",
+              "value": false,
+              "type": "boolean"
+            },
+            {
+              "id": "52553de5-3a14-486f-9f84-f9e6bf0ff1a6",
+              "name": "targetAuthCookieHostPattern",
+              "value": "__REDACTED__",
+              "type": "string"
+            },
+            {
+              "id": "7a545f57-49a1-434b-85ec-323cf6270e48",
+              "name": "targetAuthCookieNames",
+              "value": [
+                "_tb_token_",
+                "cookie2",
+                "unb"
+              ],
+              "type": "array"
+            },
+            {
+              "id": "4491b930-87a3-4a9c-bd37-ae94fdd07914",
+              "name": "browserUserDataDir",
+              "value": "__MERCHROUTE_BROWSER_PROFILE_ROOT__/1688",
+              "type": "string"
+            },
+            {
+              "id": "e00e1634-a74d-4a20-9ae0-e64998e0e4b9",
+              "name": "browserExecutablePath",
+              "value": "__MERCHROUTE_BROWSER_EXECUTABLE__",
+              "type": "string"
+            },
+            {
+              "id": "76d3ae41-71c6-437e-95eb-8e42f7c10756",
+              "name": "browserProfileDirectory",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "id": "e6504f2f-d95b-4df2-8f9d-657b688550cb",
+              "name": "browserChannel",
+              "value": "chrome",
+              "type": "string"
+            },
+            {
+              "id": "a4b98c0c-0be8-4333-95ba-749c54f60103",
+              "name": "browserRunMode",
+              "value": "auto",
+              "type": "string"
+            },
+            {
+              "id": "29200638-92e2-4d6f-94c9-665248815f6b",
+              "name": "minimizeBrowserWindow",
+              "value": false,
+              "type": "boolean"
+            },
+            {
+              "id": "ca9816bb-93e8-4d22-b841-4ee9f181f928",
+              "name": "requireBrowserProfileUnlocked",
+              "value": true,
+              "type": "boolean"
+            },
+            {
+              "id": "e71361ac-ad43-483f-a255-f216d210fc8e",
+              "name": "browserLaunchTimeoutMs",
+              "value": 30000,
+              "type": "number"
+            },
+            {
+              "id": "1ee4812e-7077-4364-b6e0-2c996a03c394",
+              "name": "browserWindowMode",
+              "value": "foreground",
+              "type": "string"
+            },
+            {
+              "id": "3a3f7dec-61b5-4da6-a0c5-73c52f5aa8c9",
+              "name": "ffmpegPath",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "id": "0c7c9606-6cb0-46d8-b40c-22dc41c68f58",
+              "name": "maxMainImages",
+              "value": 10,
+              "type": "number"
+            },
+            {
+              "id": "c8f0ec55-d817-4137-a659-82392f708b7e",
+              "name": "maxDetailImages",
+              "value": 80,
+              "type": "number"
+            },
+            {
+              "id": "8d2c08b4-c038-4328-a01e-f1a1d67371f1",
+              "name": "maxVideos",
+              "value": 3,
+              "type": "number"
+            },
+            {
+              "id": "d3959af2-1896-43f5-9520-09d710734ad2",
+              "name": "downloadConcurrency",
+              "value": 4,
+              "type": "number"
+            },
+            {
+              "id": "d1b87480-e45c-4b2c-bf1e-c2bc3c0471dd",
+              "name": "pageTimeoutMs",
+              "value": 60000,
+              "type": "number"
+            },
+            {
+              "id": "51d29a22-89d5-409b-a2fc-1444e227313b",
+              "name": "requestTimeoutMs",
+              "value": 30000,
+              "type": "number"
+            },
+            {
+              "id": "263472e1-a567-4b74-af57-8256ee456213",
+              "name": "humanVerificationTimeoutMs",
+              "value": 300000,
+              "type": "number"
+            },
+            {
+              "id": "ce523ffc-2f6e-4d35-b3ec-3d0c0902a821",
+              "name": "scrollMaxTimes",
+              "value": 20,
+              "type": "number"
+            },
+            {
+              "id": "a01a1103-2925-4bc1-9646-6e34adc3c57a",
+              "name": "scrollWaitMs",
+              "value": 1200,
+              "type": "number"
+            },
+            {
+              "id": "16e5de93-6c72-4aa9-8e96-c486fe513b48",
+              "name": "scrollBehavior",
+              "value": "natural",
+              "type": "string"
+            },
+            {
+              "id": "a09ff49c-7f71-4b5c-9121-c0d651aa0835",
+              "name": "interactionSeed",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "id": "118c0803-1095-44b6-ad5e-f14b9d11558f",
+              "name": "maxResponseBodyBytes",
+              "value": 5242880,
+              "type": "number"
+            },
+            {
+              "id": "235d6d08-f858-4b24-a05a-b0978f9046ba",
+              "name": "maxMediaBytes",
+              "value": 268435456,
+              "type": "number"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      }
+    },
+    {
+      "id": "57c377e1-f0dc-44cf-9120-a751afd068f5",
+      "name": "Normalize Parameters",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -680,
+        140
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const input = $input.first()?.json || {};\n\nfunction hasOwn(object, key) {\n  return Object.prototype.hasOwnProperty.call(object || {}, key);\n}\n\nfunction stripOuterQuotes(value) {\n  let text = String(value ?? '').trim();\n  const pairs = [['\"', '\"'], [\"'\", \"'\"], ['“', '”'], ['‘', '’']];\n  for (const [left, right] of pairs) {\n    if (text.startsWith(left) && text.endsWith(right) && text.length >= left.length + right.length) {\n      text = text.slice(left.length, text.length - right.length).trim();\n      break;\n    }\n  }\n  return text;\n}\n\nfunction normalizePath(value) {\n  let text = stripOuterQuotes(value).replace(/\\\\+/g, '/');\n  if (text.startsWith('//')) text = '//' + text.slice(2).replace(/\\/+/g, '/');\n  else text = text.replace(/\\/+/g, '/');\n  if (text.length > 1 && text.endsWith('/') && !/^[A-Za-z]:\\/$/.test(text)) text = text.replace(/\\/+$/, '');\n  return text;\n}\n\nfunction canonicalAbsolutePath(value) {\n  const text = normalizePath(value);\n  if (!text) return { absolute: false, value: '', caseInsensitive: false, escapedRoot: false };\n\n  let prefix = '';\n  let caseInsensitive = false;\n  let parts = [];\n\n  if (/^[A-Za-z]:\\//.test(text)) {\n    prefix = text.slice(0, 2).toUpperCase() + '/';\n    caseInsensitive = true;\n    parts = text.slice(3).split('/');\n  } else if (text.startsWith('//')) {\n    const unc = text.slice(2).split('/').filter(Boolean);\n    if (unc.length < 2) return { absolute: false, value: text, caseInsensitive: true, escapedRoot: false };\n    prefix = '//' + unc.shift() + '/' + unc.shift();\n    caseInsensitive = true;\n    parts = unc;\n  } else if (text.startsWith('/')) {\n    prefix = '/';\n    parts = text.slice(1).split('/');\n  } else {\n    return { absolute: false, value: text, caseInsensitive: false, escapedRoot: false };\n  }\n\n  const stack = [];\n  let escapedRoot = false;\n  for (const part of parts) {\n    if (!part || part === '.') continue;\n    if (part === '..') {\n      if (stack.length) stack.pop();\n      else escapedRoot = true;\n      continue;\n    }\n    stack.push(part);\n  }\n\n  const separator = prefix.endsWith('/') || stack.length === 0 ? '' : '/';\n  return {\n    absolute: true,\n    value: prefix + separator + stack.join('/'),\n    caseInsensitive,\n    escapedRoot,\n  };\n}\n\nfunction isInsideAllowedRoot(targetPath, rootPath) {\n  const target = canonicalAbsolutePath(targetPath);\n  const root = canonicalAbsolutePath(rootPath);\n  if (!target.absolute || !root.absolute || target.escapedRoot || root.escapedRoot) return false;\n  if (target.caseInsensitive !== root.caseInsensitive) return false;\n  const targetValue = target.caseInsensitive ? target.value.toLowerCase() : target.value;\n  const rootValue = root.caseInsensitive ? root.value.toLowerCase() : root.value;\n  const prefix = rootValue.endsWith('/') ? rootValue : rootValue + '/';\n  return targetValue === rootValue || targetValue.startsWith(prefix);\n}\n\nfunction toInteger(value, fallback, minimum, maximum) {\n  const parsed = Number.parseInt(value, 10);\n  if (!Number.isFinite(parsed)) return fallback;\n  return Math.max(minimum, Math.min(maximum, parsed));\n}\n\nfunction toStringArray(value) {\n  if (Array.isArray(value)) return value.map(normalizePath).filter(Boolean);\n  if (typeof value === 'string') {\n    const text = value.trim();\n    if (!text) return [];\n    try {\n      const parsed = JSON.parse(text);\n      if (Array.isArray(parsed)) return parsed.map(normalizePath).filter(Boolean);\n    } catch {}\n    return text.split(/[;,\\n]/).map(normalizePath).filter(Boolean);\n  }\n  return [];\n}\n\nfunction normalizeBrowserWindowMode(value) {\n  return 'foreground';\n}\n\nfunction normalizeBrowserChannel(value) {\n  const channel = String(value ?? '').trim().toLowerCase();\n  return channel === 'chromium' ? 'chromium' : 'chrome';\n}\n\nfunction normalizeBrowserRunMode(value) {\n  return String(value ?? '').trim().toLowerCase() === 'headless' ? 'headless' : 'headed';\n}\n\nfunction normalizeBrowserControlMode(value) {\n  return String(value ?? '').trim() === 'edgeProfileMirror' ? 'edgeProfileMirror' : 'persistentContext';\n}\n\nfunction normalizeScrollBehavior(value) {\n  return String(value ?? '').trim().toLowerCase() === 'fixed' ? 'fixed' : 'natural';\n}\n\nfunction sanitizeProfileDirectory(value) {\n  const text = String(value ?? '').trim();\n  if (!text) return '';\n  if (!/^[A-Za-z0-9_. -]{1,120}$/.test(text)) return '';\n  if (text.includes('/') || text.includes('\\\\') || text === '.' || text === '..') return '';\n  return text;\n}\n\nfunction toBoolean(value, fallback) {\n  if (value === undefined || value === null || value === '') return Boolean(fallback);\n  if (value === true || value === false) return value;\n  const text = String(value).trim().toLowerCase();\n  if (['true', '1', 'yes', 'y'].includes(text)) return true;\n  if (['false', '0', 'no', 'n'].includes(text)) return false;\n  return Boolean(fallback);\n}\n\nfunction joinPortable(root, relativePath) {\n  const base = normalizePath(root).replace(/\\/+$/, '');\n  const suffix = String(relativePath || '').replace(/^\\/+/, '');\n  return base + '/' + suffix;\n}\n\nfunction cleanName(value, fallback = 'product') {\n  const cleaned = String(value || '')\n    .trim()\n    .normalize('NFC')\n    .replace(/[<>:\"/\\\\|?*\\x00-\\x1F]/g, '_')\n    .replace(/\\s+/g, ' ')\n    .replace(/[. ]+$/g, '')\n    .slice(0, 80);\n  return cleaned || fallback;\n}\n\nfunction parseProductUrl(value) {\n  const productUrl = String(value ?? '').trim();\n  const invalid = () => ({ productUrl, validUrl: false, allowedHost: false, allowedProtocol: false, offerId: '' });\n  if (!productUrl || productUrl.length > 8192 || /[\\u0000-\\u0020\\u007f]/.test(productUrl)) return invalid();\n\n  // n8n 2.25.x does not expose the WHATWG URL global inside every Code-node\n  // sandbox. Parse only the URL parts needed for validation so the workflow\n  // remains portable without require('url') or any extra sandbox permission.\n  const match = productUrl.match(/^(https?):\\/\\/([^\\/?#]+)(\\/[^?#]*)?(?:\\?([^#]*))?(?:#.*)?$/i);\n  if (!match) return invalid();\n  const protocol = String(match[1] || '').toLowerCase();\n  const authority = String(match[2] || '');\n  if (!authority || authority.includes('@')) return invalid();\n  const hostMatch = authority.match(/^([a-z0-9.-]+)$/i);\n  if (!hostMatch) return invalid();\n\n  const host = String(hostMatch[1] || '').toLowerCase();\n  const labels = host.split('.');\n  const validHost = host.length <= 253 && labels.every(\n    (label) => label.length <= 63 && /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(label),\n  );\n  if (!validHost) return invalid();\n  const allowedHost = host === '1688.com' || host.endsWith('.1688.com');\n  const allowedProtocol = protocol === 'https' || protocol === 'http';\n  const pathname = match[3] || '/';\n  const pathMatch = pathname.match(/\\/offer\\/(\\d{5,30})(?:\\.html)?(?:\\/|$)/i);\n  let offerId = pathMatch && pathMatch[1] ? pathMatch[1] : '';\n\n  if (!offerId && match[4]) {\n    const queryValues = { offerId: null, offer_id: null, id: null };\n    for (const pair of String(match[4]).split('&')) {\n      const separator = pair.indexOf('=');\n      const rawKey = separator >= 0 ? pair.slice(0, separator) : pair;\n      const rawValue = separator >= 0 ? pair.slice(separator + 1) : '';\n      let key = rawKey;\n      let queryValue = rawValue;\n      try {\n        key = decodeURIComponent(rawKey.replace(/\\+/g, ' '));\n        queryValue = decodeURIComponent(rawValue.replace(/\\+/g, ' '));\n      } catch {}\n      if (Object.prototype.hasOwnProperty.call(queryValues, key) && queryValues[key] === null) {\n        queryValues[key] = queryValue;\n      }\n    }\n    for (const key of ['offerId', 'offer_id', 'id']) {\n      if (queryValues[key]) {\n        offerId = queryValues[key];\n        break;\n      }\n    }\n  }\n\n  if (!/^\\d{5,30}$/.test(offerId)) offerId = '';\n  return { productUrl, validUrl: true, allowedHost, allowedProtocol, offerId };\n}\n\nconst isWebhook = Boolean(input.body && typeof input.body === 'object' && (input.headers || input.webhookUrl || input.executionMode));\nconst body = isWebhook ? input.body : {};\nconst overrideFields = ['SKU', 'productName', 'parentOutputDir', 'productUrl', 'downloadJobId'];\n\nfunction coreValue(name) {\n  return isWebhook ? body[name] : input[name];\n}\n\nconst SKU = String(coreValue('SKU') ?? '').trim();\nconst productName = String(coreValue('productName') ?? '').trim();\nconst downloadJobId = isWebhook ? String(coreValue('downloadJobId') ?? '').trim().toLowerCase() : '';\nconst parentInfo = canonicalAbsolutePath(coreValue('parentOutputDir'));\nconst parentOutputDir = parentInfo.value || normalizePath(coreValue('parentOutputDir'));\nconst parsedProduct = parseProductUrl(coreValue('productUrl'));\nconst allowedOutputRoots = toStringArray(input.allowedOutputRoots);\nconst projectInfo = canonicalAbsolutePath(input.projectRootDir);\nconst browserProfileInfo = canonicalAbsolutePath(input.browserUserDataDir);\nconst sourceBrowserProfileInfo = canonicalAbsolutePath(input.sourceBrowserUserDataDir);\nconst browserExecutableInfo = canonicalAbsolutePath(input.browserExecutablePath);\nconst browserControlMode = normalizeBrowserControlMode(input.browserControlMode);\nconst sourceBrowserProfileDirectory = sanitizeProfileDirectory(input.sourceBrowserProfileDirectory);\nconst browserProfileDirectory = sanitizeProfileDirectory(input.browserProfileDirectory);\nconst browserChannel = normalizeBrowserChannel(input.browserChannel);\nconst headless = isWebhook;\nconst browserRunMode = headless ? 'headless' : 'headed';\nconst minimizeBrowserWindow = false;\nconst requireBrowserProfileUnlocked = toBoolean(input.requireBrowserProfileUnlocked, true);\nconst syncDefaultProfileBeforeRun = false;\nconst closeEdgeBeforeSync = false;\nconst preserveTargetLogin = false;\nconst targetAuthCookieNames = toStringArray(input.targetAuthCookieNames);\nconst ffmpegInfo = input.ffmpegPath ? canonicalAbsolutePath(input.ffmpegPath) : null;\n\nlet downloadConcurrency = toInteger(input.downloadConcurrency, 4, 4, 16);\ndownloadConcurrency = Math.min(16, Math.max(4, Math.ceil(downloadConcurrency / 4) * 4));\n\nconst validationErrors = [];\nif (isWebhook) {\n  for (const field of overrideFields) {\n    if (!hasOwn(body, field) || body[field] === null || String(body[field]).trim() === '') {\n      validationErrors.push('Webhook body must include ' + field + '.');\n    }\n  }\n}\nif (!/^\\d{7}$/.test(SKU)) validationErrors.push('SKU must be exactly 7 digits.');\nif (isWebhook && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(downloadJobId)) {\n  validationErrors.push('Webhook body downloadJobId must be a UUID.');\n}\nconst n8nExecutionId = String($execution.id || '').trim();\nconst safeProductName = cleanName(productName);\nconst expectedOutputDir = joinPortable(parentOutputDir, SKU + '-' + safeProductName + '-' + n8nExecutionId);\nconst expectedMetadataPath = joinPortable(expectedOutputDir, 'metadata/1688-media-metadata.json');\nconst expectedResultFilePath = joinPortable(expectedOutputDir, 'metadata/1688-media-result.json');\nif (!/^\\d+$/.test(n8nExecutionId)) validationErrors.push('n8nExecutionId must contain digits only.');\nif (!productName) validationErrors.push('productName must not be empty.');\nif (!parsedProduct.validUrl || !parsedProduct.allowedProtocol || !parsedProduct.allowedHost) {\n  validationErrors.push('productUrl must be an HTTP(S) URL on 1688.com or one of its subdomains.');\n}\nif (parsedProduct.validUrl && parsedProduct.allowedHost && !parsedProduct.offerId) {\n  validationErrors.push('productUrl must contain a numeric 1688 offerId.');\n}\nif (!parentInfo.absolute || parentInfo.escapedRoot) validationErrors.push('parentOutputDir must be an absolute path.');\nif (!allowedOutputRoots.length || !allowedOutputRoots.some((root) => isInsideAllowedRoot(parentOutputDir, root))) {\n  validationErrors.push('parentOutputDir must be inside an allowedOutputRoots entry.');\n}\nif (!projectInfo.absolute || projectInfo.escapedRoot) validationErrors.push('projectRootDir must be an absolute path.');\nif (!browserProfileInfo.absolute || browserProfileInfo.escapedRoot) validationErrors.push('browserUserDataDir must be an absolute path.');\nif (browserControlMode === 'edgeProfileMirror' && (!sourceBrowserProfileInfo.absolute || sourceBrowserProfileInfo.escapedRoot)) {\n  validationErrors.push('sourceBrowserUserDataDir must be an absolute path.');\n}\nif (!browserExecutableInfo.absolute || browserExecutableInfo.escapedRoot) {\n  validationErrors.push('browserExecutablePath must be an absolute path.');\n}\nif (ffmpegInfo && (!ffmpegInfo.absolute || ffmpegInfo.escapedRoot)) {\n  validationErrors.push('ffmpegPath must be empty or an absolute path.');\n}\n\nconst normalized = {\n  isWebhook,\n  requestSource: isWebhook ? 'webhook' : 'manual',\n  validationValid: validationErrors.length === 0,\n  validationErrors,\n  SKU,\n  productName,\n  downloadJobId,\n  workflowCode: 'E007',\n  n8nExecutionId,\n  safeProductName,\n  expectedOutputDir,\n  expectedMetadataPath,\n  expectedResultFilePath,\n  parentOutputDir,\n  productUrl: parsedProduct.productUrl,\n  offerId: parsedProduct.offerId,\n  allowedOutputRoots,\n  projectRootDir: projectInfo.value || normalizePath(input.projectRootDir),\n  crawlerScriptPath: joinPortable(projectInfo.value || normalizePath(input.projectRootDir), 'scripts/1688-product-media-downloader.cjs'),\n  detailStitcherScriptPath: joinPortable(projectInfo.value || normalizePath(input.projectRootDir), 'scripts/1688-detail-image-stitcher.cjs'),\n  idempotencyHelperScriptPath: joinPortable(projectInfo.value || normalizePath(input.projectRootDir), 'scripts/download-idempotency-v1.cjs'),\n  browserUserDataDir: browserProfileInfo.value || normalizePath(input.browserUserDataDir),\n  browserExecutablePath: browserExecutableInfo.value || normalizePath(input.browserExecutablePath),\n  browserProfileDirectory,\n  browserControlMode,\n  sourceBrowserUserDataDir: sourceBrowserProfileInfo.value || normalizePath(input.sourceBrowserUserDataDir),\n  sourceBrowserProfileDirectory,\n  syncDefaultProfileBeforeRun,\n  closeEdgeBeforeSync,\n  preserveTargetLogin,\n  targetAuthCookieHostPattern: String(input.targetAuthCookieHostPattern ?? '%'),\n  targetAuthCookieNames,\n  browserChannel,\n  browserRunMode,\n  minimizeBrowserWindow,\n  requireBrowserProfileUnlocked,\n  browserLaunchTimeoutMs: toInteger(input.browserLaunchTimeoutMs, 30000, 10000, 180000),\n  browserWindowMode: normalizeBrowserWindowMode(input.browserWindowMode),\n  headless,\n  humanVerificationMode: isWebhook ? 'failFast' : 'interactive',\n  ffmpegPath: ffmpegInfo ? ffmpegInfo.value : '',\n  maxMainImages: toInteger(input.maxMainImages, 10, 1, 100),\n  maxDetailImages: toInteger(input.maxDetailImages, 80, 0, 300),\n  maxVideos: toInteger(input.maxVideos, 3, 0, 10),\n  downloadConcurrency,\n  pageTimeoutMs: toInteger(input.pageTimeoutMs, 60000, 10000, 180000),\n  requestTimeoutMs: toInteger(input.requestTimeoutMs, 30000, 5000, 120000),\n  humanVerificationTimeoutMs: toInteger(input.humanVerificationTimeoutMs, 300000, 30000, 900000),\n  scrollMaxTimes: toInteger(input.scrollMaxTimes, 20, 1, 80),\n  scrollWaitMs: toInteger(input.scrollWaitMs, 1200, 100, 10000),\n  scrollBehavior: normalizeScrollBehavior(input.scrollBehavior),\n  interactionSeed: String(input.interactionSeed ?? '').trim(),\n  maxResponseBodyBytes: toInteger(input.maxResponseBodyBytes, 5242880, 262144, 20971520),\n  maxMediaBytes: toInteger(input.maxMediaBytes, 268435456, 1048576, 1073741824),\n  nodeExecutable: 'node',\n};\n\nconst downloaderPayload = {\n  SKU: normalized.SKU,\n  productName: normalized.productName,\n  n8nExecutionId: normalized.n8nExecutionId,\n  parentOutputDir: normalized.parentOutputDir,\n  allowedOutputRoots: normalized.allowedOutputRoots,\n  productUrl: normalized.productUrl,\n  browserUserDataDir: normalized.browserUserDataDir,\n  browserExecutablePath: normalized.browserExecutablePath,\n  browserProfileDirectory: normalized.browserProfileDirectory,\n  browserControlMode: normalized.browserControlMode,\n  sourceBrowserUserDataDir: normalized.sourceBrowserUserDataDir,\n  sourceBrowserProfileDirectory: normalized.sourceBrowserProfileDirectory,\n  syncDefaultProfileBeforeRun: normalized.syncDefaultProfileBeforeRun,\n  closeEdgeBeforeSync: normalized.closeEdgeBeforeSync,\n  preserveTargetLogin: normalized.preserveTargetLogin,\n  targetAuthCookieHostPattern: normalized.targetAuthCookieHostPattern,\n  targetAuthCookieNames: normalized.targetAuthCookieNames,\n  browserChannel: normalized.browserChannel,\n  browserRunMode: normalized.browserRunMode,\n  minimizeBrowserWindow: normalized.minimizeBrowserWindow,\n  requireBrowserProfileUnlocked: normalized.requireBrowserProfileUnlocked,\n  browserLaunchTimeoutMs: normalized.browserLaunchTimeoutMs,\n  browserWindowMode: normalized.browserWindowMode,\n  headless: normalized.headless,\n  humanVerificationMode: normalized.humanVerificationMode,\n  resultFilePath: normalized.expectedResultFilePath,\n  ffmpegPath: normalized.ffmpegPath,\n  maxMainImages: normalized.maxMainImages,\n  maxDetailImages: normalized.maxDetailImages,\n  maxVideos: normalized.maxVideos,\n  downloadConcurrency: normalized.downloadConcurrency,\n  pageTimeoutMs: normalized.pageTimeoutMs,\n  requestTimeoutMs: normalized.requestTimeoutMs,\n  humanVerificationTimeoutMs: normalized.humanVerificationTimeoutMs,\n  scrollMaxTimes: normalized.scrollMaxTimes,\n  scrollWaitMs: normalized.scrollWaitMs,\n  scrollBehavior: normalized.scrollBehavior,\n  interactionSeed: normalized.interactionSeed,\n  maxResponseBodyBytes: normalized.maxResponseBodyBytes,\n  maxMediaBytes: normalized.maxMediaBytes,\n};\n\nnormalized.paramBase64 = Buffer.from(JSON.stringify(downloaderPayload), 'utf8').toString('base64');\nnormalized.idempotencyPreflightParamBase64 = Buffer.from(JSON.stringify({\n  workflowCode: normalized.workflowCode,\n  isWebhook: normalized.isWebhook,\n  downloadJobId: normalized.downloadJobId,\n  requestN8nExecutionId: normalized.n8nExecutionId,\n  parentOutputDir: normalized.parentOutputDir,\n  allowedOutputRoots: normalized.allowedOutputRoots,\n  expectedOutputDir: normalized.expectedOutputDir,\n  SKU: normalized.SKU,\n  productName: normalized.productName,\n  productUrl: normalized.productUrl,\n  platformProductId: normalized.offerId,\n}), 'utf8').toString('base64');\nreturn [{ json: normalized }];"
+      }
+    },
+    {
+      "id": "5c297903-4298-4fcf-a4c8-9eea97f284e7",
+      "name": "Parameters Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -440,
+        140
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "92d83f54-2e83-4bc9-844b-fdf8c3fb0114",
+              "leftValue": "={{ $json.validationValid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "27cfab96-531e-4c87-8573-342b8c5d36b0",
+      "name": "Build Validation Failure",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -200,
+        340
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const normalized = $input.first()?.json || {};\nconst result = {\n  success: false,\n  status: 'validation_error',\n  httpStatus: 400,\n  platform: '1688',\n  SKU: normalized.SKU || '',\n  productName: normalized.productName || '',\n  productUrl: normalized.productUrl || '',\n  offerId: normalized.offerId || '',\n  outputDir: '',\n  revision: 0,\n  mainImageCount: 0,\n  detailImageCount: 0,\n  videoCount: 0,\n  mainImages: [],\n  detailImages: [],\n  videos: [],\n  metadataPath: '',\n  needHumanVerification: false,\n  humanVerificationResolved: false,\n  humanVerificationStatus: 'not_required',\n  humanVerificationScreenshotPath: '',\n  browserProfileBusy: false,\n  browserProfileLocked: false,\n  profileStatus: 'not_started',\n  browserChannel: normalized.browserChannel || 'chrome',\n  browserRunMode: normalized.browserRunMode || 'headed',\n  browserExecutablePath: normalized.browserExecutablePath || '',\n  browserUserDataDir: normalized.browserUserDataDir || '',\n  browserProfileDirectory: normalized.browserProfileDirectory || '',\n  browserControlMode: normalized.browserControlMode || 'persistentContext',\n  sourceBrowserUserDataDir: normalized.sourceBrowserUserDataDir || '',\n  sourceBrowserProfileDirectory: normalized.sourceBrowserProfileDirectory || '',\n  syncDefaultProfileBeforeRun: false,\n  closeEdgeBeforeSync: false,\n  preserveTargetLogin: false,\n  targetLoginDetected: false,\n  targetAuthCookieNames: [],\n  targetRequiredAuthCookieNames: Array.isArray(normalized.targetAuthCookieNames) ? normalized.targetAuthCookieNames : [],\n  targetAuthCookieHostPattern: normalized.targetAuthCookieHostPattern || '%',\n  profileMirrorSourceDir: normalized.sourceBrowserUserDataDir || '',\n  profileMirrorSourceProfileDirectory: normalized.sourceBrowserProfileDirectory || '',\n  profileMirrorTargetDir: normalized.browserUserDataDir || '',\n  profileMirrorSynced: false,\n  profileMirrorSyncStatus: 'not_configured',\n  profileMirrorCopiedFileCount: 0,\n  profileMirrorCopiedBytes: 0,\n  profileMirrorSkippedEntryCount: 0,\n  profileMirrorWarnings: [],\n  edgeCloseAttempted: false,\n  edgeCloseStatus: 'not_requested',\n  edgeCloseWarnings: [],\n  requireBrowserProfileUnlocked: Boolean(normalized.requireBrowserProfileUnlocked),\n  minimizeBrowserWindow: false,\n  browserWindowMinimized: false,\n  browserLaunchTimeoutMs: Number(normalized.browserLaunchTimeoutMs || 30000),\n  scrollBehavior: normalized.scrollBehavior || 'natural',\n  interactionSeed: normalized.interactionSeed || '',\n  scrollActionCount: 0,\n  scrollActions: [],\n  detailLongImageSuccess: false,\n  detailLongImageSkipped: false,\n  detailLongImagePath: '',\n  detailLongImageFileName: '详情长图.png',\n  detailLongImageWidth: 0,\n  detailLongImageHeight: 0,\n  detailLongImageSizeBytes: 0,\n  detailLongImageInputCount: 0,\n  detailLongImageInputImages: [],\n  errors: Array.isArray(normalized.validationErrors) ? normalized.validationErrors : ['Invalid input.'],\n  warnings: [],\n  downloadJobId: normalized.downloadJobId || '',\n  idempotencyState: 'failed',\n  idempotencyReplay: false,\n  ownerN8nExecutionId: '',\n  requestN8nExecutionId: normalized.n8nExecutionId || '',\n};\nreturn [{ json: result }];"
+      }
+    },
+    {
+      "id": "1f80a394-7b6e-4012-996c-880f1bdd7958",
+      "name": "Idempotency Preflight",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        -200,
+        40
+      ],
+      "parameters": {
+        "command": "={{ $json.nodeExecutable + ' ' + JSON.stringify($json.idempotencyHelperScriptPath) + ' preflight ' + JSON.stringify($json.idempotencyPreflightParamBase64) }}"
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "dd3d41dc-ed99-4046-b058-acb81055ba1b",
+      "name": "Parse Idempotency Preflight",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        40,
+        40
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const current = $input.first()?.json || {};\nconst normalized = $('Normalize Parameters').first()?.json || {};\n\nfunction parseLastJsonLine(value) {\n  const lines = String(value || '').split(/\\r?\\n/).map((line) => line.trim()).filter(Boolean).reverse();\n  for (const line of lines) {\n    try {\n      const parsed = JSON.parse(line);\n      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;\n    } catch {}\n  }\n  return null;\n}\n\nconst parsed = parseLastJsonLine(current.stdout);\nlet outcome = parsed && typeof parsed.action === 'string' ? parsed : null;\nif (!outcome) {\n  const helperResult = parsed && typeof parsed === 'object' ? parsed : {};\n  outcome = {\n    action: 'error',\n    idempotency: null,\n    response: {\n      success: false,\n      status: String(helperResult.status || 'idempotency_preflight_error'),\n      httpStatus: Number(helperResult.httpStatus || 500),\n      platform: '1688',\n      SKU: normalized.SKU || '',\n      productName: normalized.productName || '',\n      productUrl: normalized.productUrl || '',\n      outputDir: '',\n      errors: Array.isArray(helperResult.errors)\n        ? helperResult.errors\n        : ['Idempotency preflight did not return a valid outcome.'],\n      warnings: String(current.stderr || '').trim() ? [String(current.stderr).trim().slice(0, 1000)] : [],\n      downloadJobId: normalized.downloadJobId || '',\n      idempotencyState: 'failed',\n      idempotencyReplay: false,\n      ownerN8nExecutionId: '',\n      requestN8nExecutionId: normalized.n8nExecutionId || '',\n    },\n  };\n}\n\nlet downloaderPayload = {};\ntry {\n  downloaderPayload = JSON.parse(Buffer.from(String(normalized.paramBase64 || ''), 'base64').toString('utf8'));\n} catch {}\ndownloaderPayload.idempotency = outcome.idempotency || { enabled: false };\nconst ownerN8nExecutionId = String(outcome.ownerN8nExecutionId || normalized.n8nExecutionId || '');\nconst ownerOutputDir = String(outcome.outputDir || normalized.expectedOutputDir || '');\ndownloaderPayload.n8nExecutionId = ownerN8nExecutionId;\ndownloaderPayload.resultFilePath = ownerOutputDir\n  ? ownerOutputDir.replace(/\\/+$/, '') + '/metadata/1688-media-result.json'\n  : normalized.expectedResultFilePath;\n\nreturn [{ json: {\n  ...normalized,\n  requestN8nExecutionId: normalized.n8nExecutionId || '',\n  idempotencyAction: String(outcome.action || 'error'),\n  idempotency: outcome.idempotency || null,\n  idempotencyResponse: outcome.response || null,\n  recoveredDownloadResult: outcome.downloadResult || null,\n  ownerN8nExecutionId,\n  ownerOutputDir,\n  expectedOutputDir: ownerOutputDir,\n  expectedMetadataPath: ownerOutputDir ? ownerOutputDir.replace(/\\/+$/, '') + '/metadata/1688-media-metadata.json' : '',\n  expectedResultFilePath: ownerOutputDir ? ownerOutputDir.replace(/\\/+$/, '') + '/metadata/1688-media-result.json' : '',\n  paramBase64: Buffer.from(JSON.stringify(downloaderPayload), 'utf8').toString('base64'),\n} }];"
+      }
+    },
+    {
+      "id": "f987965c-872b-4c60-840f-52b3ae6b2cda",
+      "name": "Idempotency Route",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        280,
+        40
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "455bdcec-0ddd-485b-b809-312208ffd2d9",
+              "leftValue": "={{ $json.idempotencyAction === 'owner' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "1d69522e-9ab7-4283-a167-e38eaf65e87f",
+      "name": "Resume Stitch?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        520,
+        280
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "7d6ce04f-1194-4a52-9dfd-0ddb51972a59",
+              "leftValue": "={{ $json.idempotencyAction === 'resume_stitch' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "31cacd44-c58c-4f92-b077-3758094a2970",
+      "name": "Build Idempotency Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        760,
+        440
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const input = $input.first()?.json || {};\nconst response = input.idempotencyResponse && typeof input.idempotencyResponse === 'object'\n  ? input.idempotencyResponse\n  : {\n    success: false,\n    status: 'idempotency_preflight_error',\n    httpStatus: 500,\n    errors: ['Idempotency routing reached a terminal branch without a response.'],\n    warnings: [],\n  };\nreturn [{ json: response }];"
+      }
+    },
+    {
+      "id": "3b856216-6e91-495d-8110-f9e0dbb04e2a",
+      "name": "Build Recovered Downloader Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        760,
+        260
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const input = $input.first()?.json || {};\nconst recovered = input.recoveredDownloadResult && typeof input.recoveredDownloadResult === 'object'\n  ? input.recoveredDownloadResult\n  : {\n    success: false,\n    status: 'idempotency_recovery_invalid',\n    httpStatus: 500,\n    errors: ['Idempotency recovery did not provide a media result.'],\n    warnings: [],\n  };\nreturn [{ json: { ...recovered, resultSource: 'idempotency_artifact_recovery' } }];"
+      }
+    },
+    {
+      "id": "d3fcc6e3-181f-4733-9820-87cd28707117",
+      "name": "Run 1688 Playwright Downloader",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        520,
+        -100
+      ],
+      "parameters": {
+        "command": "={{ $json.nodeExecutable + ' ' + JSON.stringify($json.crawlerScriptPath) + ' ' + JSON.stringify($json.paramBase64) }}"
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "1ad75490-37f9-4107-a1d9-cac67855f725",
+      "name": "Parse Downloader Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        760,
+        -100
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const current = $input.first()?.json || {};\nconst normalized = $('Parse Idempotency Preflight').first()?.json || {};\n\nfunction parseLastJsonLine(value) {\n  const lines = String(value || '').split(/\\r?\\n/).map((line) => line.trim()).filter(Boolean).reverse();\n  for (const line of lines) {\n    try {\n      const parsed = JSON.parse(line);\n      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;\n    } catch {}\n  }\n  return null;\n}\n\nfunction textArray(value) {\n  return Array.isArray(value) ? value.filter((entry) => entry !== null && entry !== undefined).map(String) : [];\n}\n\nfunction mediaItems(value) {\n  if (!Array.isArray(value)) return [];\n  return value.map((item, offset) => ({\n    index: Number.isFinite(Number(item?.index)) ? Number(item.index) : offset + 1,\n    url: String(item?.url || ''),\n    localPath: String(item?.localPath || ''),\n    fileName: String(item?.fileName || ''),\n    contentType: String(item?.contentType || ''),\n    sizeBytes: Number.isFinite(Number(item?.sizeBytes)) ? Number(item.sizeBytes) : 0,\n    source: String(item?.source || ''),\n  }));\n}\n\nfunction normalizeIdentityPath(value) {\n  let text = String(value || '').trim().replace(/\\\\+/g, '/').replace(/^([A-Za-z]:)\\/+/, '$1/');\n  while (text.length > 1 && text.endsWith('/') && !/^[A-Za-z]:\\/$/.test(text)) text = text.slice(0, -1);\n  return /^[A-Za-z]:\\//.test(text) ? text.toLowerCase() : text;\n}\n\nfunction verifyFallbackIdentity(result, sourceName) {\n  const mismatches = [];\n  if (String(result?.SKU || '') !== String(normalized.SKU || '')) mismatches.push('SKU');\n  if (String(result?.offerId || '') !== String(normalized.offerId || '')) mismatches.push('offerId');\n  if (normalizeIdentityPath(result?.outputDir) !== normalizeIdentityPath(normalized.expectedOutputDir)) mismatches.push('outputDir');\n  if (mismatches.length) throw new Error(sourceName + ' identity mismatch: ' + mismatches.join(', ') + '.');\n  return result;\n}\n\nfunction readResultFileFallback() {\n  const resultPath = String(normalized.expectedResultFilePath || '').trim();\n  if (!resultPath) throw new Error('Expected result file path is unavailable.');\n  const fs = require('fs');\n  if (!fs.existsSync(resultPath)) throw new Error('Expected result file does not exist: ' + resultPath);\n  return verifyFallbackIdentity(JSON.parse(fs.readFileSync(resultPath, 'utf8')), 'Result file');\n}\n\nfunction readMetadataFallback() {\n  const metadataPath = String(normalized.expectedMetadataPath || '').trim();\n  if (!metadataPath) throw new Error('Expected metadata path is unavailable.');\n  const fs = require('fs');\n  if (!fs.existsSync(metadataPath)) throw new Error('Expected metadata file does not exist: ' + metadataPath);\n  const metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));\n  if (!metadata || typeof metadata.result !== 'object') throw new Error('Metadata does not contain a result object.');\n  return verifyFallbackIdentity(metadata.result, 'Metadata');\n}\n\nfunction fallbackResult(message) {\n  return {\n    success: false,\n    status: 'internal_error',\n    httpStatus: 500,\n    platform: '1688',\n    SKU: normalized.SKU || '',\n    productName: normalized.productName || '',\n    productUrl: normalized.productUrl || '',\n    offerId: normalized.offerId || '',\n    outputDir: '',\n    revision: 0,\n    mainImageCount: 0,\n    detailImageCount: 0,\n    videoCount: 0,\n    mainImages: [],\n    detailImages: [],\n    videos: [],\n    metadataPath: '',\n    needHumanVerification: false,\n    humanVerificationResolved: false,\n    humanVerificationStatus: 'not_required',\n    humanVerificationScreenshotPath: '',\n    browserProfileBusy: false,\n    browserProfileLocked: false,\n    profileStatus: 'unknown',\n    browserChannel: normalized.browserChannel || 'chrome',\n    browserRunMode: normalized.browserRunMode || 'headed',\n    browserExecutablePath: normalized.browserExecutablePath || '',\n    browserUserDataDir: normalized.browserUserDataDir || '',\n    browserProfileDirectory: normalized.browserProfileDirectory || '',\n    browserControlMode: normalized.browserControlMode || 'persistentContext',\n    sourceBrowserUserDataDir: normalized.sourceBrowserUserDataDir || '',\n    sourceBrowserProfileDirectory: normalized.sourceBrowserProfileDirectory || '',\n    syncDefaultProfileBeforeRun: false,\n    closeEdgeBeforeSync: false,\n    preserveTargetLogin: false,\n    targetLoginDetected: false,\n    targetAuthCookieNames: [],\n    targetRequiredAuthCookieNames: Array.isArray(normalized.targetAuthCookieNames) ? normalized.targetAuthCookieNames : [],\n    targetAuthCookieHostPattern: normalized.targetAuthCookieHostPattern || '%',\n    profileMirrorSourceDir: normalized.sourceBrowserUserDataDir || '',\n    profileMirrorSourceProfileDirectory: normalized.sourceBrowserProfileDirectory || '',\n    profileMirrorTargetDir: normalized.browserUserDataDir || '',\n    profileMirrorSynced: false,\n    profileMirrorSyncStatus: 'not_configured',\n    profileMirrorCopiedFileCount: 0,\n    profileMirrorCopiedBytes: 0,\n    profileMirrorSkippedEntryCount: 0,\n    profileMirrorWarnings: [],\n    edgeCloseAttempted: false,\n    edgeCloseStatus: 'not_requested',\n    edgeCloseWarnings: [],\n    requireBrowserProfileUnlocked: Boolean(normalized.requireBrowserProfileUnlocked),\n    minimizeBrowserWindow: false,\n    browserWindowMinimized: false,\n    browserLaunchTimeoutMs: Number(normalized.browserLaunchTimeoutMs || 30000),\n    scrollBehavior: normalized.scrollBehavior || 'natural',\n    interactionSeed: normalized.interactionSeed || '',\n    scrollActionCount: 0,\n    scrollActions: [],\n    detailLongImageSuccess: false,\n    detailLongImageSkipped: false,\n    detailLongImagePath: '',\n    detailLongImageFileName: '详情长图.png',\n    detailLongImageWidth: 0,\n    detailLongImageHeight: 0,\n    detailLongImageSizeBytes: 0,\n    detailLongImageInputCount: 0,\n    detailLongImageInputImages: [],\n    errors: [message],\n    warnings: [],\n  };\n}\n\nlet parsed = parseLastJsonLine(current.stdout);\nlet resultSource = parsed ? 'stdout' : '';\nconst fallbackErrors = [];\nif (!parsed) {\n  try {\n    parsed = readResultFileFallback();\n    resultSource = 'result_file_fallback';\n  } catch (error) {\n    fallbackErrors.push(error.message || String(error));\n  }\n}\nif (!parsed) {\n  try {\n    parsed = readMetadataFallback();\n    resultSource = 'metadata_fallback';\n  } catch (error) {\n    fallbackErrors.push(error.message || String(error));\n  }\n}\nif (!parsed) {\n  const failure = fallbackResult('Downloader did not return a valid JSON result. ' + fallbackErrors.join(' '));\n  if (String(current.stderr || '').trim()) failure.warnings.push(String(current.stderr).trim().slice(0, 1000));\n  return [{ json: failure }];\n}\n\nconst needHumanVerification = Boolean(parsed.needHumanVerification || parsed.needLoginOrCaptcha);\nconst profileStatus = String(parsed.profileStatus || (parsed.browserProfileBusy ? 'busy' : 'unknown'));\nlet httpStatus = Number(parsed.httpStatus);\nif (!Number.isInteger(httpStatus) || httpStatus < 100 || httpStatus > 599) {\n  if (parsed.success) httpStatus = 200;\n  else if (parsed.status === 'validation_error') httpStatus = 400;\n  else if (parsed.status === 'edge_profile_locked') httpStatus = 423;\n  else if (needHumanVerification || profileStatus === 'busy' || parsed.status === 'profile_busy' || parsed.status === 'edge_default_profile_remote_debugging_blocked') httpStatus = 409;\n  else if (parsed.status === 'upstream_error') httpStatus = 502;\n  else httpStatus = 500;\n}\n\nconst warnings = textArray(parsed.warnings);\nif (String(current.stderr || '').trim()) warnings.push(String(current.stderr).trim().slice(0, 1000));\nconst result = {\n  resultSource,\n  success: Boolean(parsed.success),\n  status: String(parsed.status || (parsed.success ? 'success' : 'internal_error')),\n  httpStatus,\n  platform: '1688',\n  SKU: String(parsed.SKU || normalized.SKU || ''),\n  productName: String(parsed.productName || normalized.productName || ''),\n  productUrl: String(parsed.productUrl || normalized.productUrl || ''),\n  offerId: String(parsed.offerId || normalized.offerId || ''),\n  outputDir: String(parsed.outputDir || ''),\n  revision: Number.isFinite(Number(parsed.revision)) ? Number(parsed.revision) : 0,\n  mainImageCount: Number.isFinite(Number(parsed.mainImageCount)) ? Number(parsed.mainImageCount) : 0,\n  detailImageCount: Number.isFinite(Number(parsed.detailImageCount)) ? Number(parsed.detailImageCount) : 0,\n  videoCount: Number.isFinite(Number(parsed.videoCount)) ? Number(parsed.videoCount) : 0,\n  mainImages: mediaItems(parsed.mainImages),\n  detailImages: mediaItems(parsed.detailImages),\n  videos: mediaItems(parsed.videos),\n  metadataPath: String(parsed.metadataPath || ''),\n  needHumanVerification,\n  humanVerificationResolved: Boolean(parsed.humanVerificationResolved),\n  humanVerificationStatus: String(parsed.humanVerificationStatus || (needHumanVerification ? 'required' : 'not_required')),\n  humanVerificationScreenshotPath: String(parsed.humanVerificationScreenshotPath || ''),\n  browserProfileBusy: Boolean(parsed.browserProfileBusy || profileStatus === 'busy'),\n  browserProfileLocked: Boolean(parsed.browserProfileLocked || parsed.browserProfileBusy || profileStatus === 'busy'),\n  profileStatus,\n  browserChannel: String(parsed.browserChannel || normalized.browserChannel || 'chrome'),\n  browserRunMode: String(parsed.browserRunMode || normalized.browserRunMode || 'headed'),\n  browserExecutablePath: String(parsed.browserExecutablePath || normalized.browserExecutablePath || ''),\n  browserUserDataDir: String(parsed.browserUserDataDir || normalized.browserUserDataDir || ''),\n  browserProfileDirectory: String(parsed.browserProfileDirectory || normalized.browserProfileDirectory || ''),\n  browserControlMode: String(parsed.browserControlMode || normalized.browserControlMode || 'persistentContext'),\n  sourceBrowserUserDataDir: String(parsed.sourceBrowserUserDataDir || normalized.sourceBrowserUserDataDir || ''),\n  sourceBrowserProfileDirectory: String(parsed.sourceBrowserProfileDirectory || normalized.sourceBrowserProfileDirectory || ''),\n  syncDefaultProfileBeforeRun: false,\n  closeEdgeBeforeSync: false,\n  preserveTargetLogin: false,\n  targetLoginDetected: Boolean(parsed.targetLoginDetected),\n  targetAuthCookieNames: Array.isArray(parsed.targetAuthCookieNames) ? parsed.targetAuthCookieNames : [],\n  targetRequiredAuthCookieNames: Array.isArray(parsed.targetRequiredAuthCookieNames)\n    ? parsed.targetRequiredAuthCookieNames\n    : Array.isArray(normalized.targetAuthCookieNames) ? normalized.targetAuthCookieNames : [],\n  targetAuthCookieHostPattern: String(parsed.targetAuthCookieHostPattern || normalized.targetAuthCookieHostPattern || '%'),\n  profileMirrorSourceDir: String(parsed.profileMirrorSourceDir || normalized.sourceBrowserUserDataDir || ''),\n  profileMirrorSourceProfileDirectory: String(parsed.profileMirrorSourceProfileDirectory || normalized.sourceBrowserProfileDirectory || ''),\n  profileMirrorTargetDir: String(parsed.profileMirrorTargetDir || normalized.browserUserDataDir || ''),\n  profileMirrorSynced: Boolean(parsed.profileMirrorSynced),\n  profileMirrorSyncStatus: String(parsed.profileMirrorSyncStatus || 'not_configured'),\n  profileMirrorCopiedFileCount: Number.isFinite(Number(parsed.profileMirrorCopiedFileCount)) ? Number(parsed.profileMirrorCopiedFileCount) : 0,\n  profileMirrorCopiedBytes: Number.isFinite(Number(parsed.profileMirrorCopiedBytes)) ? Number(parsed.profileMirrorCopiedBytes) : 0,\n  profileMirrorSkippedEntryCount: Number.isFinite(Number(parsed.profileMirrorSkippedEntryCount)) ? Number(parsed.profileMirrorSkippedEntryCount) : 0,\n  profileMirrorWarnings: Array.isArray(parsed.profileMirrorWarnings) ? parsed.profileMirrorWarnings : [],\n  edgeCloseAttempted: Boolean(parsed.edgeCloseAttempted),\n  edgeCloseStatus: String(parsed.edgeCloseStatus || 'not_requested'),\n  edgeCloseWarnings: Array.isArray(parsed.edgeCloseWarnings) ? parsed.edgeCloseWarnings : [],\n  requireBrowserProfileUnlocked: Boolean(parsed.requireBrowserProfileUnlocked ?? normalized.requireBrowserProfileUnlocked),\n  minimizeBrowserWindow: false,\n  browserWindowMinimized: Boolean(parsed.browserWindowMinimized),\n  browserLaunchTimeoutMs: Number.isFinite(Number(parsed.browserLaunchTimeoutMs)) ? Number(parsed.browserLaunchTimeoutMs) : Number(normalized.browserLaunchTimeoutMs || 30000),\n  scrollBehavior: String(parsed.scrollBehavior || normalized.scrollBehavior || 'natural'),\n  interactionSeed: String(parsed.interactionSeed || normalized.interactionSeed || ''),\n  scrollActionCount: Number.isFinite(Number(parsed.scrollActionCount)) ? Number(parsed.scrollActionCount) : 0,\n  scrollActions: Array.isArray(parsed.scrollActions) ? parsed.scrollActions : [],\n  detailLongImageSuccess: Boolean(parsed.detailLongImageSuccess),\n  detailLongImageSkipped: Boolean(parsed.detailLongImageSkipped),\n  detailLongImagePath: String(parsed.detailLongImagePath || ''),\n  detailLongImageFileName: String(parsed.detailLongImageFileName || '详情长图.png'),\n  detailLongImageWidth: Number.isFinite(Number(parsed.detailLongImageWidth)) ? Number(parsed.detailLongImageWidth) : 0,\n  detailLongImageHeight: Number.isFinite(Number(parsed.detailLongImageHeight)) ? Number(parsed.detailLongImageHeight) : 0,\n  detailLongImageSizeBytes: Number.isFinite(Number(parsed.detailLongImageSizeBytes)) ? Number(parsed.detailLongImageSizeBytes) : 0,\n  detailLongImageInputCount: Number.isFinite(Number(parsed.detailLongImageInputCount)) ? Number(parsed.detailLongImageInputCount) : 0,\n  detailLongImageInputImages: Array.isArray(parsed.detailLongImageInputImages) ? parsed.detailLongImageInputImages : [],\n  errors: textArray(parsed.errors),\n  warnings,\n};\nif (!result.success && result.errors.length === 0) result.errors.push('The downloader could not complete the request.');\nreturn [{ json: result }];"
+      }
+    },
+    {
+      "id": "1268f00d-3cf9-4385-ad8e-400215532951",
+      "name": "Build Detail Long Image Params",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1000,
+        100
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const result = $input.first()?.json || {};\nconst normalized = $('Normalize Parameters').first()?.json || {};\nconst preflight = $('Parse Idempotency Preflight').first()?.json || {};\nconst outputDir = String(result.outputDir || '');\nconst detailLongImageResultPath = outputDir\n  ? outputDir.replace(/\\/+$/, '') + '/metadata/1688-detail-stitch-result.json'\n  : '';\nconst payload = {\n  outputDir,\n  detailImageDir: outputDir ? outputDir.replace(/\\/+$/, '') + '/detail-images' : '',\n  outputFileName: '详情长图.png',\n  needLoginOrCaptcha: Boolean(result.needHumanVerification),\n  n8nExecutionId: String(result.n8nExecutionId || preflight.ownerN8nExecutionId || normalized.n8nExecutionId || ''),\n  resultFilePath: detailLongImageResultPath,\n  idempotency: preflight.idempotency || { enabled: false },\n};\nreturn [{\n  json: {\n    ...result,\n    nodeExecutable: normalized.nodeExecutable || 'node',\n    detailStitcherScriptPath: normalized.detailStitcherScriptPath || '',\n    detailLongImageResultPath,\n    detailLongImageParamBase64: Buffer.from(JSON.stringify(payload), 'utf8').toString('base64'),\n  },\n}];"
+      }
+    },
+    {
+      "id": "b902861e-ba4d-4c78-9c82-be784cb2c5e9",
+      "name": "Stitch Detail Long Image",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        1240,
+        100
+      ],
+      "parameters": {
+        "command": "={{ $json.nodeExecutable + ' ' + JSON.stringify($json.detailStitcherScriptPath) + ' ' + JSON.stringify($json.detailLongImageParamBase64) }}"
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "16b63296-1546-4d6e-bc6b-548b48d37112",
+      "name": "Parse Detail Long Image Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1480,
+        100
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const current = $input.first()?.json || {};\nconst original = $('Build Detail Long Image Params').first()?.json || {};\n\nfunction parseLastJsonLine(value) {\n  const lines = String(value || '').split(/\\r?\\n/).map((line) => line.trim()).filter(Boolean).reverse();\n  for (const line of lines) {\n    try {\n      const parsed = JSON.parse(line);\n      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;\n    } catch {}\n  }\n  return null;\n}\n\nfunction textArray(value) {\n  return Array.isArray(value) ? value.filter((entry) => entry !== null && entry !== undefined).map(String) : [];\n}\n\nconst warnings = textArray(original.warnings);\nlet parsed = parseLastJsonLine(current.stdout);\nlet detailLongImageResultSource = parsed ? 'stdout' : '';\nif (!parsed && original.detailLongImageResultPath) {\n  try {\n    const fs = require('fs');\n    if (!fs.existsSync(original.detailLongImageResultPath)) {\n      throw new Error('Expected stitch result file does not exist: ' + original.detailLongImageResultPath);\n    }\n    parsed = JSON.parse(fs.readFileSync(original.detailLongImageResultPath, 'utf8'));\n    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Stitch result file is not a JSON object.');\n    const normalizePath = (value) => String(value || '').trim().replace(/\\\\+/g, '/').toLowerCase();\n    if (normalizePath(parsed.resultFilePath) !== normalizePath(original.detailLongImageResultPath)) {\n      throw new Error('Stitch result file identity mismatch.');\n    }\n    detailLongImageResultSource = 'result_file_fallback';\n  } catch (error) {\n    warnings.push(error.message || String(error));\n  }\n}\nif (String(current.stderr || '').trim()) warnings.push(String(current.stderr).trim().slice(0, 1000));\nif (!parsed) warnings.push('Detail long image stitcher did not return a valid JSON result.');\nelse {\n  warnings.push(...textArray(parsed.warnings));\n  if (!parsed.success) warnings.push(...textArray(parsed.errors));\n}\n\nconst defaultLongImagePath = original.outputDir\n  ? original.outputDir.replace(/\\/+$/, '') + '/detail-images/详情长图.png'\n  : '';\n\nreturn [{ json: {\n  n8nExecutionId: String($execution.id || ''),\n  resultSource: String(original.resultSource || ''),\n  detailLongImageResultSource,\n  success: Boolean(original.success),\n  status: String(original.status || (original.success ? 'success' : 'internal_error')),\n  httpStatus: Number.isInteger(Number(original.httpStatus)) ? Number(original.httpStatus) : (original.success ? 200 : 500),\n  platform: '1688',\n  SKU: String(original.SKU || ''),\n  productName: String(original.productName || ''),\n  productUrl: String(original.productUrl || ''),\n  offerId: String(original.offerId || ''),\n  outputDir: String(original.outputDir || ''),\n  revision: Number(original.revision || 0),\n  mainImageCount: Number(original.mainImageCount || 0),\n  detailImageCount: Number(original.detailImageCount || 0),\n  videoCount: Number(original.videoCount || 0),\n  mainImages: Array.isArray(original.mainImages) ? original.mainImages : [],\n  detailImages: Array.isArray(original.detailImages) ? original.detailImages : [],\n  videos: Array.isArray(original.videos) ? original.videos : [],\n  metadataPath: String(original.metadataPath || ''),\n  needHumanVerification: Boolean(original.needHumanVerification),\n  humanVerificationResolved: Boolean(original.humanVerificationResolved),\n  humanVerificationStatus: String(original.humanVerificationStatus || 'not_required'),\n  humanVerificationScreenshotPath: String(original.humanVerificationScreenshotPath || ''),\n  browserProfileBusy: Boolean(original.browserProfileBusy),\n  browserProfileLocked: Boolean(original.browserProfileLocked),\n  profileStatus: String(original.profileStatus || 'unknown'),\n  browserChannel: String(original.browserChannel || 'chrome'),\n  browserRunMode: String(original.browserRunMode || 'headed'),\n  browserExecutablePath: String(original.browserExecutablePath || ''),\n  browserUserDataDir: String(original.browserUserDataDir || ''),\n  browserProfileDirectory: String(original.browserProfileDirectory || ''),\n  browserControlMode: String(original.browserControlMode || 'persistentContext'),\n  sourceBrowserUserDataDir: String(original.sourceBrowserUserDataDir || ''),\n  sourceBrowserProfileDirectory: String(original.sourceBrowserProfileDirectory || ''),\n  syncDefaultProfileBeforeRun: false,\n  closeEdgeBeforeSync: false,\n  preserveTargetLogin: false,\n  targetLoginDetected: Boolean(original.targetLoginDetected),\n  targetAuthCookieNames: Array.isArray(original.targetAuthCookieNames) ? original.targetAuthCookieNames : [],\n  targetRequiredAuthCookieNames: Array.isArray(original.targetRequiredAuthCookieNames) ? original.targetRequiredAuthCookieNames : [],\n  targetAuthCookieHostPattern: String(original.targetAuthCookieHostPattern || '%'),\n  profileMirrorSourceDir: String(original.profileMirrorSourceDir || ''),\n  profileMirrorSourceProfileDirectory: String(original.profileMirrorSourceProfileDirectory || ''),\n  profileMirrorTargetDir: String(original.profileMirrorTargetDir || ''),\n  profileMirrorSynced: Boolean(original.profileMirrorSynced),\n  profileMirrorSyncStatus: String(original.profileMirrorSyncStatus || 'not_configured'),\n  profileMirrorCopiedFileCount: Number(original.profileMirrorCopiedFileCount || 0),\n  profileMirrorCopiedBytes: Number(original.profileMirrorCopiedBytes || 0),\n  profileMirrorSkippedEntryCount: Number(original.profileMirrorSkippedEntryCount || 0),\n  profileMirrorWarnings: Array.isArray(original.profileMirrorWarnings) ? original.profileMirrorWarnings : [],\n  edgeCloseAttempted: Boolean(original.edgeCloseAttempted),\n  edgeCloseStatus: String(original.edgeCloseStatus || 'not_requested'),\n  edgeCloseWarnings: Array.isArray(original.edgeCloseWarnings) ? original.edgeCloseWarnings : [],\n  requireBrowserProfileUnlocked: Boolean(original.requireBrowserProfileUnlocked),\n  minimizeBrowserWindow: false,\n  browserWindowMinimized: Boolean(original.browserWindowMinimized),\n  browserLaunchTimeoutMs: Number(original.browserLaunchTimeoutMs || 30000),\n  scrollBehavior: String(original.scrollBehavior || 'natural'),\n  interactionSeed: String(original.interactionSeed || ''),\n  scrollActionCount: Number(original.scrollActionCount || 0),\n  scrollActions: Array.isArray(original.scrollActions) ? original.scrollActions : [],\n  detailLongImageSuccess: Boolean(parsed?.success),\n  detailLongImageSkipped: Boolean(parsed?.skipped),\n  detailLongImagePath: String(parsed?.detailLongImagePath || original.detailLongImagePath || defaultLongImagePath),\n  detailLongImageFileName: String(parsed?.detailLongImageFileName || original.detailLongImageFileName || '详情长图.png'),\n  detailLongImageWidth: Number(parsed?.detailLongImageWidth || original.detailLongImageWidth || 0),\n  detailLongImageHeight: Number(parsed?.detailLongImageHeight || original.detailLongImageHeight || 0),\n  detailLongImageSizeBytes: Number(parsed?.detailLongImageSizeBytes || 0),\n  detailLongImageInputCount: Number(parsed?.inputImageCount || 0),\n  detailLongImageInputImages: Array.isArray(parsed?.inputImages) ? parsed.inputImages : [],\n  errors: textArray(original.errors),\n  warnings: [...new Set(warnings.filter(Boolean))],\n} }];"
+      }
+    },
+    {
+      "id": "398b9fde-f744-45f2-afa2-e9de989b201b",
+      "name": "Build Idempotency Finalize Params",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1720,
+        100
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const result = $input.first()?.json || {};\nconst normalized = $('Normalize Parameters').first()?.json || {};\nconst preflight = $('Parse Idempotency Preflight').first()?.json || {};\n\nfunction boundedTextArray(value) {\n  return Array.isArray(value)\n    ? value.slice(0, 2).map((entry) => String(entry || '').slice(0, 160))\n    : [];\n}\n\nfunction compactFailure(value) {\n  return {\n    success: false,\n    status: String(value?.status || 'idempotency_finalize_failed').slice(0, 128),\n    httpStatus: Number.isInteger(Number(value?.httpStatus)) ? Number(value.httpStatus) : 500,\n    platform: String(value?.platform || '1688').slice(0, 32),\n    SKU: String(value?.SKU || '').slice(0, 64),\n    productName: String(value?.productName || '').slice(0, 256),\n    productUrl: String(value?.productUrl || '').slice(0, 1024),\n    offerId: String(value?.offerId || '').slice(0, 128),\n    outputDir: String(value?.outputDir || '').slice(0, 1024),\n    mainImageCount: Number(value?.mainImageCount || 0),\n    detailImageCount: Number(value?.detailImageCount || 0),\n    videoCount: Number(value?.videoCount || 0),\n    browserProfileBusy: Boolean(value?.browserProfileBusy),\n    browserProfileLocked: Boolean(value?.browserProfileLocked),\n    needLoginOrCaptcha: Boolean(value?.needLoginOrCaptcha),\n    needHumanVerification: Boolean(value?.needHumanVerification),\n    humanVerificationStatus: String(value?.humanVerificationStatus || '').slice(0, 128),\n    retryReason: String(value?.retryReason || '').slice(0, 256),\n    detailLongImageSuccess: Boolean(value?.detailLongImageSuccess),\n    detailLongImageSkipped: Boolean(value?.detailLongImageSkipped),\n    errors: boundedTextArray(value?.errors),\n    warnings: boundedTextArray(value?.warnings),\n  };\n}\n\nconst ownerN8nExecutionId = String(preflight.ownerN8nExecutionId || result.n8nExecutionId || normalized.n8nExecutionId || '');\nconst ownerOutputDir = String(preflight.ownerOutputDir || result.outputDir || normalized.expectedOutputDir || '');\nconst payload = {\n  workflowCode: normalized.workflowCode || 'E007',\n  isWebhook: Boolean(normalized.isWebhook),\n  downloadJobId: normalized.downloadJobId || '',\n  requestN8nExecutionId: normalized.n8nExecutionId || '',\n  idempotency: preflight.idempotency || { enabled: false },\n  resultReference: {\n    mode: 'verified_artifacts',\n    workflowCode: normalized.workflowCode || 'E007',\n    parentOutputDir: normalized.parentOutputDir || '',\n    allowedOutputRoots: Array.isArray(normalized.allowedOutputRoots) ? normalized.allowedOutputRoots : [],\n    outputDir: ownerOutputDir,\n    SKU: normalized.SKU || result.SKU || '',\n    productName: normalized.productName || result.productName || '',\n    productUrl: normalized.productUrl || result.productUrl || '',\n    platformProductId: normalized.offerId || result.offerId || '',\n    ownerN8nExecutionId,\n  },\n};\nif (result.success !== true) payload.inlineResult = compactFailure(result);\nlet encoded = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64');\nif (encoded.length > 6000) {\n  const overflowPayload = {\n    workflowCode: normalized.workflowCode || 'E007',\n    isWebhook: Boolean(normalized.isWebhook),\n    downloadJobId: normalized.downloadJobId || '',\n    ownerN8nExecutionId,\n    requestN8nExecutionId: normalized.n8nExecutionId || '',\n    idempotency: preflight.idempotency || { enabled: false },\n    inlineResult: {\n      success: false,\n      status: 'idempotency_finalize_payload_too_large',\n      httpStatus: 500,\n      platform: '1688',\n      SKU: String(normalized.SKU || '').slice(0, 64),\n      productName: String(normalized.productName || '').slice(0, 128),\n      outputDir: ownerOutputDir.slice(0, 1024),\n      errors: ['Finalize identity exceeded the safe Windows command-line envelope.'],\n      warnings: [],\n    },\n  };\n  encoded = Buffer.from(JSON.stringify(overflowPayload), 'utf8').toString('base64');\n}\nif (encoded.length > 6000) throw new Error('Idempotency finalize context exceeds the safe Windows command-line envelope.');\nreturn [{ json: {\n  ...result,\n  nodeExecutable: normalized.nodeExecutable || 'node',\n  idempotencyHelperScriptPath: normalized.idempotencyHelperScriptPath || '',\n  idempotencyFinalizeParamBase64: encoded,\n  downloadJobId: normalized.downloadJobId || '',\n  ownerN8nExecutionId,\n  requestN8nExecutionId: normalized.n8nExecutionId || '',\n} }];"
+      }
+    },
+    {
+      "id": "1da3dd3a-ebba-473a-8fe2-70ad617d34c9",
+      "name": "Idempotency Finalize",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        1960,
+        100
+      ],
+      "parameters": {
+        "command": "={{ $json.nodeExecutable + ' ' + JSON.stringify($json.idempotencyHelperScriptPath) + ' finalize ' + JSON.stringify($json.idempotencyFinalizeParamBase64) }}"
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "9f4d2fb2-c03c-45d8-8fde-af0645525e71",
+      "name": "Parse Idempotency Finalize",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        100
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const current = $input.first()?.json || {};\nconst original = $('Build Idempotency Finalize Params').first()?.json || {};\nconst lines = String(current.stdout || '').split(/\\r?\\n/).map((line) => line.trim()).filter(Boolean).reverse();\nlet parsed = null;\nfor (const line of lines) {\n  try {\n    const value = JSON.parse(line);\n    if (value && typeof value === 'object' && !Array.isArray(value)) {\n      parsed = value;\n      break;\n    }\n  } catch {}\n}\nif (parsed) return [{ json: parsed }];\nconst warnings = Array.isArray(original.warnings) ? [...original.warnings] : [];\nif (String(current.stderr || '').trim()) warnings.push(String(current.stderr).trim().slice(0, 1000));\nreturn [{ json: {\n  ...original,\n  success: false,\n  status: 'idempotency_finalize_error',\n  httpStatus: 500,\n  idempotencyState: 'failed',\n  idempotencyReplay: false,\n  downloadJobId: String(original.downloadJobId || ''),\n  ownerN8nExecutionId: String(original.ownerN8nExecutionId || ''),\n  requestN8nExecutionId: String(original.requestN8nExecutionId || ''),\n  warnings,\n  errors: [...(Array.isArray(original.errors) ? original.errors : []), 'Idempotency finalize did not return valid JSON.'],\n} }];"
+      }
+    },
+    {
+      "id": "5fd5b8df-c92d-4030-8180-dd1ce500588f",
+      "name": "Webhook Request?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2440,
+        140
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "39a61fdf-6291-4075-b0d0-2dadcfa9640c",
+              "leftValue": "={{ $('Normalize Parameters').first().json.isWebhook }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "eb339996-5e95-454c-9ed8-0c63d906b8d9",
+      "name": "Manual Result",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        2680,
+        300
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "8579d147-309c-49f0-835e-edcd243168a5",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        2680,
+        40
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": "={{ Number($json.httpStatus || 500) }}",
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json; charset=utf-8"
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "setParameter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "setParameter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "setParameter": {
+      "main": [
+        [
+          {
+            "node": "Normalize Parameters",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Parameters": {
+      "main": [
+        [
+          {
+            "node": "Parameters Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parameters Valid?": {
+      "main": [
+        [
+          {
+            "node": "Idempotency Preflight",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Validation Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Validation Failure": {
+      "main": [
+        [
+          {
+            "node": "Webhook Request?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Idempotency Preflight": {
+      "main": [
+        [
+          {
+            "node": "Parse Idempotency Preflight",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Parse Idempotency Preflight",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Idempotency Preflight": {
+      "main": [
+        [
+          {
+            "node": "Idempotency Route",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Idempotency Route": {
+      "main": [
+        [
+          {
+            "node": "Run 1688 Playwright Downloader",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Resume Stitch?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resume Stitch?": {
+      "main": [
+        [
+          {
+            "node": "Build Recovered Downloader Result",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Idempotency Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Recovered Downloader Result": {
+      "main": [
+        [
+          {
+            "node": "Build Detail Long Image Params",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Idempotency Response": {
+      "main": [
+        [
+          {
+            "node": "Webhook Request?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run 1688 Playwright Downloader": {
+      "main": [
+        [
+          {
+            "node": "Parse Downloader Result",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Parse Downloader Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Downloader Result": {
+      "main": [
+        [
+          {
+            "node": "Build Detail Long Image Params",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Detail Long Image Params": {
+      "main": [
+        [
+          {
+            "node": "Stitch Detail Long Image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Stitch Detail Long Image": {
+      "main": [
+        [
+          {
+            "node": "Parse Detail Long Image Result",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Parse Detail Long Image Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Detail Long Image Result": {
+      "main": [
+        [
+          {
+            "node": "Build Idempotency Finalize Params",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Idempotency Finalize Params": {
+      "main": [
+        [
+          {
+            "node": "Idempotency Finalize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Idempotency Finalize": {
+      "main": [
+        [
+          {
+            "node": "Parse Idempotency Finalize",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Parse Idempotency Finalize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Idempotency Finalize": {
+      "main": [
+        [
+          {
+            "node": "Webhook Request?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook Request?": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Manual Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false,
+    "timeSavedMode": "fixed",
+    "callerPolicy": "workflowsFromSameOwner",
+    "saveExecutionProgress": false,
+    "executionTimeout": 1200
+  }
+}

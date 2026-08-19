@@ -1,0 +1,236 @@
+{
+  "id": "DSXe7OXHqa1IsQxx",
+  "name": "S014-v03-读取文件夹-输出JSON参数表",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## S014-v03-读取文件夹-输出JSON参数表\n\n### 输入\n- `folderPath`：由父工作流 Local File Trigger 传入。\n\n### 产品 JSON\n- 调用 `S016-JSON文件-解析`，递归查找最新的 `n8n_setParameter*.json`。\n- JSON 顶层字段名、字段数量、字段类型和值全部原样透传。\n- 不做字段白名单、别名转换、默认值补全或业务字段必填校验。\n- 找不到文件或 S016 执行失败时中止工作流。\n\n### 图片\n- 当前文件夹读取 `.jpg/.jpeg/.png/.webp`。\n- 至少 3 张，最多返回排序后的前 5 张。\n- S014 运行时生成的图片地址、文件信息、路径、警告和调试字段优先于产品 JSON 中的同名字段。",
+        "height": 560,
+        "width": 328,
+        "color": 4
+      },
+      "id": "4a300279-8ee5-4aad-ae0e-118acfc686e4",
+      "name": "Sticky Note1",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -240,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "folderPath"
+            }
+          ]
+        }
+      },
+      "id": "d59ceb8d-b5cd-4bc7-9606-0077515ec340",
+      "name": "When Executed by Another Workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        128,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const __hiddenFs = require('fs');\nconst __hiddenPath = require('path');\nconst __HIDDEN_PS_TEMPLATE = \"$ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue';[Console]::OutputEncoding=New-Object System.Text.UTF8Encoding $false;$OutputEncoding=[Console]::OutputEncoding;function q([string]$a){if($null -eq $a){return '\\\"\\\"'}if($a.Length -eq 0){return '\\\"\\\"'}if($a -notmatch '[\\\\s\\\"]'){return $a}$r='\\\"';$b=0;foreach($c in $a.ToCharArray()){if($c -eq '\\\\'){$b++;continue}if($c -eq '\\\"'){$r+=('\\\\'*($b*2+1))+'\\\"';$b=0;continue}if($b -gt 0){$r+='\\\\'*$b;$b=0}$r+=$c}if($b -gt 0){$r+='\\\\'*($b*2)}return $r+'\\\"'};$sp=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__SPEC_PATH_B64__'));$o=[IO.Path]::GetTempFileName();$e=[IO.Path]::GetTempFileName();try{$s=Get-Content -LiteralPath $sp -Raw -Encoding UTF8|ConvertFrom-Json;$av=@();foreach($x in $s.args){$av+=[string]$x};$al=($av|%{q $_}) -join ' ';$p=Start-Process -FilePath ([string]$s.executable) -ArgumentList $al -WindowStyle Hidden -Wait -PassThru -RedirectStandardOutput $o -RedirectStandardError $e;$out=if(Test-Path -LiteralPath $o){[IO.File]::ReadAllText($o,[Text.Encoding]::UTF8)}else{''};$err=if(Test-Path -LiteralPath $e){[IO.File]::ReadAllText($e,[Text.Encoding]::UTF8)}else{''};if($out){[Console]::Out.Write($out)};if($err){[Console]::Error.Write($err)};exit $p.ExitCode}finally{Remove-Item -LiteralPath $o,$e -Force -ErrorAction SilentlyContinue;if(Test-Path -LiteralPath $sp){Remove-Item -LiteralPath $sp -Force -ErrorAction SilentlyContinue}}\";\nfunction __hiddenB64Utf8(value) { return Buffer.from(String(value ?? ''), 'utf8').toString('base64'); }\nfunction __hiddenShQuote(value) { const text = String(value ?? ''); return \"'\" + text.replace(/'/g, \"'\\\"'\\\"'\") + \"'\"; }\nfunction __useWindowsHiddenCommand() { return __hiddenPath.sep === '\\\\'; }\nfunction __buildHiddenCommand(executable, args) {\n  const __isWin = __useWindowsHiddenCommand();\n  const __tempRoot = __isWin ? '__MERCHROUTE_TEMP_DIR__' : '/tmp';\n  const dir = __hiddenPath.join(__tempRoot, 'n8n-hidden-command-specs');\n  __hiddenFs.mkdirSync(dir, { recursive: true });\n  const specPath = __hiddenPath.join(dir, 'cmd-' + Date.now() + '-' + Math.random().toString(36).slice(2, 10) + '.json');\n  const spec = { executable: String(executable), args: args.map((arg) => String(arg ?? '')), createdAt: new Date().toISOString(), version: 'n8n-hidden-cli-v1' };\n  __hiddenFs.writeFileSync(specPath, JSON.stringify(spec), 'utf8');\n  const psScript = __HIDDEN_PS_TEMPLATE.replace('__SPEC_PATH_B64__', __hiddenB64Utf8(specPath));\n  return 'powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -OutputFormat Text -EncodedCommand ' + Buffer.from(psScript, 'utf16le').toString('base64');\n}\nfunction __buildNodeCommand(args) {\n  const normalizedArgs = args.map((arg) => String(arg ?? ''));\n  if (__useWindowsHiddenCommand()) return __buildHiddenCommand('node', normalizedArgs);\n  return ['node', ...normalizedArgs.map(__hiddenShQuote)].join(' ');\n}\nfunction __buildNodeEvalCommand(scriptBase64, scriptArgs = []) {\n  return __buildNodeCommand(['-e', \"eval(Buffer.from(process.argv[1],'base64').toString('utf8'))\", scriptBase64, ...scriptArgs.map((arg) => String(arg ?? ''))]);\n}\nfunction __buildNodeGzipEvalCommand(scriptBase64, scriptArgs = []) {\n  return __buildNodeCommand(['-e', \"eval(require('zlib').gunzipSync(Buffer.from(process.argv[1],'base64')).toString('utf8'))\", scriptBase64, ...scriptArgs.map((arg) => String(arg ?? ''))]);\n}\n\nconst S014_FOLDER_STABLE_SCRIPT_BASE64 = 'CmNvbnN0IGZzID0gcmVxdWlyZSgnZnMnKS5wcm9taXNlczsKY29uc3QgcGF0aCA9IHJlcXVpcmUoJ3BhdGgnKTsKY29uc3QgZGlyID0gQnVmZmVyLmZyb20ocHJvY2Vzcy5hcmd2WzJdIHx8ICcnLCAnYmFzZTY0JykudG9TdHJpbmcoJ3V0ZjgnKTsKY29uc3QgaW50ZXJ2YWxNcyA9IDEwMDA7CmNvbnN0IHN0YWJsZU1zID0gMzAwMDsKY29uc3QgdGltZW91dE1zID0gMzAwMDA7CmNvbnN0IHNsZWVwID0gKG1zKSA9PiBuZXcgUHJvbWlzZSgocmVzb2x2ZSkgPT4gc2V0VGltZW91dChyZXNvbHZlLCBtcykpOwoKYXN5bmMgZnVuY3Rpb24gc25hcCgpIHsKICBjb25zdCBlbnRyaWVzID0gYXdhaXQgZnMucmVhZGRpcihkaXIsIHsgd2l0aEZpbGVUeXBlczogdHJ1ZSB9KTsKICBjb25zdCBmaWxlcyA9IFtdOwogIGZvciAoY29uc3QgZW50cnkgb2YgZW50cmllcykgewogICAgaWYgKCFlbnRyeS5pc0ZpbGUoKSkgY29udGludWU7CiAgICBjb25zdCBmaWxlUGF0aCA9IHBhdGguam9pbihkaXIsIGVudHJ5Lm5hbWUpOwogICAgY29uc3Qgc3RhdCA9IGF3YWl0IGZzLnN0YXQoZmlsZVBhdGgpOwogICAgZmlsZXMucHVzaCh7IG5hbWU6IGVudHJ5Lm5hbWUsIHNpemU6IHN0YXQuc2l6ZSwgbXRpbWVNczogTWF0aC5mbG9vcihzdGF0Lm10aW1lTXMpIH0pOwogIH0KICBmaWxlcy5zb3J0KChhLCBiKSA9PiBhLm5hbWUubG9jYWxlQ29tcGFyZShiLm5hbWUpKTsKICByZXR1cm4gZmlsZXM7Cn0KCmZ1bmN0aW9uIHNpZ25hdHVyZShmaWxlcykgewogIHJldHVybiBKU09OLnN0cmluZ2lmeShmaWxlcyk7Cn0KCihhc3luYyAoKSA9PiB7CiAgbGV0IGxhc3RTaWduYXR1cmUgPSAnJzsKICBsZXQgc3RhYmxlU2luY2UgPSBEYXRlLm5vdygpOwogIGxldCBsYXN0RmlsZXMgPSBbXTsKICBjb25zdCBzdGFydGVkID0gRGF0ZS5ub3coKTsKCiAgd2hpbGUgKHRydWUpIHsKICAgIGNvbnN0IGZpbGVzID0gYXdhaXQgc25hcCgpOwogICAgY29uc3QgY3VycmVudFNpZ25hdHVyZSA9IHNpZ25hdHVyZShmaWxlcyk7CgogICAgaWYgKGN1cnJlbnRTaWduYXR1cmUgIT09IGxhc3RTaWduYXR1cmUpIHsKICAgICAgbGFzdFNpZ25hdHVyZSA9IGN1cnJlbnRTaWduYXR1cmU7CiAgICAgIGxhc3RGaWxlcyA9IGZpbGVzOwogICAgICBzdGFibGVTaW5jZSA9IERhdGUubm93KCk7CiAgICB9CgogICAgaWYgKERhdGUubm93KCkgLSBzdGFibGVTaW5jZSA+PSBzdGFibGVNcykgewogICAgICBjb25zb2xlLmxvZyhKU09OLnN0cmluZ2lmeSh7IG9rOiB0cnVlLCBmaWxlQ291bnQ6IGZpbGVzLmxlbmd0aCwgc3RhYmxlTXMsIGZpbGVzIH0pKTsKICAgICAgcmV0dXJuOwogICAgfQoKICAgIGlmIChEYXRlLm5vdygpIC0gc3RhcnRlZCA+PSB0aW1lb3V0TXMpIHsKICAgICAgY29uc29sZS5lcnJvcihKU09OLnN0cmluZ2lmeSh7IG9rOiBmYWxzZSwgZXJyb3I6ICdmb2xkZXJfbm90X3N0YWJsZScsIHRpbWVvdXRNcywgZmlsZUNvdW50OiBsYXN0RmlsZXMubGVuZ3RoLCBmaWxlczogbGFzdEZpbGVzIH0pKTsKICAgICAgcHJvY2Vzcy5leGl0KDEpOwogICAgfQoKICAgIGF3YWl0IHNsZWVwKGludGVydmFsTXMpOwogIH0KfSkoKS5jYXRjaCgoZXJyb3IpID0+IHsKICBjb25zb2xlLmVycm9yKGVycm9yICYmIGVycm9yLnN0YWNrID8gZXJyb3Iuc3RhY2sgOiBTdHJpbmcoZXJyb3IpKTsKICBwcm9jZXNzLmV4aXQoMSk7Cn0pOwo=';\n\nconst input = $input.first().json || {};\n\nfunction cleanInputPath(value) {\n  return String(value || '')\n    .trim()\n    .replace(/[“”]/g, '\"')\n    .replace(/^[\"']|[\"']$/g, '');\n}\n\nconst rawFolderPath = cleanInputPath(\n  input.folderPath ||\n  input.folderPah || // 兼容历史拼写错误：folderPah\n  input.folder ||\n  input.folderDir ||\n  input.folderAdd ||\n  input.inputFolder ||\n  input.inputFolderPath ||\n  input.productFolderPath ||\n  input.directory ||\n  input.directoryPath ||\n  input.dir ||\n  input.dirPath ||\n  input.path ||\n  input['文件夹路径'] ||\n  input['目录路径'] ||\n  input.body?.folderPath ||\n  input.body?.folderPah ||\n  input.body?.path ||\n  input.query?.folderPath ||\n  input.query?.folderPah ||\n  input.query?.path\n);\n\nif (!rawFolderPath) {\n  const availableKeys = Object.keys(input);\n  throw new Error(\n    [\n      'Missing required input field: folderPath',\n      `当前收到的顶层字段: ${availableKeys.length ? availableKeys.join(', ') : '(无字段)'}`,\n      '支持字段名: folderPath, folderPah, folderDir, folderAdd, inputFolderPath, directory, dir, path, 文件夹路径, 目录路径',\n    ].join('\\n')\n  );\n}\n\nconst isWindowsPath = /^[A-Za-z]:[\\\\/]/.test(rawFolderPath) || rawFolderPath.includes('\\\\');\n\nlet folderPath;\nlet globBasePath;\nlet pathSeparator;\nlet outputPathStyle;\n\nif (isWindowsPath) {\n  folderPath = rawFolderPath\n    .replace(/\\//g, '\\\\')\n    .replace(/[\\\\]+$/, '');\n\n  globBasePath = folderPath.replace(/\\\\/g, '/');\n  pathSeparator = '\\\\';\n  outputPathStyle = 'windows';\n} else {\n  folderPath = rawFolderPath\n    .replace(/\\\\/g, '/')\n    .replace(/\\/+$/, '');\n\n  globBasePath = folderPath;\n  pathSeparator = '/';\n  outputPathStyle = 'posix';\n}\n\n// 当前设计只扫描当前文件夹一层。\n// 如果以后需要递归扫描，把 /*.* 改成 /**/*.*\nconst globPath = `${globBasePath}/*.*`;\nconst folderPathBase64 = Buffer.from(folderPath, 'utf8').toString('base64');\nconst folderStableCommand = __buildNodeEvalCommand(S014_FOLDER_STABLE_SCRIPT_BASE64, [folderPathBase64]);\n\nreturn [\n  {\n    json: {\n      ...input,\n      folderPath,\n      globPath,\n      folderPathBase64,\n      folderStableCommand,\n      pathSeparator,\n      outputPathStyle,\n      isWindowsPath,\n    },\n  },\n];\n"
+      },
+      "id": "fed675ba-2aa8-4de5-a3ad-7b37ba4ff008",
+      "name": "标准化文件夹路径",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        416,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "fileSelector": "={{ $('标准化文件夹路径').first().json.globPath }}",
+        "options": {}
+      },
+      "id": "76db85de-0fd0-4bf9-83e7-d3fce083db5e",
+      "name": "读取文件夹所有文件",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        1264,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nconst pathContext = $('标准化文件夹路径').first().json || {};\nconst folderPath = String(pathContext.folderPath || '');\nconst pathSeparator = pathContext.pathSeparator || (folderPath.includes('\\\\') ? '\\\\' : '/');\nconst jsonResponse = $('调用 S016 读取最新参数JSON').first().json || {};\n\nif (jsonResponse.success !== true) {\n  throw new Error(\n    '读取产品 JSON 文件失败：' +\n    String(jsonResponse.message || jsonResponse.errorType || 'S016 returned success=false')\n  );\n}\n\nif (!jsonResponse.data || typeof jsonResponse.data !== 'object' || Array.isArray(jsonResponse.data)) {\n  throw new Error('读取产品 JSON 文件失败：S016 返回的 data 不是 JSON 对象');\n}\n\nconst productData = jsonResponse.data;\nconst latestFile = jsonResponse.latestFile || {};\nconst IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.webp'];\n\nfunction joinPath(dir, fileName) {\n  const cleanDir = String(dir || '').replace(/[\\\\/]+$/, '');\n  return cleanDir + pathSeparator + fileName;\n}\n\nfunction getFileName(item) {\n  return (\n    item.binary?.data?.fileName ||\n    item.json?.fileName ||\n    item.json?.name ||\n    ''\n  );\n}\n\nfunction getExtension(fileName) {\n  const match = String(fileName).toLowerCase().match(/\\.[^.]+$/);\n  return match ? match[0] : '';\n}\n\nfunction getBaseName(fileName) {\n  return String(fileName).replace(/\\.[^.]+$/, '');\n}\n\nfunction toHalfWidth(text) {\n  return String(text || '')\n    .replace(/[０-９]/g, char => String.fromCharCode(char.charCodeAt(0) - 0xFEE0))\n    .replace(/：/g, ':')\n    .replace(/，/g, ',')\n    .replace(/；/g, ';')\n    .replace(/（/g, '(')\n    .replace(/）/g, ')')\n    .replace(/－|—|–/g, '-')\n    .replace(/＿/g, '_')\n    .trim();\n}\n\nfunction normalizeFileNameForMatch(fileName) {\n  return toHalfWidth(getBaseName(fileName))\n    .replace(/^\\s*\\d+\\s*[-_、.．]?\\s*/g, '')\n    .replace(/[\\s\\-_、.．]+/g, '')\n    .toLowerCase();\n}\n\nfunction getNumericPrefix(fileName) {\n  const baseName = toHalfWidth(getBaseName(fileName));\n  const match = baseName.match(/^\\s*(\\d{1,4})(?=\\s|[-_、.．]|$)/);\n  return match ? Number(match[1]) : null;\n}\n\nfunction getImageSemanticRank(fileName) {\n  const name = normalizeFileNameForMatch(fileName);\n  const rules = [\n    { rank: 10, keys: ['正视图', '前视图', '正面', '前面', 'front'] },\n    { rank: 20, keys: ['后视图', '背视图', '背面', '后面', 'back', 'rear'] },\n    { rank: 30, keys: ['侧视图', '侧面', '左侧', '右侧', 'side', 'left', 'right'] },\n    { rank: 40, keys: ['45度', '45°', '斜视图', '斜俯视图', '角度图', 'angle'] },\n    { rank: 50, keys: ['顶视图', '俯视图', '顶部', 'top'] },\n    { rank: 60, keys: ['底视图', '仰视图', '底部', 'bottom'] },\n  ];\n\n  for (const rule of rules) {\n    if (rule.keys.some(key => name.includes(key.toLowerCase()))) return rule.rank;\n  }\n  return 999;\n}\n\nfunction compareFiles(a, b) {\n  if (a.numericPrefix !== null && b.numericPrefix !== null && a.numericPrefix !== b.numericPrefix) {\n    return a.numericPrefix - b.numericPrefix;\n  }\n  if (a.numericPrefix !== null && b.numericPrefix === null) return -1;\n  if (a.numericPrefix === null && b.numericPrefix !== null) return 1;\n  if (a.semanticRank !== b.semanticRank) return a.semanticRank - b.semanticRank;\n  return a.fileName.localeCompare(b.fileName, 'zh-Hans-CN', {\n    numeric: true,\n    sensitivity: 'base',\n  });\n}\n\nconst imageFiles = [];\nconst imageWarnings = [];\n\nfor (const item of items) {\n  const fileName = getFileName(item);\n  if (!fileName) continue;\n\n  const extension = getExtension(fileName);\n  if (!IMAGE_EXTENSIONS.includes(extension)) continue;\n\n  imageFiles.push({\n    fileName,\n    fullPath: joinPath(folderPath, fileName),\n    extension,\n    numericPrefix: getNumericPrefix(fileName),\n    normalizedName: normalizeFileNameForMatch(fileName),\n    semanticRank: getImageSemanticRank(fileName),\n  });\n}\n\nif (imageFiles.length < 3) {\n  throw new Error('图片数量不足：至少需要 3 张图片，当前找到 ' + imageFiles.length + ' 张');\n}\n\nif (imageFiles.length > 5) {\n  imageWarnings.push(\n    '图片数量超过 5 张，当前找到 ' + imageFiles.length + ' 张，已按文件名/语义排序后只取前 5 张'\n  );\n}\n\nimageFiles.sort(compareFiles);\nconst selectedImages = imageFiles.slice(0, 5);\nconst viewImages = selectedImages.map(file => file.fullPath);\nconst warnings = [\n  ...(Array.isArray(jsonResponse.warnings) ? jsonResponse.warnings : []),\n  ...imageWarnings,\n];\nconst infoFileName = String(latestFile.fileName || '');\nconst infoFilePath = String(latestFile.filePath || '');\n\nconst output = {\n  ...productData,\n  viewImageAdd1: viewImages[0] || '',\n  viewImageAdd2: viewImages[1] || '',\n  viewImageAdd3: viewImages[2] || '',\n  viewImageAdd4: viewImages[3] || '',\n  viewImageAdd5: viewImages[4] || '',\n  viewImages,\n  imageCount: viewImages.length,\n  infoFileName,\n  infoFilePath,\n  folderPath,\n  warnings,\n  debug: {\n    imageFiles: imageFiles.map(file => ({\n      fileName: file.fileName,\n      fullPath: file.fullPath,\n      numericPrefix: file.numericPrefix,\n      normalizedName: file.normalizedName,\n      semanticRank: file.semanticRank,\n    })),\n    selectedImages: selectedImages.map(file => file.fileName),\n    infoCandidates: infoFileName ? [{\n      fileName: infoFileName,\n      fullPath: infoFilePath,\n      numericPrefix: getNumericPrefix(infoFileName),\n      normalizedName: normalizeFileNameForMatch(infoFileName),\n      validFieldCount: null,\n      score: null,\n    }] : [],\n    selectedInfoFile: infoFileName,\n  },\n};\n\nreturn [{ json: output }];\n"
+      },
+      "id": "64d61a6b-04ca-4fcf-809d-438c568749de",
+      "name": "整理产品输入JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1552,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "command": "={{ $json.folderStableCommand }}"
+      },
+      "id": "b7b0421d-b87e-4945-b81a-3e4a4f4f5e61",
+      "name": "轮询等待监听文件夹稳定",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        688,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "gDMR3Mxnm9dKQJtO",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/gDMR3Mxnm9dKQJtO",
+          "cachedResultName": "S016-JSON文件-解析"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "folderPath": "={{ $('标准化文件夹路径').first().json.folderPath }}",
+            "filePrefix": "n8n_setParameter",
+            "fileExtension": "json",
+            "returnMode": "latest"
+          },
+          "matchingColumns": [
+            "folderPath",
+            "filePrefix",
+            "fileExtension",
+            "returnMode"
+          ],
+          "schema": [
+            {
+              "id": "folderPath",
+              "displayName": "folderPath",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "filePrefix",
+              "displayName": "filePrefix",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "fileExtension",
+              "displayName": "fileExtension",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "returnMode",
+              "displayName": "returnMode",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        976,
+        320
+      ],
+      "id": "7db9d85f-85ad-48bf-b89b-04aa286d4804",
+      "name": "调用 S016 读取最新参数JSON"
+    }
+  ],
+  "connections": {
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "标准化文件夹路径",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "标准化文件夹路径": {
+      "main": [
+        [
+          {
+            "node": "轮询等待监听文件夹稳定",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "读取文件夹所有文件": {
+      "main": [
+        [
+          {
+            "node": "整理产品输入JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "轮询等待监听文件夹稳定": {
+      "main": [
+        [
+          {
+            "node": "调用 S016 读取最新参数JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "调用 S016 读取最新参数JSON": {
+      "main": [
+        [
+          {
+            "node": "读取文件夹所有文件",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  }
+}

@@ -1,0 +1,701 @@
+{
+  "id": "cuBblkAPnQQbhWEI",
+  "name": "OZON-C001-连接与配额检查",
+  "active": true,
+  "nodes": [
+    {
+      "id": "ae753b8d-724a-45e0-b660-939c62aa99a1",
+      "name": "预检说明",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -700,
+        -480
+      ],
+      "parameters": {
+        "content": "# OZON-C001 按店铺与凭据版本预检\n\nWebhook 手动预检与每小时定时续检共用同一 strict 流程。Schedule 通过 runtime-key 保护的 `/api/v1/ozon/runtime/stores/preflight/claim` 领取已进入 18h 刷新窗口的 store/config/credential 快照；空 stores 数组正常结束。\n\n每家店通过 A001 读取 seller identity、`/v4/product/info/limit` 及 `operation_limits`、`/v2/warehouse/list`。报告携带 strict checks、FBS/RFBS warehouses、currency evidence 和 observedAt，由后端按 storeConfigVersion + credentialVersionId CAS 保存；有效期 24h。空店无币种证据时明确记录 `DEFERRED_EMPTY_CATALOG`。\n\n`videoUploadProbe` 仍只检查共享 S002 媒体链路，不调用 OZON 写接口。",
+        "width": 700,
+        "height": 390
+      }
+    },
+    {
+      "id": "f5068fd8-7d2f-4de1-b334-c0fa516157ac",
+      "name": "OZON 只读预检 Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -700,
+        0
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "merchroute-ozon-preflight",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "5f19e119-8709-446b-b78d-b9208c7089ac",
+      "name": "解析预检动作",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -500,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nconst request = $json.body && typeof $json.body === 'object' ? $json.body : ($json || {});\nconst requestedAction = String(request.action || 'preflight').trim();\nconst action = requestedAction === 'storePreflight' ? 'preflight' : requestedAction;\nif (!['preflight','videoUploadProbe'].includes(action)) throw new Error('不支持的 OZON 预检操作: ' + requestedAction);\nif (action === 'videoUploadProbe') return [{ json: {\n  action,\n  isVideoProbe: true,\n  triggerSource: 'WEBHOOK',\n  sourceFilePath: String(request.sourceFilePath || '').trim(),\n  offerId: String(request.offerId || request.offer_id || '').trim()\n} }];\nconst storeId = String(request.storeId || '').trim();\nconst storeConfigVersion = Number(request.storeConfigVersion || 0);\nconst credentialVersionId = String(request.credentialVersionId || '').trim();\nconst rowVersion = Number(request.rowVersion || 0);\nif (!/^[0-9a-f-]{36}$/i.test(storeId)) throw new Error('storeId 必须是 UUID');\nif (!Number.isInteger(storeConfigVersion) || storeConfigVersion < 1) throw new Error('storeConfigVersion 必须是正整数');\nif (!/^[0-9a-f-]{36}$/i.test(credentialVersionId)) throw new Error('credentialVersionId 必须是 UUID');\nif (!Number.isInteger(rowVersion) || rowVersion < 1) throw new Error('rowVersion 必须是正整数');\nreturn [{ json: {\n  action,\n  isVideoProbe: false,\n  triggerSource: 'WEBHOOK',\n  storeId,\n  storeConfigVersion,\n  credentialVersionId,\n  rowVersion,\n  claimRequestRef: String(request.requestRef || '').trim(),\n  offerId: String(request.offerId || request.offer_id || '').trim()\n} }];"
+      }
+    },
+    {
+      "id": "543b20c2-5076-481f-9b5a-b135636052bd",
+      "name": "执行视频上传探测",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -280,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "d19b44d2-68f4-4e1a-b0d1-539aeccf58a0",
+              "leftValue": "={{ $json.isVideoProbe }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "f22bb52d-fdc7-4c0f-9f95-04ba7106767d",
+      "name": "准备只读检查",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -40,
+        180
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nconst crypto = require('crypto');\nconst requests = [\n  ['sellerInfo', {}],\n  ['limits', {}],\n  ['warehouses', {}]\n];\nreturn $input.all().flatMap((item) => {\n  const input = item.json || {};\n  const source = String(input.triggerSource || 'WEBHOOK').toUpperCase();\n  if (!['WEBHOOK','SCHEDULE'].includes(source)) throw new Error('OZON 预检 triggerSource 无效');\n  const scopedRequests = [...requests];\n  if (input.offerId) scopedRequests.push(\n    ['infoList', { offer_id: [input.offerId] }],\n    ['attributesInfo', { filter: { offer_id: [input.offerId] }, limit: 100 }],\n    ['pricesRead', { cursor: '', filter: { offer_id: [input.offerId], visibility: 'ALL' }, limit: 100 }],\n    ['stocksRead', { cursor: '', filter: { offer_id: [input.offerId], visibility: 'ALL' }, limit: 100 }]\n  );\n  const executionId = typeof $execution === 'object' && $execution ? String($execution.id || '') : '';\n  const runSeed = String(input.claimRequestRef || executionId || (input.storeId + ':' + Date.now() + ':' + Math.random()));\n  const runHash = crypto.createHash('sha256').update(runSeed).digest('hex').slice(0, 24);\n  const base = source + ':' + input.storeId + ':cfg:' + input.storeConfigVersion + ':cred:' + input.credentialVersionId + ':run:' + runHash;\n  return scopedRequests.map(([operation, payload]) => ({ json: {\n    storeId: input.storeId,\n    requestRef: 'preflight:' + base + ':' + operation,\n    operation,\n    payload\n  } }));\n});"
+      }
+    },
+    {
+      "id": "160f842b-3766-4b6c-8cf8-ca3712b9406e",
+      "name": "调用 OZON-A001 只读接口",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        200,
+        180
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "3hyAiON1l3fEHBzA",
+          "mode": "list",
+          "cachedResultName": "OZON-A001-多店铺安全API网关"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "taskId": "={{ \"\" }}",
+            "storeId": "={{ String($json.storeId || \"\") }}",
+            "publicationId": "={{ \"\" }}",
+            "leaseToken": "={{ \"\" }}",
+            "requestRef": "={{ String($json.requestRef || \"\") }}",
+            "operation": "={{ String($json.operation || \"\") }}",
+            "payload": "={{ $json.payload || {} }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "taskId",
+              "displayName": "taskId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "storeId",
+              "displayName": "storeId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "publicationId",
+              "displayName": "publicationId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "leaseToken",
+              "displayName": "leaseToken",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "requestRef",
+              "displayName": "requestRef",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "operation",
+              "displayName": "operation",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "payload",
+              "displayName": "payload",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "object"
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "2d46f41c-22bd-427b-8f21-569ba62ce251",
+      "name": "汇总只读预检",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        180
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nconst prepared = $('准备只读检查').all().map((item) => item.json || {});\nconst responses = $input.all().map((item) => item.json || {});\nconst requestPattern = /^preflight:(WEBHOOK|SCHEDULE):([0-9a-f-]{36}):cfg:(\\d+):cred:([0-9a-f-]{36}):run:([a-f0-9]{24}):([A-Za-z][A-Za-z0-9]*)$/i;\nconst groups = new Map();\nfor (const request of prepared) {\n  const match = String(request.requestRef || '').match(requestPattern);\n  if (!match || String(request.storeId || '') !== match[2] || String(request.operation || '') !== match[6]) {\n    throw new Error('OZON 预检准备请求关联字段无效');\n  }\n  const key = match[2] + ':' + match[3] + ':' + match[4];\n  if (!groups.has(key)) groups.set(key, {\n    triggerSource: match[1].toUpperCase(),\n    storeId: match[2],\n    storeConfigVersion: Number(match[3]),\n    credentialVersionId: match[4],\n    preparedByOperation: new Map(),\n    responseByOperation: new Map()\n  });\n  const group = groups.get(key);\n  if (group.preparedByOperation.has(match[6])) throw new Error('OZON 预检准备了重复 operation');\n  group.preparedByOperation.set(match[6], request);\n}\nfor (const [responseIndex, response] of responses.entries()) {\n  const inputIndex = Number.isInteger(Number(response.inputIndex)) ? Number(response.inputIndex) : responseIndex;\n  const request = prepared[inputIndex];\n  if (!request) throw new Error('OZON 预检响应 inputIndex 越界');\n  const match = String(request.requestRef || '').match(requestPattern);\n  const key = match[2] + ':' + match[3] + ':' + match[4];\n  const group = groups.get(key);\n  const operation = match[6];\n  if (String(response.operation || '') && String(response.operation) !== operation) throw new Error('OZON 预检响应 operation 不匹配');\n  if (group.responseByOperation.has(operation)) throw new Error('OZON 预检收到重复 operation 响应');\n  group.responseByOperation.set(operation, response);\n}\nreturn [...groups.values()].map((group) => {\n  const byOperation = Object.fromEntries(group.responseByOperation);\n  const responseResult = (operation) => byOperation[operation]?.result || byOperation[operation]?.body || {};\n  const sellerRaw = responseResult('sellerInfo');\n  const seller = sellerRaw.result && typeof sellerRaw.result === 'object' ? sellerRaw.result : sellerRaw;\n  const company = seller.company && typeof seller.company === 'object' ? seller.company : {};\n  const limits = responseResult('limits');\n  const warehousesRaw = responseResult('warehouses');\n  const warehouseRows = Array.isArray(warehousesRaw)\n    ? warehousesRaw\n    : Array.isArray(warehousesRaw.result)\n      ? warehousesRaw.result\n      : Array.isArray(warehousesRaw.warehouses)\n        ? warehousesRaw.warehouses\n        : Array.isArray(warehousesRaw.items) ? warehousesRaw.items : [];\n  const warehouses = warehouseRows.map((entry) => {\n    const type = String(entry.type || '').trim().toUpperCase();\n    const fulfillmentModes = [...new Set([\n      ...(Array.isArray(entry.fulfillment_modes) ? entry.fulfillment_modes : []),\n      ...(entry.is_rfbs || type === 'RFBS' || type.includes('RFBS') ? ['RFBS'] : []),\n      ...(entry.is_fbs || (!type.includes('RFBS') && (type === 'FBS' || type.includes('FBS'))) ? ['FBS'] : [])\n    ].map((value) => String(value).trim().toUpperCase()).filter((value) => ['FBS','RFBS'].includes(value)))];\n    return {\n      id: String(entry.warehouse_id || entry.id || ''),\n      name: String(entry.name || entry.warehouse_name || ''),\n      fulfillmentModes,\n      ...(entry.status ? { status: String(entry.status) } : {})\n    };\n  }).filter((entry) => entry.id && entry.fulfillmentModes.length > 0);\n  const currency = String(seller.currency || company.currency || '').trim().toUpperCase();\n  const requiredOperations = ['sellerInfo','limits','warehouses'];\n  const rateLimited = (operation) => Number(byOperation[operation]?.statusCode || 0) === 429\n    || String(byOperation[operation]?.error?.code || '').toUpperCase() === 'TOO_MANY_REQUESTS';\n  const operationPassed = (operation) => byOperation[operation]?.ok === true && (operation !== 'warehouses' || warehouses.length > 0);\n  const failed = requiredOperations.filter((operation) => !operationPassed(operation));\n  const checks = requiredOperations.map((operation) => {\n    const passed = operationPassed(operation);\n    return {\n      code: operation === 'sellerInfo' ? 'SELLER_IDENTITY' : operation === 'limits' ? 'PRODUCT_LIMITS' : 'WAREHOUSES',\n      ok: passed,\n      status: rateLimited(operation) ? 'RATE_LIMITED' : passed ? 'PASSED' : 'FAILED',\n      ...(byOperation[operation]?.error?.message ? { message: String(byOperation[operation].error.message).slice(0, 500) } : {}),\n      details: operation === 'limits' ? { operationLimits: limits.operation_limits || limits.operationLimits || [] } : {}\n    };\n  });\n  const sellerPassed = operationPassed('sellerInfo');\n  const currencyStatus = currency ? 'VERIFIED' : sellerPassed ? 'DEFERRED_EMPTY_CATALOG' : 'FAILED';\n  checks.push({\n    code: 'CURRENCY_EVIDENCE',\n    ok: currencyStatus !== 'FAILED',\n    status: currencyStatus === 'VERIFIED' ? 'PASSED' : currencyStatus === 'DEFERRED_EMPTY_CATALOG' ? 'DEFERRED' : rateLimited('sellerInfo') ? 'RATE_LIMITED' : 'FAILED',\n    message: currencyStatus === 'VERIFIED' ? '币种证据已验证' : currencyStatus === 'DEFERRED_EMPTY_CATALOG'\n      ? '空店暂无可验证币种的商品价格证据' : '币种证据验证失败'\n  });\n  const ok = failed.length === 0 && warehouses.length > 0 && currencyStatus !== 'FAILED';\n  const hasRateLimit = requiredOperations.some(rateLimited);\n  return { json: {\n    triggerSource: group.triggerSource,\n    storeId: group.storeId,\n    storeConfigVersion: group.storeConfigVersion,\n    credentialVersionId: group.credentialVersionId,\n    sellerId: String(seller.seller_id || seller.id || company.inn || ''),\n    sellerName: String(seller.company_name || seller.name || company.name || company.legal_name || ''),\n    checks,\n    warehouses,\n    permissions: Array.isArray(seller.permissions) ? seller.permissions.map(String) : [],\n    limits,\n    currencyVerified: currencyStatus === 'VERIFIED',\n    currencyVerification: {\n      status: currencyStatus,\n      ...(currency ? { currency } : {}),\n      source: currency ? 'SELLER_INFO' : 'EMPTY_CATALOG',\n      evidence: currency ? { sellerCurrency: currency } : { productCount: 0 }\n    },\n    retryAfterMs: Math.max(0, ...Object.values(byOperation).map((entry) => Number(entry.retryAfterMs || 0))),\n    observedAt: new Date().toISOString(),\n    ok,\n    ...(ok ? {} : { errorCode: hasRateLimit ? 'OZON_PREFLIGHT_RATE_LIMITED' : failed.length ? 'OZON_PREFLIGHT_API_FAILED' : 'OZON_WAREHOUSE_REQUIRED', errorMessage: hasRateLimit ? 'OZON 预检触发限流' : failed.length ? '店铺只读预检失败' : '店铺没有可用仓库' })\n  } };\n});"
+      }
+    },
+    {
+      "id": "63cb2ec4-0138-4f39-ab4b-1567f4b1ed70",
+      "name": "返回预检结果",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        740,
+        0
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseCode": "={{ Number($json.httpStatus || 200) }}"
+        }
+      }
+    },
+    {
+      "id": "78d994a7-acd3-400b-8ac7-0ee63e87da08",
+      "name": "读取探测MP4",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -40,
+        -180
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nconst fs = require('fs');\nconst path = require('path');\nconst request = $('解析预检动作').first().json || {};\nconst sourceFilePath = String(request.sourceFilePath || '').trim();\nif (!sourceFilePath || !path.isAbsolute(sourceFilePath)) throw new Error('视频探测必须提供本地 MP4 绝对路径');\nconst resolved = fs.realpathSync(sourceFilePath);\nconst stat = fs.statSync(resolved);\nif (!stat.isFile() || path.extname(resolved).toLowerCase() !== '.mp4') throw new Error('视频探测文件必须是普通 .mp4 文件');\nif (stat.size < 12 || stat.size > 1024 * 1024 * 1024) throw new Error('视频探测文件大小不在 12B 到 1GB 范围内');\nconst data = fs.readFileSync(resolved);\nif (data.subarray(4, 8).toString('ascii') !== 'ftyp') throw new Error('视频探测文件不是有效 MP4（缺少 ftyp 标识）');\nconst sourceFileName = path.basename(resolved);\nreturn [{\n  json: { input: { sourceFileName, inputIndex: 0 } },\n  binary: { data: { data: data.toString('base64'), fileName: sourceFileName, mimeType: 'video/mp4', fileSize: stat.size } }\n}];"
+      }
+    },
+    {
+      "id": "f9661064-369f-4edc-b067-139541062d11",
+      "name": "调用 OZON-S002 探测视频",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        200,
+        -180
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "uKkH5O0dpfzFuAag",
+          "mode": "list",
+          "cachedResultName": "OZON-S002-图片上传转URL适配器"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "input": "={{ $json.input }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "input",
+              "displayName": "input",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "object"
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "mode": "each",
+        "options": {}
+      }
+    },
+    {
+      "id": "1b5d0f39-09d4-42d7-a8a9-215efb023856",
+      "name": "GET检查视频公网URL",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        460,
+        -180
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.url }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "file",
+              "outputPropertyName": "data"
+            }
+          }
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1500,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "3cdf0f85-2e1e-428d-9421-0e634ea2943e",
+      "name": "汇总视频上传探测",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        700,
+        -180
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nconst upload = $('调用 OZON-S002 探测视频').first().json || {};\nconst response = $input.first();\nconst statusCode = Number(response.json?.statusCode || 200);\nconst headers = response.json?.headers || {};\nconst contentType = String(headers['content-type'] || headers['Content-Type'] || response.binary?.data?.mimeType || upload.mimeType || '').toLowerCase();\nconst ready = statusCode >= 200 && statusCode < 400 && contentType.startsWith('video/');\nreturn [{ json: {\n  ready,\n  ok: ready,\n  httpStatus: ready ? 200 : 503,\n  publicStatus: statusCode,\n  contentType,\n  message: ready ? 'SiliconFlow MP4 上传与公网读取验证通过' : 'SiliconFlow MP4 公网 URL 不可读取或 MIME 不是 video/*'\n} }];"
+      }
+    },
+    {
+      "id": "32586001-c249-4c2b-9ada-7781a8e3c2bb",
+      "name": "每小时领取18h到期店铺",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -700,
+        320
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "2ad8b9e5-1c3b-43b6-a0ab-2bda3b946440",
+      "name": "准备到期预检领取",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -500,
+        320
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nreturn [{ json: {\n  leaseOwner: 'n8n:ozon:c001:' + String($execution.id || ''),\n  limit: 20\n} }];"
+      }
+    },
+    {
+      "id": "114255c9-bec1-404e-a7eb-cde93dcb334e",
+      "name": "领取到期店铺预检",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -280,
+        320
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ String($env.MERCHROUTE_RUNTIME_BASE_URL || 'http://127.0.0.1:4173').replace(/\\/+$/, '') + '/api/v1/ozon/runtime/stores/preflight/claim' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "X-MerchRoute-Runtime-Key",
+              "value": "={{ $env.MERCHROUTE_RUNTIME_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ leaseOwner: $json.leaseOwner, limit: $json.limit }) }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": false,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "retryOnFail": false,
+      "maxTries": 1
+    },
+    {
+      "id": "c3298e2d-69e0-4ae9-9db1-b1296b7c2cfa",
+      "name": "解析到期店铺预检",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -40,
+        320
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nconst raw = $input.first().json || {};\nconst body = raw.body && typeof raw.body === 'object' ? raw.body : raw;\nconst stores = body.stores;\nif (!Array.isArray(stores)) throw new Error('OZON 预检 claim 响应必须包含 stores 数组');\nif (stores.length > 20) throw new Error('OZON 预检 claim 超过每小时安全上限 20');\nconst seen = new Set();\nreturn stores.map((store, index) => {\n  const allowedKeys = new Set(['storeId','storeAlias','storeConfigVersion','credentialVersionId','requestRef','lockExpiresAt']);\n  if (!store || typeof store !== 'object' || Array.isArray(store) || Object.keys(store).some((key) => !allowedKeys.has(key))) {\n    throw new Error('OZON 预检 claim 第 ' + (index + 1) + ' 项不符合 strict 响应合同');\n  }\n  const storeId = String(store?.storeId || '').trim();\n  const storeAlias = String(store?.storeAlias || '').trim().toLowerCase();\n  const storeConfigVersion = Number(store?.storeConfigVersion || 0);\n  const credentialVersionId = String(store?.credentialVersionId || '').trim();\n  const claimRequestRef = String(store?.requestRef || '').trim();\n  const lockExpiresAt = String(store?.lockExpiresAt || '').trim();\n  if (!/^[0-9a-f-]{36}$/i.test(storeId)\n    || !/^[a-z0-9][a-z0-9-]{1,31}$/.test(storeAlias)\n    || !Number.isInteger(storeConfigVersion) || storeConfigVersion < 1\n    || !/^[0-9a-f-]{36}$/i.test(credentialVersionId)\n    || !/^[A-Za-z0-9._:|-]{1,240}$/.test(claimRequestRef)\n    || !Number.isFinite(Date.parse(lockExpiresAt)) || Date.parse(lockExpiresAt) <= Date.now()) {\n    throw new Error('OZON 预检 claim 第 ' + (index + 1) + ' 项缺少 store/config/credential 冻结快照');\n  }\n  const key = storeId + ':' + storeConfigVersion + ':' + credentialVersionId;\n  if (seen.has(key)) throw new Error('OZON 预检 claim 返回重复店铺快照');\n  seen.add(key);\n  return { json: {\n    action: 'preflight',\n    isVideoProbe: false,\n    triggerSource: 'SCHEDULE',\n    storeId,\n    storeAlias,\n    storeConfigVersion,\n    credentialVersionId,\n    rowVersion: 0,\n    claimRequestRef,\n    lockExpiresAt,\n    offerId: ''\n  } };\n});"
+      }
+    },
+    {
+      "id": "77df5bd0-99d6-4a62-b382-7e8be5fe1855",
+      "name": "保存店铺预检报告",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        700,
+        180
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nasync function ozonRuntimeRequest(method, endpoint, body, timeoutMs = 60_000) {\n  const base = String($env.MERCHROUTE_RUNTIME_BASE_URL || 'http://127.0.0.1:4173').replace(/\\/+$/, '');\n  const key = String($env.MERCHROUTE_RUNTIME_KEY || '').trim();\n  if (!key) {\n    const error = new Error('MERCHROUTE_RUNTIME_KEY 未配置，无法访问 MerchRoute OZON runtime API');\n    error.code = 'RUNTIME_KEY_MISSING';\n    error.beforeSend = true;\n    throw error;\n  }\n  const RuntimeURL = require('url').URL;\n  const target = new RuntimeURL(base + endpoint);\n  if (!['http:', 'https:'].includes(target.protocol)) throw new Error('MerchRoute runtime URL 协议无效');\n  const payload = body === undefined ? '' : JSON.stringify(body);\n  const transport = target.protocol === 'https:' ? require('https') : require('http');\n  const response = await new Promise((resolve, reject) => {\n    const request = transport.request(target, {\n      method,\n      headers: {\n        Accept: 'application/json',\n        'Content-Type': 'application/json',\n        'X-MerchRoute-Runtime-Key': key,\n        ...(payload ? { 'Content-Length': Buffer.byteLength(payload) } : {}),\n      },\n    }, (incoming) => {\n      const chunks = [];\n      let bytes = 0;\n      incoming.on('data', (chunk) => {\n        bytes += chunk.length;\n        if (bytes > 20 * 1024 * 1024) {\n          request.destroy(new Error('MerchRoute runtime API 响应超过 20 MiB 限制'));\n          return;\n        }\n        chunks.push(chunk);\n      });\n      incoming.on('end', () => resolve({\n        status: Number(incoming.statusCode || 0),\n        text: Buffer.concat(chunks).toString('utf8'),\n      }));\n    });\n    request.setTimeout(Math.max(1_000, Math.min(180_000, Number(timeoutMs) || 60_000)), () => {\n      const error = new Error('MerchRoute runtime API 请求超时');\n      error.code = 'RUNTIME_REQUEST_TIMEOUT';\n      request.destroy(error);\n    });\n    request.on('error', reject);\n    if (payload) request.write(payload);\n    request.end();\n  });\n  let data = {};\n  if (response.text) {\n    try { data = JSON.parse(response.text); }\n    catch (_) { data = { raw: response.text.slice(0, 2_000) }; }\n  }\n  if (response.status < 200 || response.status >= 300) {\n    const nested = data && typeof data.error === 'object' && data.error !== null ? data.error : {};\n    const error = new Error(String(data.message || nested.message || data.error || data.code || nested.code || ('MerchRoute runtime API HTTP ' + response.status)));\n    error.code = String(data.code || nested.code || 'RUNTIME_API_FAILED');\n    error.httpStatus = response.status;\n    error.details = data;\n    throw error;\n  }\n  return data;\n}\n\nreturn (async () => {\n  const outputs = [];\n  for (const item of $input.all()) {\n    const source = item.json || {};\n    const triggerSource = String(source.triggerSource || 'WEBHOOK').toUpperCase();\n    const { triggerSource: _internalSource, ...report } = source;\n    const storeId = String(report.storeId || '');\n    const storeConfigVersion = Number(report.storeConfigVersion || 0);\n    const credentialVersionId = String(report.credentialVersionId || '');\n    const saved = await ozonRuntimeRequest('POST', '/api/v1/ozon/runtime/stores/' + encodeURIComponent(storeId) + '/preflight-result', {\n      storeConfigVersion,\n      credentialVersionId,\n      report\n    });\n    outputs.push({ json: {\n      ...report,\n      triggerSource,\n      persisted: true,\n      reportVersion: Number(saved.reportVersion || saved.version || 1),\n      ttlHours: 24,\n      refreshDueHours: 18,\n      httpStatus: report.ok ? 200 : 503\n    } });\n  }\n  return outputs;\n})();"
+      }
+    },
+    {
+      "id": "fe724c0f-166e-41ad-9149-65ff46378467",
+      "name": "是否 Webhook 预检",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        960,
+        180
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "cf1fdadb-62a8-4ca9-bf4f-5a57222e9e1c",
+              "leftValue": "={{ String($json.triggerSource || \"\") === \"WEBHOOK\" }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "63b10c01-5f73-42b5-83d8-ac5a0eae8e0c",
+      "name": "完成定时续检",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        320
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "return [{ json: { ok: true, scheduled: true, processed: $input.all().length, completedAt: new Date().toISOString() } }];"
+      }
+    }
+  ],
+  "connections": {
+    "OZON 只读预检 Webhook": {
+      "main": [
+        [
+          {
+            "node": "解析预检动作",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "解析预检动作": {
+      "main": [
+        [
+          {
+            "node": "执行视频上传探测",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "执行视频上传探测": {
+      "main": [
+        [
+          {
+            "node": "读取探测MP4",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "准备只读检查",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "读取探测MP4": {
+      "main": [
+        [
+          {
+            "node": "调用 OZON-S002 探测视频",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "调用 OZON-S002 探测视频": {
+      "main": [
+        [
+          {
+            "node": "GET检查视频公网URL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET检查视频公网URL": {
+      "main": [
+        [
+          {
+            "node": "汇总视频上传探测",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "汇总视频上传探测": {
+      "main": [
+        [
+          {
+            "node": "返回预检结果",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "准备只读检查": {
+      "main": [
+        [
+          {
+            "node": "调用 OZON-A001 只读接口",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "调用 OZON-A001 只读接口": {
+      "main": [
+        [
+          {
+            "node": "汇总只读预检",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "汇总只读预检",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "汇总只读预检": {
+      "main": [
+        [
+          {
+            "node": "保存店铺预检报告",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "每小时领取18h到期店铺": {
+      "main": [
+        [
+          {
+            "node": "准备到期预检领取",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "准备到期预检领取": {
+      "main": [
+        [
+          {
+            "node": "领取到期店铺预检",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "领取到期店铺预检": {
+      "main": [
+        [
+          {
+            "node": "解析到期店铺预检",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "解析到期店铺预检": {
+      "main": [
+        [
+          {
+            "node": "准备只读检查",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "保存店铺预检报告": {
+      "main": [
+        [
+          {
+            "node": "是否 Webhook 预检",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "是否 Webhook 预检": {
+      "main": [
+        [
+          {
+            "node": "返回预检结果",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "完成定时续检",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "errorWorkflow": "kU8XxFLUign9LiQC"
+  }
+}

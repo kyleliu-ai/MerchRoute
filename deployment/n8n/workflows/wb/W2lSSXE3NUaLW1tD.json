@@ -1,0 +1,348 @@
+{
+  "id": "W2lSSXE3NUaLW1tD",
+  "name": "WB-T001-标题翻译工作流",
+  "active": true,
+  "nodes": [
+    {
+      "id": "7c4b35e2-f98c-4e9e-9d93-d754d61fb010",
+      "name": "工作流说明",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -760,
+        -420
+      ],
+      "parameters": {
+        "content": "## WB-T001 标题翻译工作流\n\n接收 `content`、`language`、`maxLength` 和可选 `requestId`，严格校验后调用 S007 通用 Qwen 子流。\n\n- 只用于文本翻译，不调用任何 WB 商品接口。\n- Webhook 固定为 `POST /webhook/translation-title`，使用 `WB-Webhook-Auth`。\n- 成功返回 `contentTranslate`、模型及用量信息。\n- 标题必须为单行且 Unicode 字符数不超过 `maxLength`。"
+      }
+    },
+    {
+      "id": "5f0b1e7c-b216-4b5a-bb13-c53f08bf4373",
+      "name": "Translation Title Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -720,
+        -80
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "translation-title",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "a9d7648f-a13f-4f56-978e-17afef2ce038",
+      "name": "Validate Translation Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -480,
+        -80
+      ],
+      "onError": "continueErrorOutput",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const input = $input.first()?.json || {};\nconst body = input.body;\n\nfunction fail(message) {\n  throw new Error(`VALIDATION_ERROR: ${message}`);\n}\n\nfunction codePointLength(value) {\n  return [...value].length;\n}\n\nif (!body || typeof body !== 'object' || Array.isArray(body)) {\n  fail('请求体必须是 JSON 对象');\n}\nif (typeof body.content !== 'string') {\n  fail('content 必须是字符串');\n}\nconst content = body.content.trim().replace(/[ \\t]+/g, ' ');\nif (!content) {\n  fail('content 不能为空');\n}\nif (/[\\r\\n]/.test(content)) {\n  fail('content 必须是单行文本');\n}\nif (codePointLength(content) > 1000) {\n  fail('content 最多 1000 个 Unicode 字符');\n}\nif (typeof body.language !== 'string') {\n  fail('language 必须是字符串');\n}\nconst language = body.language.trim().replace(/[ \\t]+/g, ' ');\nif (!language) {\n  fail('language 不能为空');\n}\nif (/[\\r\\n]/.test(language) || codePointLength(language) > 64) {\n  fail('language 必须是最多 64 个 Unicode 字符的单行文本');\n}\nconst maxLength = Number(body.maxLength);\nif (!Number.isInteger(maxLength) || maxLength < 1 || maxLength > 60) {\n  fail('maxLength 必须是 1 到 60 的整数');\n}\nlet requestId = '';\nif (body.requestId !== undefined && body.requestId !== null) {\n  if (typeof body.requestId !== 'string') {\n    fail('requestId 必须是字符串');\n  }\n  requestId = body.requestId.trim();\n  if (!requestId || /[\\r\\n]/.test(requestId) || codePointLength(requestId) > 128) {\n    fail('requestId 必须是最多 128 个 Unicode 字符的非空单行文本');\n  }\n}\n\nconst sysPrompt = [\n  '你是一名专业的多语言电商标题翻译助手。',\n  '准确、自然地把原文翻译为用户指定语言；保留核心品类、性别、款式和用途信息，不得添加原文没有的品牌、材质、功能或承诺。',\n  '翻译标题必须是单行文本，不得包含回车、换行、Markdown、解释、前后缀或引号。',\n  'contentTranslate 的 Unicode 字符总数不得超过 maxLength；必要时在不丢失核心品类的前提下精简。',\n  '必须只输出一个合法 JSON 对象。由于调用方 S007 要求外层字段 messageContent，messageContent 必须是一个 JSON 字符串，该字符串解析后只能包含字符串字段 contentTranslate。',\n  '外层格式必须精确类似：{\"messageContent\":\"{\\\"contentTranslate\\\":\\\"翻译结果\\\"}\"}。禁止输出代码块或任何额外内容。',\n].join('\\n');\nconst userPrompt = `请翻译以下 JSON 数据中的 content，并严格遵守 language 和 maxLength：\\n${JSON.stringify({ content, language, maxLength })}`;\n\nreturn [{ json: {\n  content,\n  language,\n  maxLength,\n  requestId,\n  sysPrompt,\n  userPrompt,\n} }];"
+      }
+    },
+    {
+      "id": "847fb094-3201-4ae9-bbbb-6fc1ef052eb7",
+      "name": "Call S007 Translation Model",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        -160,
+        -80
+      ],
+      "onError": "continueErrorOutput",
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "pLoryDijfFiNwKiI",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/pLoryDijfFiNwKiI",
+          "cachedResultName": "S007-v02-百炼Qwen-图文对话"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "userPrompt": "={{ $json.userPrompt }}",
+            "sysPrompt": "={{ $json.sysPrompt }}",
+            "temperature": "0.2",
+            "top_p": "0.8"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "userPrompt",
+              "displayName": "userPrompt",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "sysPrompt",
+              "displayName": "sysPrompt",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "imageAdd1",
+              "displayName": "imageAdd1",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "imageAdd2",
+              "displayName": "imageAdd2",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "imageAdd3",
+              "displayName": "imageAdd3",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "temperature",
+              "displayName": "temperature",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "top_p",
+              "displayName": "top_p",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "99c6e730-7e55-4f5d-b7c3-da4c04538f57",
+      "name": "Parse Translation Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        160,
+        -80
+      ],
+      "onError": "continueErrorOutput",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const response = $input.first()?.json || {};\nconst request = $('Validate Translation Request').first()?.json || {};\nconst raw = response.messageContent;\n\nif (typeof raw !== 'string' || !raw.trim()) {\n  throw new Error('S007 未返回非空字符串 messageContent');\n}\nlet parsed;\ntry {\n  parsed = JSON.parse(raw.trim());\n} catch (_) {\n  throw new Error('S007 messageContent 不是合法的 contentTranslate JSON');\n}\nif (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {\n  throw new Error('翻译结果必须是 JSON 对象');\n}\nconst keys = Object.keys(parsed);\nif (keys.length !== 1 || keys[0] !== 'contentTranslate' || typeof parsed.contentTranslate !== 'string') {\n  throw new Error('翻译结果必须且只能包含字符串字段 contentTranslate');\n}\nconst contentTranslate = parsed.contentTranslate.trim().replace(/[ \\t]+/g, ' ');\nif (!contentTranslate) {\n  throw new Error('contentTranslate 不能为空');\n}\nif (/[\\r\\n]/.test(contentTranslate)) {\n  throw new Error('contentTranslate 必须是单行文本');\n}\nconst translatedLength = [...contentTranslate].length;\nif (translatedLength > Number(request.maxLength)) {\n  throw new Error(`contentTranslate 长度 ${translatedLength} 超过 maxLength ${request.maxLength}`);\n}\n\nreturn [{ json: {\n  contentTranslate,\n  model: response.model || null,\n  usage: response.usage || null,\n  finishReason: response.finishReason || null,\n  requestId: request.requestId || null,\n  translatedLength,\n} }];"
+      }
+    },
+    {
+      "id": "1ce85ca5-5f88-4604-8d20-49ed12d151b0",
+      "name": "Respond Translation Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        480,
+        -80
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json; charset=utf-8"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "38530f3f-f40e-4ef2-a79d-19515828414b",
+      "name": "Build Validation Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -160,
+        160
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const input = $input.first()?.json || {};\nconst rawMessage = String(input.error?.message || input.error || input.message || '请求参数无效');\nconst message = rawMessage\n  .replace(/^VALIDATION_ERROR:\\s*/, '')\n  .replace(/\\s*\\[line \\d+\\]\\s*$/, '')\n  .trim() || '请求参数无效';\nlet requestId = null;\ntry {\n  const candidate = $('Translation Title Webhook').first()?.json?.body?.requestId;\n  if (typeof candidate === 'string' && candidate.trim()) requestId = candidate.trim();\n} catch (_) {}\nreturn [{ json: {\n  error: 'VALIDATION_ERROR',\n  message,\n  requestId,\n  httpStatus: 400,\n} }];"
+      }
+    },
+    {
+      "id": "3e6d9690-6e2c-434f-bd93-b35f72561619",
+      "name": "Build Translation Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        160,
+        160
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const input = $input.first()?.json || {};\nconst rawMessage = String(input.error?.message || input.error || input.message || '标题翻译失败');\nlet requestId = null;\ntry { requestId = $('Validate Translation Request').first()?.json?.requestId || null; } catch (_) {}\nreturn [{ json: {\n  error: 'TRANSLATION_FAILED',\n  message: '标题翻译服务暂时不可用，请稍后重试',\n  requestId,\n  httpStatus: 502,\n  auditMessage: rawMessage.slice(0, 500),\n} }];"
+      }
+    },
+    {
+      "id": "eae980c6-2470-4428-817a-de36bfebbc68",
+      "name": "Respond Translation Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        480,
+        160
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $json.error, message: $json.message, requestId: $json.requestId } }}",
+        "options": {
+          "responseCode": "={{ Number($json.httpStatus || 502) }}",
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json; charset=utf-8"
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Translation Title Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate Translation Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Translation Request": {
+      "main": [
+        [
+          {
+            "node": "Call S007 Translation Model",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Validation Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call S007 Translation Model": {
+      "main": [
+        [
+          {
+            "node": "Parse Translation Result",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Translation Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Translation Result": {
+      "main": [
+        [
+          {
+            "node": "Respond Translation Success",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Translation Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Validation Error": {
+      "main": [
+        [
+          {
+            "node": "Respond Translation Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Translation Error": {
+      "main": [
+        [
+          {
+            "node": "Respond Translation Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  }
+}

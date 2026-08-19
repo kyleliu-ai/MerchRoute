@@ -1,0 +1,191 @@
+const fs = require('fs');
+const path = require('path');
+
+const params = $input.first().json || {};
+const packageInput = $('Parse Stable Result').first().json || {};
+const configResponse = $("Call 'S016-JSON文件-解析'").first().json || {};
+
+const expectedKeys = ['SKU','productName','variants','outputParentDir','renderWorkflowId','logoPath','musicPath','ffmpegPath','effectPreset','targetDuration','width','height','fps','audioVolume','audioFadeIn','audioFadeOut','enableLogo','logoWidth','logoMarginX','logoMarginY','logoOpacity','logoPosition','minImageCount','maxImageCount','waitStableSeconds','maxWaitSeconds','allowedImageExtensions'];
+if (configResponse.success !== true || !configResponse.data || typeof configResponse.data !== 'object') {
+  throw new Error('S016 参数文件解析失败：' + (configResponse.message || configResponse.errorType || 'data is missing'));
+}
+const missingKeys = expectedKeys.filter((key) => !Object.prototype.hasOwnProperty.call(configResponse.data, key));
+if (missingKeys.length) throw new Error('参数 JSON 缺少字段：' + missingKeys.join(', '));
+
+if (typeof configResponse.data.SKU !== 'string') throw new Error('参数 JSON 的 SKU 必须是 String。');
+if (typeof configResponse.data.productName !== 'string') throw new Error('参数 JSON 的 productName 必须是 String。');
+if (typeof configResponse.data.variants !== 'string') throw new Error('参数 JSON 的 variants 必须是 String。');
+const requiredText = ['SKU', 'productName', 'variants', 'outputParentDir', 'renderWorkflowId', 'ffmpegPath', 'effectPreset'];
+const emptyRequired = requiredText.filter((key) => !String(params[key] ?? '').trim());
+if (params.enableLogo === true && !String(params.logoPath || '').trim()) emptyRequired.push('logoPath');
+if (emptyRequired.length) throw new Error('参数字段不能为空：' + [...new Set(emptyRequired)].join(', '));
+if (String(params.renderWorkflowId).trim() !== 'x8D4EHfqI2DHcgL7') throw new Error('E004_RENDER_WORKFLOW_ID_INVALID');
+
+function normalizeUserPath(value, options = {}) {
+  const trimTrailingSlash = options.trimTrailingSlash !== false;
+  let result = String(value ?? '').trim();
+  if (result.length >= 2) {
+    const first = result[0];
+    const last = result[result.length - 1];
+    if ((first === '"' && last === '"') || (first === "'" && last === "'")) result = result.slice(1, -1).trim();
+  }
+  result = result.replace(/\\+/g, '/').replace(/^([A-Za-z]:)\/+/, '$1/');
+  if (trimTrailingSlash) while (result.length > 1 && result.endsWith('/') && !/^[A-Za-z]:\/$/.test(result)) result = result.slice(0, -1);
+  return result;
+}
+
+function cleanName(value, fallback) {
+  return String(value || fallback || 'product').trim().replace(/[<>:"/\\|?*\x00-\x1F]/g, '_').replace(/[. ]+$/g, '') || fallback || 'product';
+}
+
+function extensionOf(value) {
+  const name = String(value || '').split('/').pop() || '';
+  const index = name.lastIndexOf('.');
+  return index >= 0 ? name.slice(index).toLowerCase() : '';
+}
+
+function normalizeRelativePath(value, label) {
+  const normalized = normalizeUserPath(value, { trimTrailingSlash: false }).replace(/^\.\/+/, '');
+  if (!normalized || normalized.startsWith('/') || /^[A-Za-z]:\//.test(normalized)) throw new Error(label + ' 必须是非空相对路径。');
+  const segments = normalized.split('/');
+  if (segments.some((segment) => !segment || segment === '.' || segment === '..')) throw new Error(label + ' 包含不安全的路径片段：' + normalized);
+  return segments.join('/');
+}
+
+function resolveInside(root, relativePath, label) {
+  const absoluteRoot = path.resolve(root);
+  const absoluteTarget = path.resolve(absoluteRoot, ...relativePath.split('/'));
+  const relative = path.relative(absoluteRoot, absoluteTarget);
+  if (!relative || relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) throw new Error(label + ' 超出来源目录：' + relativePath);
+  return absoluteTarget;
+}
+
+function relativeFromRoot(root, filePath, label) {
+  const absoluteRoot = path.resolve(root);
+  const absoluteFile = path.resolve(filePath);
+  const relative = path.relative(absoluteRoot, absoluteFile);
+  if (!relative || relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) throw new Error(label + ' 超出来源目录：' + filePath);
+  return relative.split(path.sep).join('/');
+}
+
+function boundedInteger(value, label, minimum, maximum) {
+  const number = Number(value);
+  if (!Number.isInteger(number) || number < minimum || number > maximum) throw new Error(label + ' 必须是 ' + minimum + '–' + maximum + ' 的整数。');
+  return number;
+}
+
+function orderManifestFiles(manifest) {
+  if (!manifest || !Array.isArray(manifest.selectedFiles) || manifest.selectedFiles.length === 0) throw new Error('selection-manifest.json 的 selectedFiles 必须是非空数组。');
+  const files = manifest.selectedFiles.map((entry, index) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw new Error('selection-manifest.json 的 selectedFiles[' + index + '] 无效。');
+    return { ...entry };
+  });
+  const hasSortOrder = files.map((entry) => Object.prototype.hasOwnProperty.call(entry, 'sortOrder'));
+  if (hasSortOrder.some(Boolean) && !hasSortOrder.every(Boolean)) throw new Error('selection-manifest.json 的 sortOrder 不得部分缺失。');
+  if (!hasSortOrder.every(Boolean)) return { files, orderSource: 'selection-manifest-array' };
+  const seen = new Set();
+  for (const [index, entry] of files.entries()) {
+    if (!Number.isInteger(entry.sortOrder) || entry.sortOrder < 0) throw new Error('selection-manifest.json 的 selectedFiles[' + index + '].sortOrder 必须是非负整数。');
+    if (seen.has(entry.sortOrder)) throw new Error('selection-manifest.json 的 sortOrder 重复：' + entry.sortOrder);
+    seen.add(entry.sortOrder);
+  }
+  const ordered = [...files].sort((left, right) => left.sortOrder - right.sortOrder);
+  ordered.forEach((entry, index) => {
+    if (entry.sortOrder !== index) throw new Error('selection-manifest.json 的 sortOrder 必须从 0 连续递增。');
+  });
+  return { files: ordered, orderSource: 'selection-manifest-sortOrder' };
+}
+
+const sourceChildDir = normalizeUserPath(packageInput.sourceChildDir || '');
+if (!sourceChildDir) throw new Error('Parse Stable Result 缺少 sourceChildDir。');
+const allowed = new Set((Array.isArray(params.allowedImageExtensions) ? params.allowedImageExtensions : [])
+  .map((entry) => String(entry || '').toLowerCase().trim()).filter((entry) => /^\.[a-z0-9]+$/.test(entry)));
+if (!allowed.size) throw new Error('allowedImageExtensions 必须包含至少一个合法扩展名。');
+const stableImagePaths = (Array.isArray(packageInput.imagePathsFromStable) ? packageInput.imagePathsFromStable : [])
+  .map(normalizeUserPath).filter((filePath) => allowed.has(extensionOf(filePath)));
+
+const stableByRelativePath = new Map();
+for (const imagePath of stableImagePaths) {
+  const relativePath = relativeFromRoot(sourceChildDir, imagePath, '稳定扫描图片');
+  if (stableByRelativePath.has(relativePath)) throw new Error('稳定扫描结果包含重复图片：' + relativePath);
+  stableByRelativePath.set(relativePath, imagePath);
+}
+
+const manifestPath = path.join(sourceChildDir, 'selection-manifest.json');
+if (!fs.existsSync(manifestPath)) throw new Error('E004_SELECTION_MANIFEST_REQUIRED');
+let manifest;
+try { manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')); }
+catch (error) { throw new Error('读取 selection-manifest.json 失败：' + (error?.message || String(error))); }
+if (String(manifest.n8nParameterFileName || '') !== String(packageInput.parameterFileName || '')) throw new Error('manifest 与 _READY.json 的参数文件名不一致。');
+if (String(manifest.targetStageId || '') !== 'E004') throw new Error('manifest.targetStageId 必须是 E004。');
+if (String(manifest.productSku || '') !== String(params.SKU || '')) throw new Error('manifest.productSku 与参数 SKU 不一致。');
+if (String(manifest.productName || '') !== String(params.productName || '')) throw new Error('manifest.productName 与参数 productName 不一致。');
+
+const ordered = orderManifestFiles(manifest);
+const seenTargets = new Set();
+const orderedSelection = ordered.files.map((entry, index) => {
+  const targetRelativePath = normalizeRelativePath(entry.targetRelativePath, 'selectedFiles[' + index + '].targetRelativePath');
+  if (!allowed.has(extensionOf(targetRelativePath))) throw new Error('manifest 包含不支持的图片类型：' + targetRelativePath);
+  if (seenTargets.has(targetRelativePath)) throw new Error('manifest 包含重复的 targetRelativePath：' + targetRelativePath);
+  seenTargets.add(targetRelativePath);
+  const absolutePath = resolveInside(sourceChildDir, targetRelativePath, 'selectedFiles[' + index + '].targetRelativePath');
+  const stablePath = stableByRelativePath.get(targetRelativePath);
+  if (!stablePath || path.resolve(stablePath) !== path.resolve(absolutePath)) throw new Error('manifest 图片不在稳定扫描结果中：' + targetRelativePath);
+  return {
+    sortOrder: index,
+    targetRelativePath,
+    sourceRelativePath: entry.sourceRelativePath == null ? null : normalizeRelativePath(entry.sourceRelativePath, 'selectedFiles[' + index + '].sourceRelativePath'),
+    absolutePath: stablePath,
+  };
+});
+if (seenTargets.size !== stableByRelativePath.size) {
+  const extra = [...stableByRelativePath.keys()].filter((relativePath) => !seenTargets.has(relativePath));
+  throw new Error('来源目录中的图片与 manifest 不一致，未登记图片：' + extra.join(', '));
+}
+const selectedImages = orderedSelection.map((entry) => entry.absolutePath);
+
+const minImageCount = boundedInteger(params.minImageCount, 'minImageCount', 1, 100);
+const maxImageCount = boundedInteger(params.maxImageCount, 'maxImageCount', 1, 100);
+if (minImageCount > maxImageCount) throw new Error('minImageCount 不得大于 maxImageCount。');
+if (selectedImages.length < minImageCount) throw new Error('子目录中没有足够图片：至少需要 ' + minImageCount + ' 张，当前 ' + selectedImages.length + ' 张。');
+if (selectedImages.length > maxImageCount) throw new Error('图片数量超过上限：最多允许 ' + maxImageCount + ' 张，当前 ' + selectedImages.length + ' 张。');
+
+const sourceChildName = cleanName(packageInput.sourceChildName, 'product');
+const SKU = String(params.SKU || '').trim();
+const productName = String(params.productName || '').trim();
+const variants = String(params.variants || '').trim();
+const executionId = String($execution.id || '').trim();
+if (!/^\d{7}$/.test(SKU)) throw new Error('n8n_setParameter_xxx.json 的 SKU 必须是保留前导零的 7 位数字。');
+if (!productName) throw new Error('n8n_setParameter_xxx.json 的 productName 不能为空。');
+if (!variants) throw new Error('n8n_setParameter_xxx.json 的 variants 不能为空。');
+if (!/^\d+$/.test(executionId)) throw new Error('当前工作流 executionId 无效。');
+const outputParentDir = normalizeUserPath(params.outputParentDir || '');
+const outputSubDir = outputParentDir + '/' + SKU + '-' + cleanName(productName, 'product') + '-' + executionId;
+const outputVideoPath = outputSubDir + '/' + sourceChildName + '.mp4';
+const jobJsonPath = outputSubDir + '/job.json';
+
+const job = {
+  sourceChildDir,
+  sourceChildName,
+  SKU,
+  productName,
+  variants,
+  n8nExecutionId: executionId,
+  readySubmissionId: packageInput.readySubmissionId,
+  parameterFileName: packageInput.parameterFileName,
+  e004RenderLockPath: packageInput.e004RenderLockPath,
+  sourcePackageSha256: packageInput.folderStableContentSha256,
+  imagePaths: selectedImages,
+  imageCount: selectedImages.length,
+  skippedImageCount: 0,
+  imageOrderSource: ordered.orderSource,
+  orderedSelection: orderedSelection.map(({ absolutePath, ...entry }) => entry),
+  selectionManifestPath: normalizeUserPath(manifestPath),
+  outputSubDir,
+  outputVideoPath,
+  effectPreset: params.effectPreset || 'case1',
+  createdAt: new Date().toISOString(),
+  params,
+};
+
+return [{ json: { ...job, job, jobJsonPath, renderWorkflowId: 'x8D4EHfqI2DHcgL7' } }];

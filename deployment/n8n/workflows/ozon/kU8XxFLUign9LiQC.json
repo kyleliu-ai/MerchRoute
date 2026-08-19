@@ -1,0 +1,69 @@
+{
+  "id": "kU8XxFLUign9LiQC",
+  "name": "OZON-E001-错误处理",
+  "active": false,
+  "nodes": [
+    {
+      "id": "3b92f4c0-d8c4-4622-8bb6-4b9a2fab9dc9",
+      "name": "错误处理说明",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -700,
+        -480
+      ],
+      "parameters": {
+        "content": "# OZON-E001 递归脱敏错误处理\n\n输出 job/task/store/publication 安全关联字段，并对嵌套对象、数组和文本中的 `Client-Id`、`Api-Key`、Authorization、Cookie、credential/token/secret 递归脱敏。不回显原始请求头或凭据对象。",
+        "width": 700,
+        "height": 390
+      }
+    },
+    {
+      "id": "bedac734-b5a9-4a88-a6fa-77687ec6e019",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        -600,
+        0
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "b40e4c23-67b4-451c-a8a4-8356bab85c55",
+      "name": "格式化脱敏错误事件",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -320,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nconst payload = $('Error Trigger').first().json || {};\nconst SECRET_KEY = /^(?:authorization|proxy-authorization|client-id|client_id|clientid|api-key|api_key|apikey|token|access[-_]?token|refresh[-_]?token|cookie|set-cookie|credential|credentials|password|secret)$/i;\nconst SECRET_TEXT = /((?:Client-Id|Api-Key|Authorization)\\s*[:=]\\s*)(?:Bearer\\s+)?[^\\s,;}{\\]]+/gi;\nconst BEARER_TEXT = /(Bearer\\s+)[A-Za-z0-9._~+\\/-]{6,}/gi;\nfunction redact(value, depth = 0, seen = new WeakSet()) {\n  if (depth > 10) return '[TRUNCATED]';\n  if (typeof value === 'string') return value.replace(SECRET_TEXT, '$1[REDACTED]').replace(BEARER_TEXT, '$1[REDACTED]').slice(0, 2_000);\n  if (value == null || typeof value !== 'object') return value;\n  if (seen.has(value)) return '[CIRCULAR]';\n  seen.add(value);\n  if (Array.isArray(value)) return value.slice(0, 50).map((entry) => redact(entry, depth + 1, seen));\n  const output = {};\n  for (const [key, entry] of Object.entries(value).slice(0, 100)) output[key] = SECRET_KEY.test(key) ? '[REDACTED]' : redact(entry, depth + 1, seen);\n  return output;\n}\nconst execution = payload.execution || {};\nconst workflow = payload.workflow || {};\nconst error = redact(execution.error || payload.error || {});\nconst context = redact(payload.context || payload.data || {});\nreturn [{ json: {\n  ok: false,\n  platform: 'OZON',\n  workflowId: String(workflow.id || ''),\n  workflowName: String(workflow.name || ''),\n  executionId: String(execution.id || ''),\n  executionUrl: String(execution.url || ''),\n  lastNode: String(execution.lastNodeExecuted || ''),\n  jobId: String(context.jobId || context.id || ''),\n  taskId: String(context.taskId || ''),\n  storeId: String(context.storeId || ''),\n  publicationId: String(context.publicationId || ''),\n  errorName: String(error.name || 'Error'),\n  errorCode: String(error.code || ''),\n  errorMessage: String(error.message || error.description || 'Unknown workflow error').slice(0, 2_000),\n  safeDetails: redact(error.details || {}),\n  occurredAt: new Date().toISOString()\n} }];"
+      }
+    }
+  ],
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "格式化脱敏错误事件",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all"
+  }
+}

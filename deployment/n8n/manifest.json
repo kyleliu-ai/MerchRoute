@@ -1,0 +1,732 @@
+{
+  "schemaVersion": 1,
+  "source": "local-n8n-rest-api",
+  "newInstallActivationPolicy": "inactive",
+  "workflowCount": 36,
+  "uniqueWorkflowCount": 36,
+  "packages": [
+    {
+      "id": "core",
+      "name": "MerchRoute 核心图片处理与投递",
+      "workflowIds": [
+        "Wxng7hVbjMNhVOaO",
+        "HpCtxAZJdy9RgWk2",
+        "s0lQIcv1ZCgEzGlB",
+        "noHJuIiHfHryuA2e",
+        "aj5sD7nSxxpTuRMh",
+        "6rGNfgghmkkeYhfG",
+        "G8MSbp9u0dudSgba",
+        "KmZ1AibtVGxzCgzc",
+        "ieWnRGeC7KdeS1GT",
+        "5fKlIwJWfXJM1y4E",
+        "pLoryDijfFiNwKiI",
+        "TOSzxIPPKZHQPtYT",
+        "KtjTu0u08rZJNtyM",
+        "JEl0xCKTgtiIP9UT",
+        "DSXe7OXHqa1IsQxx",
+        "x8D4EHfqI2DHcgL7",
+        "gDMR3Mxnm9dKQJtO"
+      ]
+    },
+    {
+      "id": "wb",
+      "name": "Wildberries 上品",
+      "workflowIds": [
+        "pLoryDijfFiNwKiI",
+        "flPkKc0aNf1uAZ5w",
+        "wzrSZDZ0wOEh8XKy",
+        "JcTDgNsprA7rPoMA",
+        "WbwJ8ufnL349l9hk",
+        "BcWDcR0JIUKr05lo",
+        "dEg5v4DY59j0tGPB",
+        "mTZV8BkPZpzHIJjz",
+        "qYxi3PPmRm7tjK0E",
+        "W2lSSXE3NUaLW1tD"
+      ]
+    },
+    {
+      "id": "ozon",
+      "name": "Ozon 上品",
+      "workflowIds": [
+        "pLoryDijfFiNwKiI",
+        "3hyAiON1l3fEHBzA",
+        "cuBblkAPnQQbhWEI",
+        "kU8XxFLUign9LiQC",
+        "o0vFbNtFSg3kAhkC",
+        "g3KK68BLXX7eShqa",
+        "EQPxeMrm2cbdmOEz",
+        "0FqozLuQ7vuabT8V",
+        "stSK51IuxrMZlLjx",
+        "uKkH5O0dpfzFuAag",
+        "HDh0ZNLK2ps5qasR"
+      ]
+    }
+  ],
+  "securityPolicy": {
+    "credentialsRemoved": true,
+    "webhookIdsRemoved": true,
+    "runtimeStateRemoved": true,
+    "secretLiteralsRedacted": true,
+    "rawApiResponsesPersisted": false,
+    "databaseBackupsIncluded": false,
+    "portablePathTemplates": true
+  },
+  "securityTotals": {
+    "removedCredentialBindings": 32,
+    "removedWebhookIds": 28,
+    "redactedLiterals": 1
+  },
+  "workflows": [
+    {
+      "id": "Wxng7hVbjMNhVOaO",
+      "name": "E001-v02-批量抠图-即梦",
+      "category": "core",
+      "active": true,
+      "file": "workflows/core/Wxng7hVbjMNhVOaO.json",
+      "sha256": "20eb278c37ebd3204ec7deb075d7881c5bbdab96124d524cdf30e241ad17f80b",
+      "dependencies": [
+        "5fKlIwJWfXJM1y4E",
+        "KmZ1AibtVGxzCgzc",
+        "gDMR3Mxnm9dKQJtO"
+      ],
+      "security": {
+        "removedCredentialBindings": 2,
+        "removedWebhookIds": 0,
+        "redactedLiterals": 0,
+        "redactionKinds": {},
+        "redactionPathCount": 0
+      }
+    },
+    {
+      "id": "HpCtxAZJdy9RgWk2",
+      "name": "E002-v03-白底图-生5视图",
+      "category": "core",
+      "active": true,
+      "file": "workflows/core/HpCtxAZJdy9RgWk2.json",
+      "sha256": "09c046b8e9ae9c9f381936ebe149bf187a2f58b80b19ce9b16682f05eb301d31",
+      "dependencies": [
+        "5fKlIwJWfXJM1y4E",
+        "KmZ1AibtVGxzCgzc",
+        "gDMR3Mxnm9dKQJtO"
+      ],
+      "security": {
+        "removedCredentialBindings": 4,
+        "removedWebhookIds": 2,
+        "redactedLiterals": 0,
+        "redactionKinds": {},
+        "redactionPathCount": 0
+      }
+    },
+    {
+      "id": "s0lQIcv1ZCgEzGlB",
+      "name": "E003-v09-即梦-5生7-电商套图",
+      "category": "core",
+      "active": true,
+      "file": "workflows/core/s0lQIcv1ZCgEzGlB.json",
+      "sha256": "fba803a0a8c292b775dae7306d279867ae01012403a547e3fbfa75dc612e1621",
+      "dependencies": [
+        "5fKlIwJWfXJM1y4E",
+        "DSXe7OXHqa1IsQxx",
+        "JEl0xCKTgtiIP9UT",
+        "KmZ1AibtVGxzCgzc",
+        "KtjTu0u08rZJNtyM",
+        "TOSzxIPPKZHQPtYT",
+        "ieWnRGeC7KdeS1GT"
+      ],
+      "security": {
+        "removedCredentialBindings": 0,
+        "removedWebhookIds": 0,
+        "redactedLiterals": 0,
+        "redactionKinds": {},
+        "redactionPathCount": 0
+      }
+    },
+    {
+      "id": "noHJuIiHfHryuA2e",
+      "name": "E004-v01-主图生视频-FFmpeg",
+      "category": "core",
+      "active": true,
+      "file": "workflows/core/noHJuIiHfHryuA2e.json",
+      "sha256": "d274865a6f928938eacf09b30da124b5b9cbee4ee112ab775588607052cd2ab1",
+      "dependencies": [
+        "gDMR3Mxnm9dKQJtO",
+        "x8D4EHfqI2DHcgL7"
+      ],
+      "security": {
+        "removedCredentialBindings": 0,
+        "removedWebhookIds": 0,
+        "redactedLiterals": 0,
+        "redactionKinds": {},
+        "redactionPathCount": 0
+      }
+    },
+    {
+      "id": "aj5sD7nSxxpTuRMh",
+      "name": "E005-v07-图片加logo-Resize",
+      "category": "core",
+      "active": true,
+      "file": "workflows/core/aj5sD7nSxxpTuRMh.json",
+      "sha256": "5f322cfbec6d6b5d09edfa5a3912b9c7ac39601b6f6cabaf2aee3221d103de37",
+      "dependencies": [
+        "gDMR3Mxnm9dKQJtO"
+      ],
+      "security": {
+        "removedCredentialBindings": 0,
+        "removedWebhookIds": 1,
+        "redactedLiterals": 0,
+        "redactionKinds": {},
+        "redactionPathCount": 0
+      }
+    },
+    {
+      "id": "6rGNfgghmkkeYhfG",
+      "name": "E006-v02-拼多多商品媒体下载",
+      "category": "core",
+      "active": true,
+      "file": "workflows/core/6rGNfgghmkkeYhfG.json",
+      "sha256": "99a7ef5862d9ea79ddebe6b163ffdf247b4ee48e25de2a313df697f782ddf903",
+      "dependencies": [],
+      "security": {
+        "removedCredentialBindings": 0,
+        "removedWebhookIds": 1,
+        "redactedLiterals": 0,
+        "redactionKinds": {},
+        "redactionPathCount": 0
+      }
+    },
+    {
+      "id": "G8MSbp9u0dudSgba",
+      "name": "E007-v01-1688产品媒体下载",
+      "category": "core",
+      "active": true,
+      "file": "workflows/core/G8MSbp9u0dudSgba.json",
+      "sha256": "cbde6004cdd83c4044a5bb38af929669d98580fe9d6f455c42149d4921ea603d",
+      "dependencies": [],
+      "security": {
+        "removedCredentialBindings": 0,
+        "removedWebhookIds": 1,
+        "redactedLiterals": 1,
+        "redactionKinds": {
+          "named-sensitive-field": 1
+        },
+        "redactionPathCount": 1
+      }
+    },
+    {
+      "id": "KmZ1AibtVGxzCgzc",
+      "name": "S001-Url文件下载-v02",
+      "category": "core",
+      "active": true,
+      "file": "workflows/core/KmZ1AibtVGxzCgzc.json",
+      "sha256": "1b26c0155e8c4c257526a01a42c5604c11ac2c057e849994c7a5ab35f365957d",
+      "dependencies": [],
+      "security": {
+        "removedCredentialBindings": 0,
+        "removedWebhookIds": 0,
+        "redactedLiterals": 0,
+        "redactionKinds": {},
+        "redactionPathCount": 0
+      }
+    },
+    {
+      "id": "ieWnRGeC7KdeS1GT",
+      "name": "S003-v8-即梦4.5-5图生7图",
+      "category": "core",
+      "active": true,
+      "file": "workflows/core/ieWnRGeC7KdeS1GT.json",
+      "sha256": "49ac5a239a7c112f4457a6c3ab97209d58e02bb2670f95d7211f30eb86c42709",
+      "dependencies": [],
+      "security": {
+        "removedCredentialBindings": 2,
+        "removedWebhookIds": 0,
+        "redactedLiterals": 0,
+        "redactionKinds": {},
+        "redactionPathCount": 0
+      }
+    },
+    {
+      "id": "5fKlIwJWfXJM1y4E",
+      "name": "S005-v05-文件上传-转URL-硅基API",
+      "category": "core",
+      "active": true,
+      "file": "workflows/core/5fKlIwJWfXJM1y4E.json",
+      "sha256": "efb2446e7649d37e6b9d96f5738232df12ec6f40faf83f7877c6d7639625e629",
+      "dependencies": [],
+      "security": {
+        "removedCredentialBindings": 1,
+        "removedWebhookIds": 0,
+        "redactedLiterals": 0,
+        "redactionKinds": {},
+        "redactionPathCount": 0
+      }
+    },
+    {
+      "id": "pLoryDijfFiNwKiI",
+      "name": "S007-v02-百炼Qwen-图文对话",
+      "category": "core",
+      "active": true,
+      "file": "workflows/core/pLoryDijfFiNwKiI.json",
+      "sha256": "4ceb7069f68035fa22ca1077277cbdf48b1e9c6f35f185847b039c0a7e25940b",
+      "dependencies": [],
+      "security": {
+        "removedCredentialBindings": 1,
+        "removedWebhookIds": 0,
+        "redactedLiterals": 0,
+        "redactionKinds": {},
+        "redactionPathCount": 0
+      }
+    },
+    {
+      "id": "TOSzxIPPKZHQPtYT",
+      "name": "S008-产品详情-俄文-生成子流",
+      "category": "core",
+      "active": true,
+      "file": "workflows/core/TOSzxIPPKZHQPtYT.json",
+      "sha256": "a4559bcb168e5cecd5ba819567aa0eecfcb5ebbfaff2084a936693ddab43520f",
+      "dependencies": [
+        "pLoryDijfFiNwKiI"
+      ],
+      "security": {
+        "removedCredentialBindings": 1,
+        "removedWebhookIds": 0,
+        "redactedLiterals": 0,
+        "redactionKinds": {},
+        "redactionPathCount": 0
+      }
+    },
+    {
+      "id": "KtjTu0u08rZJNtyM",
+      "name": "S011-v03-Qwen-提示词-组装",
+      "category": "core",
+      "active": true,
+      "file": "workflows/core/KtjTu0u08rZJNtyM.json",
+      "sha256": "dcc65eb139ce4b006fb6b9b74cf2f8ddc7c1ac36af7824251173506692986e23",
+      "dependencies": [],
+      "security": {
+        "removedCredentialBindings": 1,
+        "removedWebhookIds": 0,
+        "redactedLiterals": 0,
+        "redactionKinds": {},
+        "redactionPathCount": 0
+      }
+    },
+    {
+      "id": "JEl0xCKTgtiIP9UT",
+      "name": "S013-v04-主图场景-编排子流",
+      "category": "core",
+      "active": true,
+      "file": "workflows/core/JEl0xCKTgtiIP9UT.json",
+      "sha256": "053454586072b7e1b7d154da47359b1c022867fd9691459d6451138cf907ad92",
+      "dependencies": [],
+      "security": {
+        "removedCredentialBindings": 2,
+        "removedWebhookIds": 0,
+        "redactedLiterals": 0,
+        "redactionKinds": {},
+        "redactionPathCount": 0
+      }
+    },
+    {
+      "id": "DSXe7OXHqa1IsQxx",
+      "name": "S014-v03-读取文件夹-输出JSON参数表",
+      "category": "core",
+      "active": true,
+      "file": "workflows/core/DSXe7OXHqa1IsQxx.json",
+      "sha256": "0d54274819e9ebfa1ef12c921a4ec241beb609e3a48f7972d7029b95f1dd1dd9",
+      "dependencies": [
+        "gDMR3Mxnm9dKQJtO"
+      ],
+      "security": {
+        "removedCredentialBindings": 0,
+        "removedWebhookIds": 0,
+        "redactedLiterals": 0,
+        "redactionKinds": {},
+        "redactionPathCount": 0
+      }
+    },
+    {
+      "id": "x8D4EHfqI2DHcgL7",
+      "name": "S015-v01-Render-主图生视频-加logo",
+      "category": "core",
+      "active": true,
+      "file": "workflows/core/x8D4EHfqI2DHcgL7.json",
+      "sha256": "00005b2782dd01f5b9f67545e79ff2c5d7700df80de69e737c6b7c394de8b2fc",
+      "dependencies": [],
+      "security": {
+        "removedCredentialBindings": 0,
+        "removedWebhookIds": 0,
+        "redactedLiterals": 0,
+        "redactionKinds": {},
+        "redactionPathCount": 0
+      }
+    },
+    {
+      "id": "gDMR3Mxnm9dKQJtO",
+      "name": "S016-JSON文件-解析",
+      "category": "core",
+      "active": true,
+      "file": "workflows/core/gDMR3Mxnm9dKQJtO.json",
+      "sha256": "be5710595cd1ba4367a52a5240b1bcb2e680d23eb3de24167ca0bddcdcf5108a",
+      "dependencies": [],
+      "security": {
+        "removedCredentialBindings": 0,
+        "removedWebhookIds": 0,
+        "redactedLiterals": 0,
+        "redactionKinds": {},
+        "redactionPathCount": 0
+      }
+    },
+    {
+      "id": "flPkKc0aNf1uAZ5w",
+      "name": "WB-A001-多店铺API网关",
+      "category": "wb",
+      "active": true,
+      "file": "workflows/wb/flPkKc0aNf1uAZ5w.json",
+      "sha256": "cfa70b5bf8f5527ea68bbadacc1754db8369bf0c1383f524c400796ef60c7056",
+      "dependencies": [],
+      "security": {
+        "removedCredentialBindings": 0,
+        "removedWebhookIds": 0,
+        "redactedLiterals": 0,
+        "redactionKinds": {},
+        "redactionPathCount": 0
+      }
+    },
+    {
+      "id": "wzrSZDZ0wOEh8XKy",
+      "name": "WB-C001-只读预检与类目模板",
+      "category": "wb",
+      "active": true,
+      "file": "workflows/wb/wzrSZDZ0wOEh8XKy.json",
+      "sha256": "2a08ab0cf9b7c97ebfb9c0176378b0c3db5eadc2035553bf729d4afaceff1802",
+      "dependencies": [
+        "JcTDgNsprA7rPoMA",
+        "flPkKc0aNf1uAZ5w"
+      ],
+      "security": {
+        "removedCredentialBindings": 5,
+        "removedWebhookIds": 1,
+        "redactedLiterals": 0,
+        "redactionKinds": {},
+        "redactionPathCount": 0
+      }
+    },
+    {
+      "id": "JcTDgNsprA7rPoMA",
+      "name": "WB-E001-系统异常记录",
+      "category": "wb",
+      "active": false,
+      "file": "workflows/wb/JcTDgNsprA7rPoMA.json",
+      "sha256": "f7f14bf8269d21b8b68ec5e91338bc8c0a87c4b1288df0239c3f588001fdaaab",
+      "dependencies": [],
+      "security": {
+        "removedCredentialBindings": 0,
+        "removedWebhookIds": 0,
+        "redactedLiterals": 0,
+        "redactionKinds": {},
+        "redactionPathCount": 0
+      }
+    },
+    {
+      "id": "WbwJ8ufnL349l9hk",
+      "name": "WB-P001-任务API",
+      "category": "wb",
+      "active": true,
+      "file": "workflows/wb/WbwJ8ufnL349l9hk.json",
+      "sha256": "47cadd16f22427beb1157915570676e2797ed1338d63a0703e155e53a1e7b505",
+      "dependencies": [
+        "JcTDgNsprA7rPoMA",
+        "mTZV8BkPZpzHIJjz"
+      ],
+      "security": {
+        "removedCredentialBindings": 2,
+        "removedWebhookIds": 2,
+        "redactedLiterals": 0,
+        "redactionKinds": {},
+        "redactionPathCount": 0
+      }
+    },
+    {
+      "id": "BcWDcR0JIUKr05lo",
+      "name": "WB-P002-扫描与调度",
+      "category": "wb",
+      "active": true,
+      "file": "workflows/wb/BcWDcR0JIUKr05lo.json",
+      "sha256": "a894e8ef2e2db8a1499737248fe8cf907b21c77b8f70acb3be882683612e06c8",
+      "dependencies": [
+        "JcTDgNsprA7rPoMA",
+        "mTZV8BkPZpzHIJjz",
+        "qYxi3PPmRm7tjK0E"
+      ],
+      "security": {
+        "removedCredentialBindings": 0,
+        "removedWebhookIds": 0,
+        "redactedLiterals": 0,
+        "redactionKinds": {},
+        "redactionPathCount": 0
+      }
+    },
+    {
+      "id": "dEg5v4DY59j0tGPB",
+      "name": "WB-P003-类目与运行配置API",
+      "category": "wb",
+      "active": true,
+      "file": "workflows/wb/dEg5v4DY59j0tGPB.json",
+      "sha256": "e85ec3cb08b9d0ff69e5a0948d25f911089ee5db21e8e00efd7dc9cdfceb2df6",
+      "dependencies": [
+        "JcTDgNsprA7rPoMA",
+        "flPkKc0aNf1uAZ5w"
+      ],
+      "security": {
+        "removedCredentialBindings": 3,
+        "removedWebhookIds": 1,
+        "redactedLiterals": 0,
+        "redactionKinds": {},
+        "redactionPathCount": 0
+      }
+    },
+    {
+      "id": "mTZV8BkPZpzHIJjz",
+      "name": "WB-S000-声明商品目录",
+      "category": "wb",
+      "active": true,
+      "file": "workflows/wb/mTZV8BkPZpzHIJjz.json",
+      "sha256": "89a71021913416dd7f7ce523c7cc7be9e4edc2fad184688c6f1ddf9042fdb92a",
+      "dependencies": [
+        "JcTDgNsprA7rPoMA"
+      ],
+      "security": {
+        "removedCredentialBindings": 0,
+        "removedWebhookIds": 0,
+        "redactedLiterals": 0,
+        "redactionKinds": {},
+        "redactionPathCount": 0
+      }
+    },
+    {
+      "id": "qYxi3PPmRm7tjK0E",
+      "name": "WB-S001-推进单个任务",
+      "category": "wb",
+      "active": true,
+      "file": "workflows/wb/qYxi3PPmRm7tjK0E.json",
+      "sha256": "82f5e945a9f212ccae7ca7cfa0e99009651a30ad90481292eb0cad0e4409fb09",
+      "dependencies": [
+        "JcTDgNsprA7rPoMA",
+        "flPkKc0aNf1uAZ5w"
+      ],
+      "security": {
+        "removedCredentialBindings": 3,
+        "removedWebhookIds": 1,
+        "redactedLiterals": 0,
+        "redactionKinds": {},
+        "redactionPathCount": 0
+      }
+    },
+    {
+      "id": "W2lSSXE3NUaLW1tD",
+      "name": "WB-T001-标题翻译工作流",
+      "category": "wb",
+      "active": true,
+      "file": "workflows/wb/W2lSSXE3NUaLW1tD.json",
+      "sha256": "7d1e9e9436f8d523b00736637711ec1e8b371706ee7534fcbefca843c4244acc",
+      "dependencies": [
+        "pLoryDijfFiNwKiI"
+      ],
+      "security": {
+        "removedCredentialBindings": 1,
+        "removedWebhookIds": 1,
+        "redactedLiterals": 0,
+        "redactionKinds": {},
+        "redactionPathCount": 0
+      }
+    },
+    {
+      "id": "3hyAiON1l3fEHBzA",
+      "name": "OZON-A001-多店铺安全API网关",
+      "category": "ozon",
+      "active": true,
+      "file": "workflows/ozon/3hyAiON1l3fEHBzA.json",
+      "sha256": "6fe36ecd97b580938c0534402ffe2098a9554a1a71f153e26c77ea82f9c371ff",
+      "dependencies": [
+        "kU8XxFLUign9LiQC"
+      ],
+      "security": {
+        "removedCredentialBindings": 1,
+        "removedWebhookIds": 0,
+        "redactedLiterals": 0,
+        "redactionKinds": {},
+        "redactionPathCount": 0
+      }
+    },
+    {
+      "id": "cuBblkAPnQQbhWEI",
+      "name": "OZON-C001-连接与配额检查",
+      "category": "ozon",
+      "active": true,
+      "file": "workflows/ozon/cuBblkAPnQQbhWEI.json",
+      "sha256": "d2e4415ba355a796a1a8f751e619341614df976efea60742fbbc2d4f6d406451",
+      "dependencies": [
+        "3hyAiON1l3fEHBzA",
+        "kU8XxFLUign9LiQC",
+        "uKkH5O0dpfzFuAag"
+      ],
+      "security": {
+        "removedCredentialBindings": 0,
+        "removedWebhookIds": 1,
+        "redactedLiterals": 0,
+        "redactionKinds": {},
+        "redactionPathCount": 0
+      }
+    },
+    {
+      "id": "kU8XxFLUign9LiQC",
+      "name": "OZON-E001-错误处理",
+      "category": "ozon",
+      "active": false,
+      "file": "workflows/ozon/kU8XxFLUign9LiQC.json",
+      "sha256": "cea4f103a580dc4edc3f8320893a89cf9d314f1c2342ffeac6556e4a6dfc9428",
+      "dependencies": [],
+      "security": {
+        "removedCredentialBindings": 0,
+        "removedWebhookIds": 0,
+        "redactedLiterals": 0,
+        "redactionKinds": {},
+        "redactionPathCount": 0
+      }
+    },
+    {
+      "id": "o0vFbNtFSg3kAhkC",
+      "name": "OZON-P001-任务接口",
+      "category": "ozon",
+      "active": true,
+      "file": "workflows/ozon/o0vFbNtFSg3kAhkC.json",
+      "sha256": "78dd287fdddfc99508e7991e6238e8d100b929b72e3cbaa5d6b6ee05c3ffaa80",
+      "dependencies": [
+        "0FqozLuQ7vuabT8V",
+        "kU8XxFLUign9LiQC"
+      ],
+      "security": {
+        "removedCredentialBindings": 0,
+        "removedWebhookIds": 1,
+        "redactedLiterals": 0,
+        "redactionKinds": {},
+        "redactionPathCount": 0
+      }
+    },
+    {
+      "id": "g3KK68BLXX7eShqa",
+      "name": "OZON-P002-任务扫描与调度",
+      "category": "ozon",
+      "active": true,
+      "file": "workflows/ozon/g3KK68BLXX7eShqa.json",
+      "sha256": "5befe64dceef68ab9e0069112c74842af8e5ea45d2c7fb9fcbed633415058a4b",
+      "dependencies": [
+        "0FqozLuQ7vuabT8V",
+        "3hyAiON1l3fEHBzA",
+        "kU8XxFLUign9LiQC",
+        "stSK51IuxrMZlLjx"
+      ],
+      "security": {
+        "removedCredentialBindings": 0,
+        "removedWebhookIds": 4,
+        "redactedLiterals": 0,
+        "redactionKinds": {},
+        "redactionPathCount": 0
+      }
+    },
+    {
+      "id": "EQPxeMrm2cbdmOEz",
+      "name": "OZON-P003-类目与系统配置接口",
+      "category": "ozon",
+      "active": true,
+      "file": "workflows/ozon/EQPxeMrm2cbdmOEz.json",
+      "sha256": "ec9a6c8376a552dc58870b824d7ff55be1bbf71e78651e7b68574000e7411774",
+      "dependencies": [
+        "3hyAiON1l3fEHBzA",
+        "kU8XxFLUign9LiQC"
+      ],
+      "security": {
+        "removedCredentialBindings": 0,
+        "removedWebhookIds": 1,
+        "redactedLiterals": 0,
+        "redactionKinds": {},
+        "redactionPathCount": 0
+      }
+    },
+    {
+      "id": "0FqozLuQ7vuabT8V",
+      "name": "OZON-S000-任务目录认领",
+      "category": "ozon",
+      "active": true,
+      "file": "workflows/ozon/0FqozLuQ7vuabT8V.json",
+      "sha256": "1ead67eda4f7bd543b370749616984c06db5240abb3daa779f2a87b93b5e8f35",
+      "dependencies": [
+        "kU8XxFLUign9LiQC"
+      ],
+      "security": {
+        "removedCredentialBindings": 0,
+        "removedWebhookIds": 0,
+        "redactedLiterals": 0,
+        "redactionKinds": {},
+        "redactionPathCount": 0
+      }
+    },
+    {
+      "id": "stSK51IuxrMZlLjx",
+      "name": "OZON-S001-商品上品状态机",
+      "category": "ozon",
+      "active": true,
+      "file": "workflows/ozon/stSK51IuxrMZlLjx.json",
+      "sha256": "7de06fce575f621efefe2a3af90c2f7c3a6a8c1be1d086af28c48b813daf58bd",
+      "dependencies": [
+        "3hyAiON1l3fEHBzA",
+        "kU8XxFLUign9LiQC",
+        "uKkH5O0dpfzFuAag"
+      ],
+      "security": {
+        "removedCredentialBindings": 0,
+        "removedWebhookIds": 6,
+        "redactedLiterals": 0,
+        "redactionKinds": {},
+        "redactionPathCount": 0
+      }
+    },
+    {
+      "id": "uKkH5O0dpfzFuAag",
+      "name": "OZON-S002-图片上传转URL适配器",
+      "category": "ozon",
+      "active": true,
+      "file": "workflows/ozon/uKkH5O0dpfzFuAag.json",
+      "sha256": "eafefdcc8c3aec552cd8d7228fb552386f979fe274a73387ca65a5922df05af6",
+      "dependencies": [
+        "kU8XxFLUign9LiQC"
+      ],
+      "security": {
+        "removedCredentialBindings": 2,
+        "removedWebhookIds": 3,
+        "redactedLiterals": 0,
+        "redactionKinds": {},
+        "redactionPathCount": 0
+      }
+    },
+    {
+      "id": "HDh0ZNLK2ps5qasR",
+      "name": "OZON-T001-标题翻译工作流",
+      "category": "ozon",
+      "active": true,
+      "file": "workflows/ozon/HDh0ZNLK2ps5qasR.json",
+      "sha256": "73951a55e5c758c948527570247aa687569c7bb8dceb92c2851a1f43d509e396",
+      "dependencies": [
+        "pLoryDijfFiNwKiI"
+      ],
+      "security": {
+        "removedCredentialBindings": 1,
+        "removedWebhookIds": 1,
+        "redactedLiterals": 0,
+        "redactionKinds": {},
+        "redactionPathCount": 0
+      }
+    }
+  ],
+  "generatedAt": "2026-08-18T06:09:58.137Z"
+}

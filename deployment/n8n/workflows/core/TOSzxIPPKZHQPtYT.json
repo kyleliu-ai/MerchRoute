@@ -1,0 +1,461 @@
+{
+  "id": "TOSzxIPPKZHQPtYT",
+  "name": "S008-产品详情-俄文-生成子流",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "pLoryDijfFiNwKiI",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/pLoryDijfFiNwKiI",
+          "cachedResultName": "S007-v02-百炼Qwen-图文对话"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "userPrompt": "=- 产品名：{{ $json.productName }}\n- 产品外观描述：{{ $json.productAppearance }}\n- 产品核心卖点：{{ $json.sellingPoints }}",
+            "sysPrompt": "={{ $json.sysPrompt }}",
+            "temperature": "={{ (() => {\n  const raw = $json.temperature;\n  if (raw === undefined || raw === null || raw === '') return '0.5';\n  const value = Number(raw);\n  return Number.isFinite(value) ? String(value) : '0.5';\n})() }}",
+            "top_p": "={{ (() => {\n  const raw = $json.top_p;\n  if (raw === undefined || raw === null || raw === '') return '0.8';\n  const value = Number(raw);\n  return Number.isFinite(value) ? String(value) : '0.8';\n})() }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "userPrompt",
+              "displayName": "userPrompt",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "sysPrompt",
+              "displayName": "sysPrompt",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "imageAdd1",
+              "displayName": "imageAdd1",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "imageAdd2",
+              "displayName": "imageAdd2",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "imageAdd3",
+              "displayName": "imageAdd3",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "temperature",
+              "displayName": "temperature",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "top_p",
+              "displayName": "top_p",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        272,
+        -80
+      ],
+      "id": "f991fd27-c259-4237-aab8-35ebd71407cc",
+      "name": "Call 'S007-qwen3.7-sysPrompt-图片路径-v2'",
+      "notesInFlow": true,
+      "notes": "模型服务配置由被调用的 S007 Global Constants 统一管理，本节点只传业务输入。"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a498a768-0284-4251-b20d-e4bbcd0a9b21",
+              "name": "sysPrompt",
+              "value": "你是一名专业的俄罗斯 WB 电商平台产品详情描述生成助手。你的任务是根据用户输入的产品信息，直接生成一篇适用于 WB 商品卡片的俄文产品详情描述。  你必须严格遵守以下规则：  1. 最终只输出俄文产品详情正文，不要输出标题、解释、字段名、JSON、Markdown、编号、列表或任何额外说明。  2. 最终描述总字符数必须小于 1700 个字符，含空格和标点。目标长度为 1000 到 1300 个字符。长度限制优先级最高，高于关键词数量、销售表达和细节丰富度。如果内容可能超过 1800 个字符，必须主动压缩句子，删除重复修饰、泛泛场景、无依据描述、非必要关键词和第三段中的扩展场景。不得为了满足关键词数量而超出长度限制。  3. 内容必须基于用户提供的 productName、productAppearance、sellingPoints 生成，不得编造不存在的功能、材质、尺寸、认证、品牌、产地、参数、工艺、适用季节、专业运动属性或使用效果。  4. 如果 productName 与 productAppearance、sellingPoints 不冲突，应保留 productName 对应的核心俄文类目关键词。例如输入为“男款跑步鞋”，应使用 мужские кроссовки для бега、беговые кроссовки 或 мужская спортивная обувь 等相关表达，不要弱化成无关类目。  5. 如果 productName 与 productAppearance、sellingPoints 明显冲突，应优先根据 productAppearance 和 sellingPoints 判断真实产品类型，不得机械按照错误的 productName 生成。  6. 用户输入可能包含中文、英文、日文或其他语言。你需要理解含义并转写成自然俄文。最终输出中禁止保留中文、英文、日文、韩文或其他非俄文残留词。禁止使用英文词，例如 casual，应改写为 повседневный стиль。  7. 禁止出现第三方品牌、平台名称、竞品词、联系方式、网址、社交账号、二维码或任何外部引流信息。  8. 禁止使用特殊字符、表情符号、装饰符号、项目符号，例如 ✓、✔、★、●、•、◆、→、emoji。允许使用普通俄文标点、空格、数字和必要单位。  9. 禁止使用夸张、绝对化、确定性承诺或无依据质量表达，例如 лучший、номер один、самый лучший、идеальный、гарантированно、лечит、100 процентов、идеально、эффективно、инновационный、премиальный、надежный、отличный、оптимальный вариант、обеспечивает、обеспечивают、обеспечивается、гарантирует、полностью、на протяжении всего дня、в течение дня、качественные материалы、долговечность。  10. 对于抑菌、防臭、透气、缓震、不磨脚、干爽、舒适、轻便、减压、不易疲劳等卖点，必须使用温和表达。推荐使用：помогает поддерживать ощущение свежести、способствует комфорту、уменьшает ощущение духоты、помогает снизить дискомфорт、помогает смягчать нагрузку、помогает снизить ощущение нагрузки。  11. 禁止使用过强功效、卫生、质量或耐用承诺表达，例如 полностью предотвращает запах、предотвращает натирание、обеспечивает сухость、гарантирует комфорт、уничтожает бактерии、снижает усталость、защищает суставы、смягчает нагрузку на суставы、стабильная поддержка、поддерживает гигиену、поддерживать гигиену стопы、надежно фиксирует、обеспечивает поддержку。  12. 如果输入只描述“皮革质感”，应写 с фактурой под кожу 或 элементы с кожаной фактурой，不得写 натуральная кожа。只有当输入明确说明“皮革材质”时，才可使用 кожаные элементы、кожаная петля、кожаная отделка 等表达。即使输入写了皮革，也不得擅自写 натуральная кожа，除非用户明确写明“真皮”或“天然皮革”。  13. 如果输入只描述“飞织、针织、网面”，不得编造 бесшовная технология、технология плетения、инновационный материал 等工艺词。应使用 текстильный материал、вязаная фактура、сетчатая структура、мелкие вентиляционные отверстия 等稳妥表达。  14. 不得编造用户未提供的专业功能或场景。例如不得擅自加入 ортопедический эффект、профессиональный спорт、защита суставов、стабильная поддержка、тренировки в зале、для любого сезона、эргономичная форма、продуманная форма、адаптируется к стопе、отдых на природе、в теплое время года、общественный транспорт、встречи с друзьями，除非用户输入中明确提供对应依据。  15. 描述应为 2 到 3 个自然段，优先使用 3 个自然段。第一段介绍产品类型、外观风格、主要特点和用途；第二段介绍材质、结构、功能、舒适度和核心卖点；第三段介绍使用场景、搭配建议、适用人群或日常价值。  16. 每个自然段应自然融入 2 到 3 个与产品高度相关的俄文搜索关键词或关键词短语，用于提升商品搜索覆盖。关键词应来自真实产品类型、材质、功能、风格、场景、目标人群或卖点。  17. 关键词必须自然嵌入句子中，不得堆砌，不得以关键词列表形式输出，不得加入无关热词、错误类目词、英文词、第三方品牌词或竞品词。如果关键词数量影响自然度、真实性、合规性或 1800 字符限制，必须优先保证准确、自然和长度达标。  18. 语言要自然、清晰、专业，适合俄罗斯消费者阅读。不要简单翻译 sellingPoints，不要重复同一卖点，不要反复使用相同形容词。  19. 输出前必须自检：是否全俄文；是否小于 1800 字符；是否没有非俄文残留；是否没有特殊符号；是否没有品牌和外部引流；是否没有夸大承诺；是否没有编造功能、材质、工艺和场景；是否没有使用禁用表达；是否自然包含产品相关关键词；是否准确覆盖产品外观和卖点。  20. 输出格式必须为一行文本。2 到 3 个自然段之间只能使用字面量 \\n\\n，即四个可见字符：反斜杠、字母 n、反斜杠、字母 n。禁止输出真实的回车符或换行符。正文开头和结尾不得出现该分隔符。最终输出示例形式为：第一段文字\\n\\n第二段文字。不要添加反引号或任何格式说明。  最终只输出合规后的俄文产品详情描述正文。",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        16,
+        -80
+      ],
+      "id": "080b4b63-9fa4-4b3b-8015-51231797dad6",
+      "name": "System Prompt",
+      "notesInFlow": true,
+      "notes": "产品描述生成助手-\n系统提示词"
+    },
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "productName"
+            },
+            {
+              "name": "productAppearance"
+            },
+            {
+              "name": "sellingPoints"
+            },
+            {
+              "name": "temperature"
+            },
+            {
+              "name": "top_p"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -448,
+        -80
+      ],
+      "id": "2d617eb9-37c5-4fa2-b697-418886f64e9a",
+      "name": "When Executed by Another Workflow"
+    },
+    {
+      "parameters": {
+        "content": "## S008-产品详情-俄文-生成子流\n\n### 主要功能\n接收商品名称、外观和卖点，设置俄罗斯 WB 商品详情系统提示词，调用 S007 生成俄文正文，并保证最终 messageContent 不含中文字符。\n\n### 输入\n- productName：商品名称或类目关键词。\n- productAppearance：商品外观、材质、结构等描述。\n- sellingPoints：产品核心卖点。\n- temperature：可选；为空或非法时初次生成默认 0.5。\n- top_p：可选；为空或非法时初次生成默认 0.8。\n\n### 处理逻辑\n1. System Prompt 约束生成全俄文详情。\n2. 调用 S007 完成初次生成。\n3. Normalize Product Detail Newlines 把段落统一为字面量 \\n\\n。\n4. 检查中文字符：仅当 messageContent 含 Unicode Han 字符时进入修复分支。\n5. 翻译中文残留为俄文：再次调用 S007，temperature=0.2、top_p=0.2；优先翻译，无法确认含义时删除混合片段并修正邻近俄文。\n6. 最终清理中文残留：再次规范换行，删除仍残留的中文混合词，并断言正文非空、无中文、无真实 CR/LF。\n\n### 输出\n- messageContent：只含俄文正文，段落使用字面量 \\n\\n。\n- model / usage / finishReason / imageCount：保留初次生成结果的原字段与值。\n\n### 模型服务配置\n- S008 只负责编排，不保存模型地址或密钥。\n- 初次生成和条件修复均调用 S007；模型服务配置继续由 S007 的 Global Constants 管理。",
+        "height": 720,
+        "width": 640,
+        "color": 4
+      },
+      "id": "a32c726e-97e5-4148-a56a-533f5af63376",
+      "name": "工作流说明便签",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -1168,
+        -240
+      ]
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-globals.globalConstants",
+      "typeVersion": 1,
+      "position": [
+        -240,
+        -80
+      ],
+      "id": "f357627e-d923-4455-87b1-73bab20d37dd",
+      "name": "Global Constants"
+    },
+    {
+      "id": "2e340a66-0692-46ea-a2b0-457f4f670c90",
+      "name": "Normalize Product Detail Newlines",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        592,
+        -80
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const items = $input.all();\n\nfunction normalizeProductDetail(value) {\n  if (typeof value !== 'string') {\n    throw new Error('S007 未返回字符串字段 messageContent');\n  }\n\n  let text = value\n    .trim()\n    .replace(/\\r\\n?/g, '\\n')\n    .replace(/\\\\r\\\\n|\\\\r|\\\\n/g, '\\n')\n    .replace(/[ \\t]*\\n+[ \\t]*/g, '\\\\n\\\\n');\n\n  if (!text) {\n    throw new Error('S007 返回的 messageContent 为空');\n  }\n  if (/[\\r\\n]/.test(text)) {\n    throw new Error('messageContent 换行规范化失败：仍包含真实 CR/LF');\n  }\n  return text;\n}\n\nreturn items.map((item, index) => ({\n  json: {\n    ...item.json,\n    messageContent: normalizeProductDetail(item.json?.messageContent),\n  },\n  ...(item.binary ? { binary: item.binary } : {}),\n  pairedItem: item.pairedItem ?? { item: index },\n}));"
+      }
+    },
+    {
+      "id": "2f4c2c2b-08a0-4a5d-9a68-3e0c0fb5e8c4",
+      "name": "检查中文字符",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        848,
+        -80
+      ],
+      "notesInFlow": true,
+      "notes": "检测 messageContent 是否包含 Unicode Han 字符。True 进入定向俄文化修复，False 直接进入最终校验。",
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "a83330d4-74f5-49a3-a044-ed960428a954",
+              "leftValue": "={{ /[\\u3400-\\u4DBF\\u4E00-\\u9FFF\\uF900-\\uFAFF]/u.test(String($json.messageContent || '')) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "pLoryDijfFiNwKiI",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/pLoryDijfFiNwKiI",
+          "cachedResultName": "S007-v02-百炼Qwen-图文对话"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "userPrompt": "={{ $json.messageContent }}",
+            "sysPrompt": "Ты редактор русскоязычных карточек товара. Проверь переданный текст и найди все китайские иероглифы, а также смешанные китайско-русские слова. Переведи китайские фрагменты на естественный русский язык и грамматически согласуй соседние слова. Если точный смысл фрагмента определить нельзя, удали весь смешанный фрагмент и аккуратно перестрой соседнюю фразу. Не меняй остальной смысл текста, не добавляй новые свойства товара, материалы, функции, бренды или обещания. Сохрани порядок абзацев и используй между ними только буквальный разделитель \\n\\n. Верни только исправленный русский текст без пояснений, заголовков, Markdown и китайских иероглифов.",
+            "temperature": "0.2",
+            "top_p": "0.2"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "userPrompt",
+              "displayName": "userPrompt",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "sysPrompt",
+              "displayName": "sysPrompt",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "imageAdd1",
+              "displayName": "imageAdd1",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "imageAdd2",
+              "displayName": "imageAdd2",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "imageAdd3",
+              "displayName": "imageAdd3",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "temperature",
+              "displayName": "temperature",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "top_p",
+              "displayName": "top_p",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {},
+        "mode": "once"
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        1104,
+        -176
+      ],
+      "id": "7c9a8d4e-7a1c-4b3c-8c3c-5fb3e6ce45d9",
+      "name": "翻译中文残留为俄文",
+      "notesInFlow": true,
+      "notes": "仅当初次详情含中文时调用 S007。翻译中文或混合词；无法准确翻译时删除并修正邻近俄文。"
+    },
+    {
+      "id": "c0c1c9ec-b70e-4ff9-9c59-6192391f76c0",
+      "name": "最终清理中文残留",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1376,
+        -80
+      ],
+      "notesInFlow": true,
+      "notes": "保留初次生成的输出元数据，只采用当前分支的 messageContent；规范换行并删除仍残留的中文混合词。",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const items = $input.all();\nconst originalItems = $('Normalize Product Detail Newlines').all();\nconst HAN_RE = /\\p{Script=Han}/u;\nconst MIXED_HAN_TOKEN_RE = /[\\p{L}\\p{M}\\p{N}_-]*\\p{Script=Han}+[\\p{L}\\p{M}\\p{N}_-]*/gu;\n\nfunction finalizeProductDetail(value) {\n  if (typeof value !== 'string') {\n    throw new Error('俄文详情修复结果 messageContent 不是字符串');\n  }\n\n  let text = value\n    .trim()\n    .replace(/\\r\\n?/g, '\\n')\n    .replace(/\\\\r\\\\n|\\\\r|\\\\n/g, '\\n')\n    .replace(/[ \\t]*\\n+[ \\t]*/g, '\\\\n\\\\n');\n\n  if (!text) {\n    throw new Error('俄文详情修复结果 messageContent 为空');\n  }\n\n  if (HAN_RE.test(text)) {\n    text = text\n      .replace(MIXED_HAN_TOKEN_RE, '')\n      .replace(/[ \\t]{2,}/g, ' ')\n      .replace(/[ \\t]+([,.;:!?])/g, '$1')\n      .replace(/([«([{])\\s+/g, '$1')\n      .replace(/\\s+([»\\])}])/g, '$1')\n      .replace(/[ \\t]*\\\\n\\\\n[ \\t]*/g, '\\\\n\\\\n')\n      .trim();\n  }\n\n  if (!text) {\n    throw new Error('删除残留中文后 messageContent 为空');\n  }\n  if (HAN_RE.test(text)) {\n    throw new Error('messageContent 中文字符清理失败');\n  }\n  if (/[\\r\\n]/.test(text)) {\n    throw new Error('messageContent 换行规范化失败：仍包含真实 CR/LF');\n  }\n  return text;\n}\n\nreturn items.map((item, index) => {\n  const pairedIndex = Number.isInteger(item.pairedItem?.item)\n    ? item.pairedItem.item\n    : index;\n  const originalItem = originalItems[pairedIndex] ?? originalItems[index] ?? item;\n\n  return {\n    json: {\n      ...originalItem.json,\n      messageContent: finalizeProductDetail(item.json?.messageContent),\n    },\n    ...((item.binary || originalItem.binary)\n      ? { binary: item.binary || originalItem.binary }\n      : {}),\n    pairedItem: item.pairedItem ?? originalItem.pairedItem ?? { item: pairedIndex },\n  };\n});"
+      }
+    }
+  ],
+  "connections": {
+    "System Prompt": {
+      "main": [
+        [
+          {
+            "node": "Call 'S007-qwen3.7-sysPrompt-图片路径-v2'",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Global Constants",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Global Constants": {
+      "main": [
+        [
+          {
+            "node": "System Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call 'S007-qwen3.7-sysPrompt-图片路径-v2'": {
+      "main": [
+        [
+          {
+            "node": "Normalize Product Detail Newlines",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Product Detail Newlines": {
+      "main": [
+        [
+          {
+            "node": "检查中文字符",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "检查中文字符": {
+      "main": [
+        [
+          {
+            "node": "翻译中文残留为俄文",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "最终清理中文残留",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "翻译中文残留为俄文": {
+      "main": [
+        [
+          {
+            "node": "最终清理中文残留",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  }
+}

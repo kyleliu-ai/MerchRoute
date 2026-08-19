@@ -1,0 +1,1087 @@
+{
+  "id": "wzrSZDZ0wOEh8XKy",
+  "name": "WB-C001-只读预检与类目模板",
+  "active": true,
+  "nodes": [
+    {
+      "id": "1af92750-0b5d-4c7f-9fba-69e3876874d2",
+      "name": "预检说明",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -1000,
+        -620
+      ],
+      "parameters": {
+        "content": "# WB-C001 只读预检\n\n`POST /webhook/wb/v1/stores/preflight` 承接 WB上品设置发起的店铺预检，所有店铺请求通过 WB-A001/MerchRoute vault，不接收 Seller Token，并以店铺配置与凭据版本 CAS 回写报告。\n\n旧 Manual Preflight 分支暂时保留 legacy credential，仅用于 default 店铺完成 Token 迁移前的兼容验证。",
+        "width": 760,
+        "height": 420
+      }
+    },
+    {
+      "id": "a62ffb98-6136-4515-9972-03778f05dc77",
+      "name": "POST Store Preflight",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -1000,
+        520
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "wb/v1/stores/preflight",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "56f21e50-2d47-4ab2-90f3-a68cd1a17314",
+      "name": "Validate Store Preflight",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -760,
+        520
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nconst body = $input.first().json.body || {};\nconst storeId = String(body.storeId || '').trim();\nconst storeAlias = String(body.storeAlias || '').trim().toLowerCase();\nconst storeConfigVersion = Number(body.storeConfigVersion || 0);\nconst credentialVersionId = String(body.credentialVersionId || '').trim();\nconst requestRef = String(body.requestRef || '').trim();\nconst accountCurrency = String(body.accountCurrency || '').trim().toUpperCase();\nconst errors = {};\nif (!/^[a-f0-9-]{36}$/i.test(storeId)) errors.storeId = 'storeId 必须是 UUID';\nif (!/^[a-z0-9][a-z0-9-]{1,31}$/.test(storeAlias)) errors.storeAlias = 'storeAlias 格式无效';\nif (!Number.isInteger(storeConfigVersion) || storeConfigVersion < 1) errors.storeConfigVersion = 'storeConfigVersion 必须是正整数';\nif (!/^[a-f0-9-]{36}$/i.test(credentialVersionId)) errors.credentialVersionId = 'credentialVersionId 必须是 UUID';\nif (!requestRef || requestRef.length > 180 || !/^[A-Za-z0-9._:|-]+$/.test(requestRef)) errors.requestRef = 'requestRef 格式无效';\nif (accountCurrency !== 'CNY') errors.accountCurrency = 'WB 多店铺当前仅允许 CNY 账户币种';\nif (Object.keys(errors).length) return [{ json: { valid: false, httpStatus: 400, ok: false, error: 'validation_error', message: '店铺预检参数无效', details: errors } }];\nreturn [{ json: { valid: true, storeId, storeAlias, storeConfigVersion, credentialVersionId, requestRef, accountCurrency } }];\n"
+      }
+    },
+    {
+      "id": "1cdc9baf-65cb-45c4-849a-c72e8fd68ef0",
+      "name": "Store Preflight Is Valid",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -540,
+        520
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "9ea00ea5-d681-4db5-834d-2fa9e847e0ea",
+              "leftValue": "={{ $json.valid ? \"valid\" : \"invalid\" }}",
+              "rightValue": "valid",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ef1a979c-20ab-431d-8eb2-f25057846b2d",
+      "name": "Prepare Store Gateway Checks",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -320,
+        440
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nconst input = $input.first().json || {};\nconst checks = [\n  ['SELLER_INFO', {}],\n  ['SELLER_WAREHOUSES', {}],\n  ['PRICE_ACCESS_PROBE', {}],\n  ['SUBJECTS_SEARCH', { locale: 'ru', limit: 1, offset: 0, name: '' }],\n];\nreturn checks.map(([operation, payload], index) => ({ json: {\n  ...input, operation, payload, requestRef: input.requestRef + ':' + index + ':' + operation.toLowerCase(),\n}, pairedItem: { item: 0 } }));\n"
+      }
+    },
+    {
+      "id": "31f87795-ae1c-4efa-a506-2593030c2a5c",
+      "name": "Call WB-A001 Store Preflight",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        -80,
+        440
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "flPkKc0aNf1uAZ5w",
+          "mode": "list",
+          "cachedResultName": "WB-A001-多店铺API网关"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "taskId": "={{ \"\" }}",
+            "storeId": "={{ $json.storeId }}",
+            "requestRef": "={{ $json.requestRef }}",
+            "operation": "={{ $json.operation }}",
+            "payload": "={{ $json.payload }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "taskId",
+              "displayName": "taskId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "storeId",
+              "displayName": "storeId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "requestRef",
+              "displayName": "requestRef",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "operation",
+              "displayName": "operation",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "payload",
+              "displayName": "payload",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "object"
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "7c104e96-9646-426c-996e-57c1898406a1",
+      "name": "Build Store Preflight Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        180,
+        440
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nconst request = $('Validate Store Preflight').first().json || {};\nconst responses = $input.all().map((item) => item.json || {});\nconst byOperation = Object.fromEntries(responses.map((entry) => [String(entry.operation || ''), entry]));\nconst summarize = (operation) => {\n  const value = byOperation[operation] || {};\n  return { ok: value.ok === true, statusCode: Number(value.statusCode || 0), deliveryState: String(value.deliveryState || ''),\n    retryClass: String(value.retryClass || ''), error: value.error ? { code: String(value.error.code || ''), message: String(value.error.message || '').slice(0, 500) } : undefined };\n};\nconst seller = byOperation.SELLER_INFO || {};\nconst warehouse = byOperation.SELLER_WAREHOUSES || {};\nconst prices = byOperation.PRICE_ACCESS_PROBE || {};\nconst content = byOperation.SUBJECTS_SEARCH || {};\nconst sellerBody = seller.body !== undefined ? seller.body : {};\nconst warehouseBody = warehouse.body !== undefined ? warehouse.body : {};\nconst priceBody = prices.body !== undefined ? prices.body : {};\nconst warehouses = Array.isArray(warehouseBody) ? warehouseBody : (warehouseBody.warehouses || warehouseBody.data || []);\nconst goods = priceBody?.data?.listGoods || priceBody?.data?.goods || priceBody?.data || [];\nconst firstGood = Array.isArray(goods) ? goods[0] : null;\nconst sellerId = String(sellerBody?.sid || sellerBody?.data?.sid || '').trim();\nconst sellerName = String(sellerBody?.name || sellerBody?.data?.name || '').trim();\nconst checks = {\n  seller: summarize('SELLER_INFO'),\n  content: summarize('SUBJECTS_SEARCH'),\n  marketplace: summarize('SELLER_WAREHOUSES'),\n  prices: summarize('PRICE_ACCESS_PROBE'),\n};\nconst permissions = [];\nif (checks.content.ok) permissions.push('content');\nif (checks.prices.ok) permissions.push('prices');\nif (checks.marketplace.ok) permissions.push('marketplace');\nconst normalizedWarehouses = Array.isArray(warehouses) ? warehouses\n  .map((row) => ({ id: String(row?.id || row?.warehouseId || '').trim(), name: String(row?.name || '').trim() }))\n  .filter((row) => row.id) : [];\nconst observedPriceCurrency = String(firstGood?.currencyIsoCode4217 || '').trim().toUpperCase();\nconst accountCurrency = observedPriceCurrency || String(request.accountCurrency || '').trim().toUpperCase();\nconst currencyVerified = Boolean(observedPriceCurrency);\nconst allChecksOk = Object.values(checks).every((entry) => entry.ok);\nconst ok = allChecksOk && Boolean(sellerId) && permissions.length === 3 && normalizedWarehouses.length > 0 && accountCurrency === 'CNY';\nconst failures = [\n  ...Object.entries(checks).filter(([, value]) => !value.ok).map(([name]) => name + ' probe failed'),\n  ...(!sellerId ? ['sellerId missing'] : []),\n  ...(normalizedWarehouses.length ? [] : ['warehouse missing']),\n  ...(accountCurrency === 'CNY' ? [] : ['account currency must be CNY']),\n];\nconst report = {\n  ok,\n  ...(sellerId ? { sellerId } : {}),\n  ...(sellerName ? { sellerName } : {}),\n  permissions,\n  ...(accountCurrency ? { accountCurrency } : {}),\n  warehouses: normalizedWarehouses,\n  ...(!ok ? { errorCode: 'WB_STORE_PREFLIGHT_FAILED', errorMessage: failures.join('; ').slice(0, 4000) || 'WB 店铺预检未通过' } : {}),\n  checkedAt: new Date().toISOString(),\n  details: {\n    checks,\n    observedPriceCurrency: observedPriceCurrency || null,\n    currencySource: observedPriceCurrency ? 'WB_PRICE_LIST' : 'STORE_CONFIG',\n    currencyVerified,\n    currencyVerification: currencyVerified ? 'VERIFIED' : 'DEFERRED_EMPTY_CATALOG',\n  },\n};\nreturn [{ json: { ...request, report } }];\n"
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "b310b0f0-e293-4be3-af7c-2aaf1232a793",
+      "name": "Persist Store Preflight Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        440
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nasync function runtimeRequest(method, endpoint, body, timeoutMs = 30_000) {\n  const base = String($env.MERCHROUTE_RUNTIME_BASE_URL || 'http://127.0.0.1:4173').replace(/\\/+$/, '');\n  const key = String($env.MERCHROUTE_RUNTIME_KEY || '').trim();\n  if (!key) throw new Error('MERCHROUTE_RUNTIME_KEY 未配置，无法访问 MerchRoute WB runtime API');\n  const RuntimeURL = require('url').URL;\n  const target = new RuntimeURL(base + endpoint);\n  const payload = body === undefined ? '' : JSON.stringify(body);\n  const transport = target.protocol === 'https:' ? require('https') : require('http');\n  const response = await new Promise((resolve, reject) => {\n    const request = transport.request(target, {\n      method,\n      headers: {\n        'Accept': 'application/json',\n        'Content-Type': 'application/json',\n        'X-MerchRoute-Runtime-Key': key,\n        ...(payload ? { 'Content-Length': Buffer.byteLength(payload) } : {}),\n      },\n    }, (incoming) => {\n      const chunks = [];\n      let bytes = 0;\n      incoming.on('data', (chunk) => {\n        bytes += chunk.length;\n        if (bytes > 20 * 1024 * 1024) {\n          request.destroy(new Error('MerchRoute runtime API 响应超过 20 MiB 限制'));\n          return;\n        }\n        chunks.push(chunk);\n      });\n      incoming.on('end', () => resolve({\n        status: Number(incoming.statusCode || 0),\n        text: Buffer.concat(chunks).toString('utf8'),\n      }));\n    });\n    const boundedTimeoutMs = Math.max(1_000, Math.min(180_000, Number(timeoutMs) || 30_000));\n    request.setTimeout(boundedTimeoutMs, () => request.destroy(new Error('MerchRoute runtime API 请求超时')));\n    request.on('error', reject);\n    if (payload) request.write(payload);\n    request.end();\n  });\n  const text = response.text;\n  let data = {};\n  if (text) {\n    try { data = JSON.parse(text); } catch (_) { data = { raw: text }; }\n  }\n  if (response.status < 200 || response.status >= 300) {\n    const nestedError = data && typeof data.error === 'object' && data.error !== null ? data.error : {};\n    const errorValue = typeof data.error === 'string' ? data.error : '';\n    const error = new Error(String(data.message || nestedError.message || errorValue || data.code || nestedError.code || ('MerchRoute runtime API HTTP ' + response.status)));\n    error.code = String(data.code || nestedError.code || errorValue || 'RUNTIME_API_FAILED');\n    error.httpStatus = response.status;\n    error.details = data;\n    throw error;\n  }\n  return data;\n}\nfunction toItems(value) {\n  const rows = Array.isArray(value) ? value : value == null ? [] : [value];\n  return rows.map((row) => ({ json: row || {} }));\n}\nfunction migrated(name) {\n  return [{ json: { ok: false, migrated: true, error: 'MIGRATED_TO_POSTGRESQL', code: 'MIGRATED_TO_POSTGRESQL', message: name + ' 已迁移到 MerchRoute PostgreSQL runtime API' } }];\n}\nfunction runtimeFailureDetails(error) {\n  const queue = [error];\n  const seen = new Set();\n  const codes = [];\n  const messages = [];\n  const statuses = [];\n  while (queue.length && seen.size < 16) {\n    const current = queue.shift();\n    if (!current || typeof current !== 'object' || seen.has(current)) continue;\n    seen.add(current);\n    for (const key of ['code','errno','errorCode']) if (current[key] != null) codes.push(String(current[key]).toUpperCase());\n    for (const key of ['message','description']) if (current[key]) messages.push(String(current[key]));\n    for (const key of ['httpStatus','statusCode','httpCode','status']) {\n      if (current[key] == null) continue;\n      const status = Number(current[key]);\n      if (Number.isFinite(status)) statuses.push(status);\n    }\n    for (const key of ['cause','error','originalError']) {\n      if (current[key] && typeof current[key] === 'object') queue.push(current[key]);\n    }\n  }\n  return { codes, messages, statuses };\n}\nfunction isRuntimeNetworkFailure(error) {\n  const details = runtimeFailureDetails(error);\n  const retryableCodes = new Set([\n    'ETIMEDOUT','ESOCKETTIMEDOUT','ECONNRESET','ECONNABORTED','ECONNREFUSED','ENOTFOUND','EAI_AGAIN','EPIPE',\n    'UND_ERR_CONNECT_TIMEOUT','UND_ERR_HEADERS_TIMEOUT','UND_ERR_BODY_TIMEOUT','UND_ERR_SOCKET',\n  ]);\n  if (details.codes.some((code) => retryableCodes.has(code))) return true;\n  if (details.statuses.some((status) => [408, 425, 429].includes(status) || status >= 500)) return true;\n  const message = details.messages.join(' | ');\n  return /\\b(?:ETIMEDOUT|ESOCKETTIMEDOUT|ECONNRESET|ECONNABORTED|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|EPIPE|UND_ERR_CONNECT_TIMEOUT|UND_ERR_HEADERS_TIMEOUT|UND_ERR_BODY_TIMEOUT|UND_ERR_SOCKET)\\b|fetch failed|failed to fetch|timed?\\s*out|请求超时|socket hang up|temporary tls eof|network socket disconnected/i.test(message);\n}\nfunction persistentNetworkDelaySeconds(attempt) {\n  const schedule = [30, 60, 300, 900];\n  return schedule[Math.min(Math.max(1, Number(attempt || 1)), schedule.length) - 1];\n}\n\nconst value = $input.first().json || {};\nreturn (async () => {\n  const data = await runtimeRequest('POST', '/api/v1/wb/runtime/stores/' + encodeURIComponent(String(value.storeId)) + '/preflight-report', {\n    report: value.report, storeConfigVersion: Number(value.storeConfigVersion), credentialVersionId: String(value.credentialVersionId),\n  });\n  return [{ json: { httpStatus: 200, ok: true, accepted: true, storeId: value.storeId, report: data.report || value.report } }];\n})();"
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "1600bd24-e9ae-49ee-bc6d-463cfbd6a056",
+      "name": "Sanitize Store Preflight Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        620
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nconst value = $input.first().json || {};\nconst raw = value.error && typeof value.error === 'object' ? value.error : value;\nconst status = Number(raw.httpStatus || raw.statusCode || 0);\nreturn [{ json: { httpStatus: status === 409 ? 409 : 502, ok: false, accepted: false,\n  error: status === 409 ? 'store_config_changed' : 'preflight_failed',\n  message: status === 409 ? '店铺配置已变化，请重新发起预检' : 'WB 店铺预检失败，请查看任务执行记录' } }];\n"
+      }
+    },
+    {
+      "id": "94434d9b-5efe-488c-836a-532f55cb862d",
+      "name": "Respond Store Preflight",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        700,
+        520
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": "={{ Number($json.httpStatus || 500) }}",
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json; charset=utf-8"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "0ec2f20d-5cb9-4b4e-8973-6d69f43c5a68",
+      "name": "Manual Preflight",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -1000,
+        0
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "6bc8bc06-e6c3-4b37-b920-273f0d457dfd",
+      "name": "Load Preflight Config",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -780,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nasync function runtimeRequest(method, endpoint, body, timeoutMs = 30_000) {\n  const base = String($env.MERCHROUTE_RUNTIME_BASE_URL || 'http://127.0.0.1:4173').replace(/\\/+$/, '');\n  const key = String($env.MERCHROUTE_RUNTIME_KEY || '').trim();\n  if (!key) throw new Error('MERCHROUTE_RUNTIME_KEY 未配置，无法访问 MerchRoute WB runtime API');\n  const RuntimeURL = require('url').URL;\n  const target = new RuntimeURL(base + endpoint);\n  const payload = body === undefined ? '' : JSON.stringify(body);\n  const transport = target.protocol === 'https:' ? require('https') : require('http');\n  const response = await new Promise((resolve, reject) => {\n    const request = transport.request(target, {\n      method,\n      headers: {\n        'Accept': 'application/json',\n        'Content-Type': 'application/json',\n        'X-MerchRoute-Runtime-Key': key,\n        ...(payload ? { 'Content-Length': Buffer.byteLength(payload) } : {}),\n      },\n    }, (incoming) => {\n      const chunks = [];\n      let bytes = 0;\n      incoming.on('data', (chunk) => {\n        bytes += chunk.length;\n        if (bytes > 20 * 1024 * 1024) {\n          request.destroy(new Error('MerchRoute runtime API 响应超过 20 MiB 限制'));\n          return;\n        }\n        chunks.push(chunk);\n      });\n      incoming.on('end', () => resolve({\n        status: Number(incoming.statusCode || 0),\n        text: Buffer.concat(chunks).toString('utf8'),\n      }));\n    });\n    const boundedTimeoutMs = Math.max(1_000, Math.min(180_000, Number(timeoutMs) || 30_000));\n    request.setTimeout(boundedTimeoutMs, () => request.destroy(new Error('MerchRoute runtime API 请求超时')));\n    request.on('error', reject);\n    if (payload) request.write(payload);\n    request.end();\n  });\n  const text = response.text;\n  let data = {};\n  if (text) {\n    try { data = JSON.parse(text); } catch (_) { data = { raw: text }; }\n  }\n  if (response.status < 200 || response.status >= 300) {\n    const nestedError = data && typeof data.error === 'object' && data.error !== null ? data.error : {};\n    const errorValue = typeof data.error === 'string' ? data.error : '';\n    const error = new Error(String(data.message || nestedError.message || errorValue || data.code || nestedError.code || ('MerchRoute runtime API HTTP ' + response.status)));\n    error.code = String(data.code || nestedError.code || errorValue || 'RUNTIME_API_FAILED');\n    error.httpStatus = response.status;\n    error.details = data;\n    throw error;\n  }\n  return data;\n}\nfunction toItems(value) {\n  const rows = Array.isArray(value) ? value : value == null ? [] : [value];\n  return rows.map((row) => ({ json: row || {} }));\n}\nfunction migrated(name) {\n  return [{ json: { ok: false, migrated: true, error: 'MIGRATED_TO_POSTGRESQL', code: 'MIGRATED_TO_POSTGRESQL', message: name + ' 已迁移到 MerchRoute PostgreSQL runtime API' } }];\n}\nfunction runtimeFailureDetails(error) {\n  const queue = [error];\n  const seen = new Set();\n  const codes = [];\n  const messages = [];\n  const statuses = [];\n  while (queue.length && seen.size < 16) {\n    const current = queue.shift();\n    if (!current || typeof current !== 'object' || seen.has(current)) continue;\n    seen.add(current);\n    for (const key of ['code','errno','errorCode']) if (current[key] != null) codes.push(String(current[key]).toUpperCase());\n    for (const key of ['message','description']) if (current[key]) messages.push(String(current[key]));\n    for (const key of ['httpStatus','statusCode','httpCode','status']) {\n      if (current[key] == null) continue;\n      const status = Number(current[key]);\n      if (Number.isFinite(status)) statuses.push(status);\n    }\n    for (const key of ['cause','error','originalError']) {\n      if (current[key] && typeof current[key] === 'object') queue.push(current[key]);\n    }\n  }\n  return { codes, messages, statuses };\n}\nfunction isRuntimeNetworkFailure(error) {\n  const details = runtimeFailureDetails(error);\n  const retryableCodes = new Set([\n    'ETIMEDOUT','ESOCKETTIMEDOUT','ECONNRESET','ECONNABORTED','ECONNREFUSED','ENOTFOUND','EAI_AGAIN','EPIPE',\n    'UND_ERR_CONNECT_TIMEOUT','UND_ERR_HEADERS_TIMEOUT','UND_ERR_BODY_TIMEOUT','UND_ERR_SOCKET',\n  ]);\n  if (details.codes.some((code) => retryableCodes.has(code))) return true;\n  if (details.statuses.some((status) => [408, 425, 429].includes(status) || status >= 500)) return true;\n  const message = details.messages.join(' | ');\n  return /\\b(?:ETIMEDOUT|ESOCKETTIMEDOUT|ECONNRESET|ECONNABORTED|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|EPIPE|UND_ERR_CONNECT_TIMEOUT|UND_ERR_HEADERS_TIMEOUT|UND_ERR_BODY_TIMEOUT|UND_ERR_SOCKET)\\b|fetch failed|failed to fetch|timed?\\s*out|请求超时|socket hang up|temporary tls eof|network socket disconnected/i.test(message);\n}\nfunction persistentNetworkDelaySeconds(attempt) {\n  const schedule = [30, 60, 300, 900];\n  return schedule[Math.min(Math.max(1, Number(attempt || 1)), schedule.length) - 1];\n}\n\nreturn (async () => {\n  const values = {};\n  values[\"config_id\"] = \"default\";\n  if (\"wb_runtime_config\" === 'wb_runtime_config') {\n    if (\"Load Preflight Config\" === 'Load Dispatch Config') {\n      const gate = $getWorkflowStaticData('global');\n      gate.runtimeNetworkRecovery = gate.runtimeNetworkRecovery && typeof gate.runtimeNetworkRecovery === 'object'\n        ? gate.runtimeNetworkRecovery : {};\n      const recovery = gate.runtimeNetworkRecovery;\n      if (recovery.active === true && Number.isFinite(Date.parse(String(recovery.nextAttemptAt || '')))\n          && Date.parse(String(recovery.nextAttemptAt)) > Date.now()) {\n        return [{ json: { __runtimeNetworkWait: true, networkRecovery: recovery } }];\n      }\n      try {\n        const data = await runtimeRequest('GET', '/api/v1/wb/runtime/config', undefined);\n        if (recovery.active === true) {\n          gate.runtimeNetworkRecovery = {\n            ...recovery, active: false, recoveredAt: new Date().toISOString(), nextAttemptAt: null,\n          };\n        }\n        return toItems(data.config || data);\n      } catch (error) {\n        if (!isRuntimeNetworkFailure(error)) throw error;\n        const attempt = recovery.active === true ? Number(recovery.attempt || 0) + 1 : 1;\n        const delaySeconds = persistentNetworkDelaySeconds(attempt);\n        gate.runtimeNetworkRecovery = {\n          active: true, phase: 'WB_RUNTIME_CONFIG', resumeState: 'DISPATCH', attempt,\n          pauseStartedAt: recovery.pauseStartedAt || new Date().toISOString(),\n          lastFailureAt: new Date().toISOString(),\n          nextAttemptAt: new Date(Date.now() + delaySeconds * 1000).toISOString(),\n          lastErrorCode: String(error?.code || 'RUNTIME_NETWORK_ERROR'),\n          lastErrorMessage: String(error?.message || 'MerchRoute runtime API 网络不可用').slice(0, 1000),\n        };\n        return [{ json: { __runtimeNetworkWait: true, networkRecovery: gate.runtimeNetworkRecovery } }];\n      }\n    }\n    const data = await runtimeRequest('GET', '/api/v1/wb/runtime/config', undefined);\n    return toItems(data.config || data);\n  }\n  if (\"wb_runtime_config\" === 'wb_publish_jobs') {\n    if (values.task_id) {\n      try {\n        const data = await runtimeRequest('GET', '/api/v1/wb/runtime/jobs/' + encodeURIComponent(String(values.task_id)), undefined);\n        return toItems(data.job || data);\n      } catch (error) {\n        if (\"Load Preflight Config\" === 'Lookup Job Status' && Number(error.httpStatus || 0) === 404) {\n          return [{ json: { __runtimeJobNotFound: true, task_id_requested: String(values.task_id) } }];\n        }\n        throw error;\n      }\n    }\n    const params = ['pageSize=100'];\n    if (values.product_code) params.push('productCode=' + encodeURIComponent(String(values.product_code)));\n    if (values.store_id) params.push('storeId=' + encodeURIComponent(String(values.store_id)));\n    if (\"Load Preflight Config\".includes('Dispatch')) params.push('due=true');\n    const data = await runtimeRequest('GET', '/api/v1/wb/runtime/jobs?' + params.join('&'), undefined);\n    const rows = Array.isArray(data.items) ? data.items : [];\n    if (\"Load Preflight Config\" === 'Get Product Jobs' && rows.length === 0) {\n      return [{ json: { __emptyProductJobs: true } }];\n    }\n    return toItems(rows);\n  }\n  if (\"wb_runtime_config\" === 'wb_product_registry') {\n    if (!values.product_code) return [];\n    const params = ['productCode=' + encodeURIComponent(String(values.product_code))];\n    if (values.store_id) params.push('storeId=' + encodeURIComponent(String(values.store_id)));\n    const data = await runtimeRequest('GET', '/api/v1/wb/runtime/registry?' + params.join('&'), undefined);\n    return toItems(data.items || []);\n  }\n  if (\"wb_runtime_config\" === 'wb_category_templates') {\n    if (!values.category_key) return [];\n    const data = await runtimeRequest('GET', '/api/v1/wb/runtime/categories/' + encodeURIComponent(String(values.category_key)), undefined);\n    return toItems(data.category || data);\n  }\n  return migrated(\"Load Preflight Config\");\n})();"
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "id": "bf4e9042-ba71-4435-8b54-4acd8d61e0bb",
+      "name": "Load Preflight Templates",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -560,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nasync function runtimeRequest(method, endpoint, body, timeoutMs = 30_000) {\n  const base = String($env.MERCHROUTE_RUNTIME_BASE_URL || 'http://127.0.0.1:4173').replace(/\\/+$/, '');\n  const key = String($env.MERCHROUTE_RUNTIME_KEY || '').trim();\n  if (!key) throw new Error('MERCHROUTE_RUNTIME_KEY 未配置，无法访问 MerchRoute WB runtime API');\n  const RuntimeURL = require('url').URL;\n  const target = new RuntimeURL(base + endpoint);\n  const payload = body === undefined ? '' : JSON.stringify(body);\n  const transport = target.protocol === 'https:' ? require('https') : require('http');\n  const response = await new Promise((resolve, reject) => {\n    const request = transport.request(target, {\n      method,\n      headers: {\n        'Accept': 'application/json',\n        'Content-Type': 'application/json',\n        'X-MerchRoute-Runtime-Key': key,\n        ...(payload ? { 'Content-Length': Buffer.byteLength(payload) } : {}),\n      },\n    }, (incoming) => {\n      const chunks = [];\n      let bytes = 0;\n      incoming.on('data', (chunk) => {\n        bytes += chunk.length;\n        if (bytes > 20 * 1024 * 1024) {\n          request.destroy(new Error('MerchRoute runtime API 响应超过 20 MiB 限制'));\n          return;\n        }\n        chunks.push(chunk);\n      });\n      incoming.on('end', () => resolve({\n        status: Number(incoming.statusCode || 0),\n        text: Buffer.concat(chunks).toString('utf8'),\n      }));\n    });\n    const boundedTimeoutMs = Math.max(1_000, Math.min(180_000, Number(timeoutMs) || 30_000));\n    request.setTimeout(boundedTimeoutMs, () => request.destroy(new Error('MerchRoute runtime API 请求超时')));\n    request.on('error', reject);\n    if (payload) request.write(payload);\n    request.end();\n  });\n  const text = response.text;\n  let data = {};\n  if (text) {\n    try { data = JSON.parse(text); } catch (_) { data = { raw: text }; }\n  }\n  if (response.status < 200 || response.status >= 300) {\n    const nestedError = data && typeof data.error === 'object' && data.error !== null ? data.error : {};\n    const errorValue = typeof data.error === 'string' ? data.error : '';\n    const error = new Error(String(data.message || nestedError.message || errorValue || data.code || nestedError.code || ('MerchRoute runtime API HTTP ' + response.status)));\n    error.code = String(data.code || nestedError.code || errorValue || 'RUNTIME_API_FAILED');\n    error.httpStatus = response.status;\n    error.details = data;\n    throw error;\n  }\n  return data;\n}\nfunction toItems(value) {\n  const rows = Array.isArray(value) ? value : value == null ? [] : [value];\n  return rows.map((row) => ({ json: row || {} }));\n}\nfunction migrated(name) {\n  return [{ json: { ok: false, migrated: true, error: 'MIGRATED_TO_POSTGRESQL', code: 'MIGRATED_TO_POSTGRESQL', message: name + ' 已迁移到 MerchRoute PostgreSQL runtime API' } }];\n}\nfunction runtimeFailureDetails(error) {\n  const queue = [error];\n  const seen = new Set();\n  const codes = [];\n  const messages = [];\n  const statuses = [];\n  while (queue.length && seen.size < 16) {\n    const current = queue.shift();\n    if (!current || typeof current !== 'object' || seen.has(current)) continue;\n    seen.add(current);\n    for (const key of ['code','errno','errorCode']) if (current[key] != null) codes.push(String(current[key]).toUpperCase());\n    for (const key of ['message','description']) if (current[key]) messages.push(String(current[key]));\n    for (const key of ['httpStatus','statusCode','httpCode','status']) {\n      if (current[key] == null) continue;\n      const status = Number(current[key]);\n      if (Number.isFinite(status)) statuses.push(status);\n    }\n    for (const key of ['cause','error','originalError']) {\n      if (current[key] && typeof current[key] === 'object') queue.push(current[key]);\n    }\n  }\n  return { codes, messages, statuses };\n}\nfunction isRuntimeNetworkFailure(error) {\n  const details = runtimeFailureDetails(error);\n  const retryableCodes = new Set([\n    'ETIMEDOUT','ESOCKETTIMEDOUT','ECONNRESET','ECONNABORTED','ECONNREFUSED','ENOTFOUND','EAI_AGAIN','EPIPE',\n    'UND_ERR_CONNECT_TIMEOUT','UND_ERR_HEADERS_TIMEOUT','UND_ERR_BODY_TIMEOUT','UND_ERR_SOCKET',\n  ]);\n  if (details.codes.some((code) => retryableCodes.has(code))) return true;\n  if (details.statuses.some((status) => [408, 425, 429].includes(status) || status >= 500)) return true;\n  const message = details.messages.join(' | ');\n  return /\\b(?:ETIMEDOUT|ESOCKETTIMEDOUT|ECONNRESET|ECONNABORTED|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|EPIPE|UND_ERR_CONNECT_TIMEOUT|UND_ERR_HEADERS_TIMEOUT|UND_ERR_BODY_TIMEOUT|UND_ERR_SOCKET)\\b|fetch failed|failed to fetch|timed?\\s*out|请求超时|socket hang up|temporary tls eof|network socket disconnected/i.test(message);\n}\nfunction persistentNetworkDelaySeconds(attempt) {\n  const schedule = [30, 60, 300, 900];\n  return schedule[Math.min(Math.max(1, Number(attempt || 1)), schedule.length) - 1];\n}\n\nreturn (async () => {\n  const values = {};\n  values[\"id\"] = \"\";\n  if (\"wb_category_templates\" === 'wb_runtime_config') {\n    if (\"Load Preflight Templates\" === 'Load Dispatch Config') {\n      const gate = $getWorkflowStaticData('global');\n      gate.runtimeNetworkRecovery = gate.runtimeNetworkRecovery && typeof gate.runtimeNetworkRecovery === 'object'\n        ? gate.runtimeNetworkRecovery : {};\n      const recovery = gate.runtimeNetworkRecovery;\n      if (recovery.active === true && Number.isFinite(Date.parse(String(recovery.nextAttemptAt || '')))\n          && Date.parse(String(recovery.nextAttemptAt)) > Date.now()) {\n        return [{ json: { __runtimeNetworkWait: true, networkRecovery: recovery } }];\n      }\n      try {\n        const data = await runtimeRequest('GET', '/api/v1/wb/runtime/config', undefined);\n        if (recovery.active === true) {\n          gate.runtimeNetworkRecovery = {\n            ...recovery, active: false, recoveredAt: new Date().toISOString(), nextAttemptAt: null,\n          };\n        }\n        return toItems(data.config || data);\n      } catch (error) {\n        if (!isRuntimeNetworkFailure(error)) throw error;\n        const attempt = recovery.active === true ? Number(recovery.attempt || 0) + 1 : 1;\n        const delaySeconds = persistentNetworkDelaySeconds(attempt);\n        gate.runtimeNetworkRecovery = {\n          active: true, phase: 'WB_RUNTIME_CONFIG', resumeState: 'DISPATCH', attempt,\n          pauseStartedAt: recovery.pauseStartedAt || new Date().toISOString(),\n          lastFailureAt: new Date().toISOString(),\n          nextAttemptAt: new Date(Date.now() + delaySeconds * 1000).toISOString(),\n          lastErrorCode: String(error?.code || 'RUNTIME_NETWORK_ERROR'),\n          lastErrorMessage: String(error?.message || 'MerchRoute runtime API 网络不可用').slice(0, 1000),\n        };\n        return [{ json: { __runtimeNetworkWait: true, networkRecovery: gate.runtimeNetworkRecovery } }];\n      }\n    }\n    const data = await runtimeRequest('GET', '/api/v1/wb/runtime/config', undefined);\n    return toItems(data.config || data);\n  }\n  if (\"wb_category_templates\" === 'wb_publish_jobs') {\n    if (values.task_id) {\n      try {\n        const data = await runtimeRequest('GET', '/api/v1/wb/runtime/jobs/' + encodeURIComponent(String(values.task_id)), undefined);\n        return toItems(data.job || data);\n      } catch (error) {\n        if (\"Load Preflight Templates\" === 'Lookup Job Status' && Number(error.httpStatus || 0) === 404) {\n          return [{ json: { __runtimeJobNotFound: true, task_id_requested: String(values.task_id) } }];\n        }\n        throw error;\n      }\n    }\n    const params = ['pageSize=100'];\n    if (values.product_code) params.push('productCode=' + encodeURIComponent(String(values.product_code)));\n    if (values.store_id) params.push('storeId=' + encodeURIComponent(String(values.store_id)));\n    if (\"Load Preflight Templates\".includes('Dispatch')) params.push('due=true');\n    const data = await runtimeRequest('GET', '/api/v1/wb/runtime/jobs?' + params.join('&'), undefined);\n    const rows = Array.isArray(data.items) ? data.items : [];\n    if (\"Load Preflight Templates\" === 'Get Product Jobs' && rows.length === 0) {\n      return [{ json: { __emptyProductJobs: true } }];\n    }\n    return toItems(rows);\n  }\n  if (\"wb_category_templates\" === 'wb_product_registry') {\n    if (!values.product_code) return [];\n    const params = ['productCode=' + encodeURIComponent(String(values.product_code))];\n    if (values.store_id) params.push('storeId=' + encodeURIComponent(String(values.store_id)));\n    const data = await runtimeRequest('GET', '/api/v1/wb/runtime/registry?' + params.join('&'), undefined);\n    return toItems(data.items || []);\n  }\n  if (\"wb_category_templates\" === 'wb_category_templates') {\n    if (!values.category_key) return [];\n    const data = await runtimeRequest('GET', '/api/v1/wb/runtime/categories/' + encodeURIComponent(String(values.category_key)), undefined);\n    return toItems(data.category || data);\n  }\n  return migrated(\"Load Preflight Templates\");\n})();"
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "id": "9d1cb5f3-13a8-450f-9aa7-8ee7876d77e9",
+      "name": "Prepare Category Search",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -340,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nconst rows = $input.all().map((item) => item.json).filter((row) => row && row.category_key);\nreturn rows.map((template) => ({ json: { template, url: 'https://content-api.wildberries.ru/content/v2/object/all?locale=ru&limit=1000&offset=0&name=' + encodeURIComponent(String(template.search_name_ru || '')) } }));\n"
+      }
+    },
+    {
+      "id": "8937bf3a-fcd0-4da1-84a8-77ffc44506d6",
+      "name": "WB Search Subjects",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -120,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.url }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 60000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          },
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 650
+            }
+          }
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "id": "65eeb792-1dc2-4106-9438-4b48d3d10a73",
+      "name": "Analyze Subject Candidates",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        120,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nconst sources = $('Prepare Category Search').all();\nconst responses = $input.all();\nreturn responses.map((item, index) => {\n  const template = { ...sources[index].json.template };\n  const response = item.json || {};\n  const body = response.body !== undefined ? response.body : response;\n  const status = Number(response.statusCode || 200);\n  if (status >= 400 || body?.error === true) {\n    template.fetched_at = new Date().toISOString();\n    delete template.id; delete template.createdAt; delete template.updatedAt;\n    return { json: template };\n  }\n  const data = Array.isArray(body?.data) ? body.data : [];\n  const candidates = data.map((entry) => ({ subjectID: String(entry.subjectID), parentID: String(entry.parentID), subjectName: entry.subjectName, parentName: entry.parentName }));\n  if (template.status === 'READY' && template.subject_id && !candidates.some((entry) => String(entry.subjectID) === String(template.subject_id))) template.status = 'DRIFTED';\n  template.candidate_subjects_json = JSON.stringify(candidates);\n  template.fetched_at = new Date().toISOString();\n  delete template.id; delete template.createdAt; delete template.updatedAt;\n  return { json: template };\n});\n"
+      }
+    },
+    {
+      "id": "5ab15002-402f-4119-83bc-f612fb29d2b1",
+      "name": "Save Subject Candidates",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        360,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nasync function runtimeRequest(method, endpoint, body, timeoutMs = 30_000) {\n  const base = String($env.MERCHROUTE_RUNTIME_BASE_URL || 'http://127.0.0.1:4173').replace(/\\/+$/, '');\n  const key = String($env.MERCHROUTE_RUNTIME_KEY || '').trim();\n  if (!key) throw new Error('MERCHROUTE_RUNTIME_KEY 未配置，无法访问 MerchRoute WB runtime API');\n  const RuntimeURL = require('url').URL;\n  const target = new RuntimeURL(base + endpoint);\n  const payload = body === undefined ? '' : JSON.stringify(body);\n  const transport = target.protocol === 'https:' ? require('https') : require('http');\n  const response = await new Promise((resolve, reject) => {\n    const request = transport.request(target, {\n      method,\n      headers: {\n        'Accept': 'application/json',\n        'Content-Type': 'application/json',\n        'X-MerchRoute-Runtime-Key': key,\n        ...(payload ? { 'Content-Length': Buffer.byteLength(payload) } : {}),\n      },\n    }, (incoming) => {\n      const chunks = [];\n      let bytes = 0;\n      incoming.on('data', (chunk) => {\n        bytes += chunk.length;\n        if (bytes > 20 * 1024 * 1024) {\n          request.destroy(new Error('MerchRoute runtime API 响应超过 20 MiB 限制'));\n          return;\n        }\n        chunks.push(chunk);\n      });\n      incoming.on('end', () => resolve({\n        status: Number(incoming.statusCode || 0),\n        text: Buffer.concat(chunks).toString('utf8'),\n      }));\n    });\n    const boundedTimeoutMs = Math.max(1_000, Math.min(180_000, Number(timeoutMs) || 30_000));\n    request.setTimeout(boundedTimeoutMs, () => request.destroy(new Error('MerchRoute runtime API 请求超时')));\n    request.on('error', reject);\n    if (payload) request.write(payload);\n    request.end();\n  });\n  const text = response.text;\n  let data = {};\n  if (text) {\n    try { data = JSON.parse(text); } catch (_) { data = { raw: text }; }\n  }\n  if (response.status < 200 || response.status >= 300) {\n    const nestedError = data && typeof data.error === 'object' && data.error !== null ? data.error : {};\n    const errorValue = typeof data.error === 'string' ? data.error : '';\n    const error = new Error(String(data.message || nestedError.message || errorValue || data.code || nestedError.code || ('MerchRoute runtime API HTTP ' + response.status)));\n    error.code = String(data.code || nestedError.code || errorValue || 'RUNTIME_API_FAILED');\n    error.httpStatus = response.status;\n    error.details = data;\n    throw error;\n  }\n  return data;\n}\nfunction toItems(value) {\n  const rows = Array.isArray(value) ? value : value == null ? [] : [value];\n  return rows.map((row) => ({ json: row || {} }));\n}\nfunction migrated(name) {\n  return [{ json: { ok: false, migrated: true, error: 'MIGRATED_TO_POSTGRESQL', code: 'MIGRATED_TO_POSTGRESQL', message: name + ' 已迁移到 MerchRoute PostgreSQL runtime API' } }];\n}\nfunction runtimeFailureDetails(error) {\n  const queue = [error];\n  const seen = new Set();\n  const codes = [];\n  const messages = [];\n  const statuses = [];\n  while (queue.length && seen.size < 16) {\n    const current = queue.shift();\n    if (!current || typeof current !== 'object' || seen.has(current)) continue;\n    seen.add(current);\n    for (const key of ['code','errno','errorCode']) if (current[key] != null) codes.push(String(current[key]).toUpperCase());\n    for (const key of ['message','description']) if (current[key]) messages.push(String(current[key]));\n    for (const key of ['httpStatus','statusCode','httpCode','status']) {\n      if (current[key] == null) continue;\n      const status = Number(current[key]);\n      if (Number.isFinite(status)) statuses.push(status);\n    }\n    for (const key of ['cause','error','originalError']) {\n      if (current[key] && typeof current[key] === 'object') queue.push(current[key]);\n    }\n  }\n  return { codes, messages, statuses };\n}\nfunction isRuntimeNetworkFailure(error) {\n  const details = runtimeFailureDetails(error);\n  const retryableCodes = new Set([\n    'ETIMEDOUT','ESOCKETTIMEDOUT','ECONNRESET','ECONNABORTED','ECONNREFUSED','ENOTFOUND','EAI_AGAIN','EPIPE',\n    'UND_ERR_CONNECT_TIMEOUT','UND_ERR_HEADERS_TIMEOUT','UND_ERR_BODY_TIMEOUT','UND_ERR_SOCKET',\n  ]);\n  if (details.codes.some((code) => retryableCodes.has(code))) return true;\n  if (details.statuses.some((status) => [408, 425, 429].includes(status) || status >= 500)) return true;\n  const message = details.messages.join(' | ');\n  return /\\b(?:ETIMEDOUT|ESOCKETTIMEDOUT|ECONNRESET|ECONNABORTED|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|EPIPE|UND_ERR_CONNECT_TIMEOUT|UND_ERR_HEADERS_TIMEOUT|UND_ERR_BODY_TIMEOUT|UND_ERR_SOCKET)\\b|fetch failed|failed to fetch|timed?\\s*out|请求超时|socket hang up|temporary tls eof|network socket disconnected/i.test(message);\n}\nfunction persistentNetworkDelaySeconds(attempt) {\n  const schedule = [30, 60, 300, 900];\n  return schedule[Math.min(Math.max(1, Number(attempt || 1)), schedule.length) - 1];\n}\n\nreturn (async () => {\n  const $json = ($input.first()?.json || {});\n  const keyValue = (() => { const $json = ($input.first()?.json || {}); return ($json.category_key); })();\n  if (\"wb_category_templates\" === 'wb_publish_jobs') {\n    const taskId = String($json.task_id || keyValue || '').trim();\n    if (!taskId) throw new Error('task_id 必填，不能写入 WB runtime job');\n    const expectedRowVersion = Number($json.row_version || $json.rowVersion || 0);\n    if (!Number.isInteger(expectedRowVersion) || expectedRowVersion < 1) {\n      throw new Error('WB runtime job 原始 rowVersion 无效: ' + taskId);\n    }\n    try {\n      const registryRows = Array.isArray($json.__registryRows) ? $json.__registryRows : [];\n      const persistedJob = { ...$json };\n      delete persistedJob.__registryRows;\n      const data = await runtimeRequest('POST', '/api/v1/wb/runtime/jobs/' + encodeURIComponent(taskId) + '/transition', {\n        rowVersion: expectedRowVersion,\n        eventType: 'N8N_JOB_TRANSITION',\n        message: \"Save Subject Candidates\" + ' 写入 PostgreSQL runtime',\n        job: persistedJob,\n        ...(registryRows.length ? { registryRows } : {}),\n      });\n      return toItems(data.job || data);\n    } catch (error) {\n      if (Number(error?.httpStatus || 0) !== 409) throw error;\n      // 旧执行结果不得通过读取最新 rowVersion 后重放。冲突时只回读当前状态，\n      // 由调度器下一轮重新加载任务并计算；intent 冲突也不得继续调用 WB 写接口。\n      const latestData = await runtimeRequest('GET', '/api/v1/wb/runtime/jobs/' + encodeURIComponent(taskId), undefined);\n      const latest = latestData.job || latestData || {};\n      return toItems({ ...latest, __transitionConflict: true, __transitionSource: \"Save Subject Candidates\" });\n    }\n  }\n  if (\"wb_category_templates\" === 'wb_product_registry') {\n    const rows = $input.all().map((item) => item.json || {});\n    let taskId = '';\n    try { taskId = String($('Build Step').first().json.job?.task_id || ''); } catch (_) {}\n    if (!taskId) try { taskId = String($('When Executed by Another Workflow').first().json.taskId || ''); } catch (_) {}\n    if (!taskId) taskId = 'unknown';\n    const data = await runtimeRequest('POST', '/api/v1/wb/runtime/jobs/' + encodeURIComponent(taskId) + '/registry', { rows });\n    return toItems(data.items || []);\n  }\n  if (\"wb_category_templates\" === 'wb_system_errors') {\n    const data = await runtimeRequest('POST', '/api/v1/wb/runtime/errors', $json);\n    return toItems(data.error || data);\n  }\n  return migrated(\"Save Subject Candidates\");\n})();"
+      }
+    },
+    {
+      "id": "54adfdc6-7a52-4866-95c6-74ef062d573f",
+      "name": "Collapse Subject Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        580,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "return [{ json: { count: $input.all().length } }];"
+      }
+    },
+    {
+      "id": "8dbfb17e-6ea0-4bbe-84d2-2533806bd5d8",
+      "name": "Reload Templates",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        800,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nasync function runtimeRequest(method, endpoint, body, timeoutMs = 30_000) {\n  const base = String($env.MERCHROUTE_RUNTIME_BASE_URL || 'http://127.0.0.1:4173').replace(/\\/+$/, '');\n  const key = String($env.MERCHROUTE_RUNTIME_KEY || '').trim();\n  if (!key) throw new Error('MERCHROUTE_RUNTIME_KEY 未配置，无法访问 MerchRoute WB runtime API');\n  const RuntimeURL = require('url').URL;\n  const target = new RuntimeURL(base + endpoint);\n  const payload = body === undefined ? '' : JSON.stringify(body);\n  const transport = target.protocol === 'https:' ? require('https') : require('http');\n  const response = await new Promise((resolve, reject) => {\n    const request = transport.request(target, {\n      method,\n      headers: {\n        'Accept': 'application/json',\n        'Content-Type': 'application/json',\n        'X-MerchRoute-Runtime-Key': key,\n        ...(payload ? { 'Content-Length': Buffer.byteLength(payload) } : {}),\n      },\n    }, (incoming) => {\n      const chunks = [];\n      let bytes = 0;\n      incoming.on('data', (chunk) => {\n        bytes += chunk.length;\n        if (bytes > 20 * 1024 * 1024) {\n          request.destroy(new Error('MerchRoute runtime API 响应超过 20 MiB 限制'));\n          return;\n        }\n        chunks.push(chunk);\n      });\n      incoming.on('end', () => resolve({\n        status: Number(incoming.statusCode || 0),\n        text: Buffer.concat(chunks).toString('utf8'),\n      }));\n    });\n    const boundedTimeoutMs = Math.max(1_000, Math.min(180_000, Number(timeoutMs) || 30_000));\n    request.setTimeout(boundedTimeoutMs, () => request.destroy(new Error('MerchRoute runtime API 请求超时')));\n    request.on('error', reject);\n    if (payload) request.write(payload);\n    request.end();\n  });\n  const text = response.text;\n  let data = {};\n  if (text) {\n    try { data = JSON.parse(text); } catch (_) { data = { raw: text }; }\n  }\n  if (response.status < 200 || response.status >= 300) {\n    const nestedError = data && typeof data.error === 'object' && data.error !== null ? data.error : {};\n    const errorValue = typeof data.error === 'string' ? data.error : '';\n    const error = new Error(String(data.message || nestedError.message || errorValue || data.code || nestedError.code || ('MerchRoute runtime API HTTP ' + response.status)));\n    error.code = String(data.code || nestedError.code || errorValue || 'RUNTIME_API_FAILED');\n    error.httpStatus = response.status;\n    error.details = data;\n    throw error;\n  }\n  return data;\n}\nfunction toItems(value) {\n  const rows = Array.isArray(value) ? value : value == null ? [] : [value];\n  return rows.map((row) => ({ json: row || {} }));\n}\nfunction migrated(name) {\n  return [{ json: { ok: false, migrated: true, error: 'MIGRATED_TO_POSTGRESQL', code: 'MIGRATED_TO_POSTGRESQL', message: name + ' 已迁移到 MerchRoute PostgreSQL runtime API' } }];\n}\nfunction runtimeFailureDetails(error) {\n  const queue = [error];\n  const seen = new Set();\n  const codes = [];\n  const messages = [];\n  const statuses = [];\n  while (queue.length && seen.size < 16) {\n    const current = queue.shift();\n    if (!current || typeof current !== 'object' || seen.has(current)) continue;\n    seen.add(current);\n    for (const key of ['code','errno','errorCode']) if (current[key] != null) codes.push(String(current[key]).toUpperCase());\n    for (const key of ['message','description']) if (current[key]) messages.push(String(current[key]));\n    for (const key of ['httpStatus','statusCode','httpCode','status']) {\n      if (current[key] == null) continue;\n      const status = Number(current[key]);\n      if (Number.isFinite(status)) statuses.push(status);\n    }\n    for (const key of ['cause','error','originalError']) {\n      if (current[key] && typeof current[key] === 'object') queue.push(current[key]);\n    }\n  }\n  return { codes, messages, statuses };\n}\nfunction isRuntimeNetworkFailure(error) {\n  const details = runtimeFailureDetails(error);\n  const retryableCodes = new Set([\n    'ETIMEDOUT','ESOCKETTIMEDOUT','ECONNRESET','ECONNABORTED','ECONNREFUSED','ENOTFOUND','EAI_AGAIN','EPIPE',\n    'UND_ERR_CONNECT_TIMEOUT','UND_ERR_HEADERS_TIMEOUT','UND_ERR_BODY_TIMEOUT','UND_ERR_SOCKET',\n  ]);\n  if (details.codes.some((code) => retryableCodes.has(code))) return true;\n  if (details.statuses.some((status) => [408, 425, 429].includes(status) || status >= 500)) return true;\n  const message = details.messages.join(' | ');\n  return /\\b(?:ETIMEDOUT|ESOCKETTIMEDOUT|ECONNRESET|ECONNABORTED|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|EPIPE|UND_ERR_CONNECT_TIMEOUT|UND_ERR_HEADERS_TIMEOUT|UND_ERR_BODY_TIMEOUT|UND_ERR_SOCKET)\\b|fetch failed|failed to fetch|timed?\\s*out|请求超时|socket hang up|temporary tls eof|network socket disconnected/i.test(message);\n}\nfunction persistentNetworkDelaySeconds(attempt) {\n  const schedule = [30, 60, 300, 900];\n  return schedule[Math.min(Math.max(1, Number(attempt || 1)), schedule.length) - 1];\n}\n\nreturn (async () => {\n  const values = {};\n  values[\"id\"] = \"\";\n  if (\"wb_category_templates\" === 'wb_runtime_config') {\n    if (\"Reload Templates\" === 'Load Dispatch Config') {\n      const gate = $getWorkflowStaticData('global');\n      gate.runtimeNetworkRecovery = gate.runtimeNetworkRecovery && typeof gate.runtimeNetworkRecovery === 'object'\n        ? gate.runtimeNetworkRecovery : {};\n      const recovery = gate.runtimeNetworkRecovery;\n      if (recovery.active === true && Number.isFinite(Date.parse(String(recovery.nextAttemptAt || '')))\n          && Date.parse(String(recovery.nextAttemptAt)) > Date.now()) {\n        return [{ json: { __runtimeNetworkWait: true, networkRecovery: recovery } }];\n      }\n      try {\n        const data = await runtimeRequest('GET', '/api/v1/wb/runtime/config', undefined);\n        if (recovery.active === true) {\n          gate.runtimeNetworkRecovery = {\n            ...recovery, active: false, recoveredAt: new Date().toISOString(), nextAttemptAt: null,\n          };\n        }\n        return toItems(data.config || data);\n      } catch (error) {\n        if (!isRuntimeNetworkFailure(error)) throw error;\n        const attempt = recovery.active === true ? Number(recovery.attempt || 0) + 1 : 1;\n        const delaySeconds = persistentNetworkDelaySeconds(attempt);\n        gate.runtimeNetworkRecovery = {\n          active: true, phase: 'WB_RUNTIME_CONFIG', resumeState: 'DISPATCH', attempt,\n          pauseStartedAt: recovery.pauseStartedAt || new Date().toISOString(),\n          lastFailureAt: new Date().toISOString(),\n          nextAttemptAt: new Date(Date.now() + delaySeconds * 1000).toISOString(),\n          lastErrorCode: String(error?.code || 'RUNTIME_NETWORK_ERROR'),\n          lastErrorMessage: String(error?.message || 'MerchRoute runtime API 网络不可用').slice(0, 1000),\n        };\n        return [{ json: { __runtimeNetworkWait: true, networkRecovery: gate.runtimeNetworkRecovery } }];\n      }\n    }\n    const data = await runtimeRequest('GET', '/api/v1/wb/runtime/config', undefined);\n    return toItems(data.config || data);\n  }\n  if (\"wb_category_templates\" === 'wb_publish_jobs') {\n    if (values.task_id) {\n      try {\n        const data = await runtimeRequest('GET', '/api/v1/wb/runtime/jobs/' + encodeURIComponent(String(values.task_id)), undefined);\n        return toItems(data.job || data);\n      } catch (error) {\n        if (\"Reload Templates\" === 'Lookup Job Status' && Number(error.httpStatus || 0) === 404) {\n          return [{ json: { __runtimeJobNotFound: true, task_id_requested: String(values.task_id) } }];\n        }\n        throw error;\n      }\n    }\n    const params = ['pageSize=100'];\n    if (values.product_code) params.push('productCode=' + encodeURIComponent(String(values.product_code)));\n    if (values.store_id) params.push('storeId=' + encodeURIComponent(String(values.store_id)));\n    if (\"Reload Templates\".includes('Dispatch')) params.push('due=true');\n    const data = await runtimeRequest('GET', '/api/v1/wb/runtime/jobs?' + params.join('&'), undefined);\n    const rows = Array.isArray(data.items) ? data.items : [];\n    if (\"Reload Templates\" === 'Get Product Jobs' && rows.length === 0) {\n      return [{ json: { __emptyProductJobs: true } }];\n    }\n    return toItems(rows);\n  }\n  if (\"wb_category_templates\" === 'wb_product_registry') {\n    if (!values.product_code) return [];\n    const params = ['productCode=' + encodeURIComponent(String(values.product_code))];\n    if (values.store_id) params.push('storeId=' + encodeURIComponent(String(values.store_id)));\n    const data = await runtimeRequest('GET', '/api/v1/wb/runtime/registry?' + params.join('&'), undefined);\n    return toItems(data.items || []);\n  }\n  if (\"wb_category_templates\" === 'wb_category_templates') {\n    if (!values.category_key) return [];\n    const data = await runtimeRequest('GET', '/api/v1/wb/runtime/categories/' + encodeURIComponent(String(values.category_key)), undefined);\n    return toItems(data.category || data);\n  }\n  return migrated(\"Reload Templates\");\n})();"
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "id": "f89a9501-6f38-4918-8865-f9130567c21d",
+      "name": "Prepare Characteristic Queries",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1020,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nconst rows = $input.all().map((item) => item.json).filter((row) => row && row.category_key && row.subject_id);\nif (!rows.length) return [{ json: { action: 'SKIP' } }];\nreturn rows.map((template) => ({ json: { action: 'CALL', template, url: 'https://content-api.wildberries.ru/content/v2/object/charcs/' + encodeURIComponent(String(template.subject_id)) + '?locale=ru' } }));\n"
+      }
+    },
+    {
+      "id": "1c9b73d1-7c7d-432a-bf4f-1e38c550d991",
+      "name": "Has Confirmed Subject",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1240,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "63798335-b841-4de8-b7b6-2de574cbf19c",
+              "leftValue": "={{ $json.action }}",
+              "rightValue": "CALL",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "b1f8965b-4e3e-4e55-94a4-048b05841737",
+      "name": "WB Get Characteristics",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1460,
+        -120
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.url }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 60000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          },
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 650
+            }
+          }
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "id": "034ed48a-40a1-4281-9917-d24a8fd67451",
+      "name": "Analyze Characteristics",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1680,
+        -120
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nconst crypto = require('crypto');\nfunction stable(value) {\n  if (Array.isArray(value)) return '[' + value.map(stable).join(',') + ']';\n  if (value && typeof value === 'object') return '{' + Object.keys(value).sort().map((key) => JSON.stringify(key) + ':' + stable(value[key])).join(',') + '}';\n  return JSON.stringify(value);\n}\nconst sources = $('Prepare Characteristic Queries').all().filter((item) => item.json.action === 'CALL');\nfunction structuralSchema(schema) {\n  return (Array.isArray(schema) ? schema : []).map((entry) => ({\n    charcID: entry?.charcID ?? entry?.id, name: entry?.name, required: entry?.required,\n    hasFilter: entry?.hasFilter, unitName: entry?.unitName, maxCount: entry?.maxCount,\n    charcType: entry?.charcType, isVariable: entry?.isVariable, popular: entry?.popular,\n  })).sort((a,b) => Number(a.charcID || 0) - Number(b.charcID || 0));\n}\nreturn $input.all().map((item, index) => {\n  const template = { ...sources[index].json.template };\n  const response = item.json || {};\n  const body = response.body !== undefined ? response.body : response;\n  const status = Number(response.statusCode || 200);\n  if (status >= 400 || body?.error === true) {\n    template.fetched_at = new Date().toISOString();\n    delete template.id; delete template.createdAt; delete template.updatedAt;\n    return { json: template };\n  }\n  const schema = Array.isArray(body?.data) ? body.data : [];\n  const sortedSchema = schema.slice().sort((a,b) => Number(a?.charcID ?? a?.id ?? 0) - Number(b?.charcID ?? b?.id ?? 0));\n  const observedHash = 'sha256:' + crypto.createHash('sha256').update(stable(structuralSchema(sortedSchema)), 'utf8').digest('hex');\n  template.observed_schema_hash = observedHash;\n  template.observed_live_schema_json = JSON.stringify(sortedSchema);\n  if (Number(template.template_version || 1) >= 2) {\n    let projected = [];\n    try { projected = JSON.parse(template.live_schema_json || '[]'); } catch (_) {}\n    const projectedHash = 'sha256:' + crypto.createHash('sha256').update(stable(structuralSchema(projected)), 'utf8').digest('hex');\n    if (template.status === 'READY' && projectedHash !== observedHash) {\n      template.status = 'DRIFTED';\n      template.drift_detected_at = new Date().toISOString();\n    }\n  } else {\n    if (template.status === 'READY' && template.schema_hash && template.schema_hash !== observedHash) {\n      template.status = 'DRIFTED';\n      template.drift_detected_at = new Date().toISOString();\n    }\n    template.schema_hash = observedHash;\n    template.live_schema_json = JSON.stringify(sortedSchema);\n  }\n  template.fetched_at = new Date().toISOString();\n  delete template.id; delete template.createdAt; delete template.updatedAt;\n  return { json: template };\n});\n"
+      }
+    },
+    {
+      "id": "54416e48-7026-4ec0-9d46-8cbc06c8964a",
+      "name": "Save Live Schemas",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1900,
+        -120
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nasync function runtimeRequest(method, endpoint, body, timeoutMs = 30_000) {\n  const base = String($env.MERCHROUTE_RUNTIME_BASE_URL || 'http://127.0.0.1:4173').replace(/\\/+$/, '');\n  const key = String($env.MERCHROUTE_RUNTIME_KEY || '').trim();\n  if (!key) throw new Error('MERCHROUTE_RUNTIME_KEY 未配置，无法访问 MerchRoute WB runtime API');\n  const RuntimeURL = require('url').URL;\n  const target = new RuntimeURL(base + endpoint);\n  const payload = body === undefined ? '' : JSON.stringify(body);\n  const transport = target.protocol === 'https:' ? require('https') : require('http');\n  const response = await new Promise((resolve, reject) => {\n    const request = transport.request(target, {\n      method,\n      headers: {\n        'Accept': 'application/json',\n        'Content-Type': 'application/json',\n        'X-MerchRoute-Runtime-Key': key,\n        ...(payload ? { 'Content-Length': Buffer.byteLength(payload) } : {}),\n      },\n    }, (incoming) => {\n      const chunks = [];\n      let bytes = 0;\n      incoming.on('data', (chunk) => {\n        bytes += chunk.length;\n        if (bytes > 20 * 1024 * 1024) {\n          request.destroy(new Error('MerchRoute runtime API 响应超过 20 MiB 限制'));\n          return;\n        }\n        chunks.push(chunk);\n      });\n      incoming.on('end', () => resolve({\n        status: Number(incoming.statusCode || 0),\n        text: Buffer.concat(chunks).toString('utf8'),\n      }));\n    });\n    const boundedTimeoutMs = Math.max(1_000, Math.min(180_000, Number(timeoutMs) || 30_000));\n    request.setTimeout(boundedTimeoutMs, () => request.destroy(new Error('MerchRoute runtime API 请求超时')));\n    request.on('error', reject);\n    if (payload) request.write(payload);\n    request.end();\n  });\n  const text = response.text;\n  let data = {};\n  if (text) {\n    try { data = JSON.parse(text); } catch (_) { data = { raw: text }; }\n  }\n  if (response.status < 200 || response.status >= 300) {\n    const nestedError = data && typeof data.error === 'object' && data.error !== null ? data.error : {};\n    const errorValue = typeof data.error === 'string' ? data.error : '';\n    const error = new Error(String(data.message || nestedError.message || errorValue || data.code || nestedError.code || ('MerchRoute runtime API HTTP ' + response.status)));\n    error.code = String(data.code || nestedError.code || errorValue || 'RUNTIME_API_FAILED');\n    error.httpStatus = response.status;\n    error.details = data;\n    throw error;\n  }\n  return data;\n}\nfunction toItems(value) {\n  const rows = Array.isArray(value) ? value : value == null ? [] : [value];\n  return rows.map((row) => ({ json: row || {} }));\n}\nfunction migrated(name) {\n  return [{ json: { ok: false, migrated: true, error: 'MIGRATED_TO_POSTGRESQL', code: 'MIGRATED_TO_POSTGRESQL', message: name + ' 已迁移到 MerchRoute PostgreSQL runtime API' } }];\n}\nfunction runtimeFailureDetails(error) {\n  const queue = [error];\n  const seen = new Set();\n  const codes = [];\n  const messages = [];\n  const statuses = [];\n  while (queue.length && seen.size < 16) {\n    const current = queue.shift();\n    if (!current || typeof current !== 'object' || seen.has(current)) continue;\n    seen.add(current);\n    for (const key of ['code','errno','errorCode']) if (current[key] != null) codes.push(String(current[key]).toUpperCase());\n    for (const key of ['message','description']) if (current[key]) messages.push(String(current[key]));\n    for (const key of ['httpStatus','statusCode','httpCode','status']) {\n      if (current[key] == null) continue;\n      const status = Number(current[key]);\n      if (Number.isFinite(status)) statuses.push(status);\n    }\n    for (const key of ['cause','error','originalError']) {\n      if (current[key] && typeof current[key] === 'object') queue.push(current[key]);\n    }\n  }\n  return { codes, messages, statuses };\n}\nfunction isRuntimeNetworkFailure(error) {\n  const details = runtimeFailureDetails(error);\n  const retryableCodes = new Set([\n    'ETIMEDOUT','ESOCKETTIMEDOUT','ECONNRESET','ECONNABORTED','ECONNREFUSED','ENOTFOUND','EAI_AGAIN','EPIPE',\n    'UND_ERR_CONNECT_TIMEOUT','UND_ERR_HEADERS_TIMEOUT','UND_ERR_BODY_TIMEOUT','UND_ERR_SOCKET',\n  ]);\n  if (details.codes.some((code) => retryableCodes.has(code))) return true;\n  if (details.statuses.some((status) => [408, 425, 429].includes(status) || status >= 500)) return true;\n  const message = details.messages.join(' | ');\n  return /\\b(?:ETIMEDOUT|ESOCKETTIMEDOUT|ECONNRESET|ECONNABORTED|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|EPIPE|UND_ERR_CONNECT_TIMEOUT|UND_ERR_HEADERS_TIMEOUT|UND_ERR_BODY_TIMEOUT|UND_ERR_SOCKET)\\b|fetch failed|failed to fetch|timed?\\s*out|请求超时|socket hang up|temporary tls eof|network socket disconnected/i.test(message);\n}\nfunction persistentNetworkDelaySeconds(attempt) {\n  const schedule = [30, 60, 300, 900];\n  return schedule[Math.min(Math.max(1, Number(attempt || 1)), schedule.length) - 1];\n}\n\nreturn (async () => {\n  const $json = ($input.first()?.json || {});\n  const keyValue = (() => { const $json = ($input.first()?.json || {}); return ($json.category_key); })();\n  if (\"wb_category_templates\" === 'wb_publish_jobs') {\n    const taskId = String($json.task_id || keyValue || '').trim();\n    if (!taskId) throw new Error('task_id 必填，不能写入 WB runtime job');\n    const expectedRowVersion = Number($json.row_version || $json.rowVersion || 0);\n    if (!Number.isInteger(expectedRowVersion) || expectedRowVersion < 1) {\n      throw new Error('WB runtime job 原始 rowVersion 无效: ' + taskId);\n    }\n    try {\n      const registryRows = Array.isArray($json.__registryRows) ? $json.__registryRows : [];\n      const persistedJob = { ...$json };\n      delete persistedJob.__registryRows;\n      const data = await runtimeRequest('POST', '/api/v1/wb/runtime/jobs/' + encodeURIComponent(taskId) + '/transition', {\n        rowVersion: expectedRowVersion,\n        eventType: 'N8N_JOB_TRANSITION',\n        message: \"Save Live Schemas\" + ' 写入 PostgreSQL runtime',\n        job: persistedJob,\n        ...(registryRows.length ? { registryRows } : {}),\n      });\n      return toItems(data.job || data);\n    } catch (error) {\n      if (Number(error?.httpStatus || 0) !== 409) throw error;\n      // 旧执行结果不得通过读取最新 rowVersion 后重放。冲突时只回读当前状态，\n      // 由调度器下一轮重新加载任务并计算；intent 冲突也不得继续调用 WB 写接口。\n      const latestData = await runtimeRequest('GET', '/api/v1/wb/runtime/jobs/' + encodeURIComponent(taskId), undefined);\n      const latest = latestData.job || latestData || {};\n      return toItems({ ...latest, __transitionConflict: true, __transitionSource: \"Save Live Schemas\" });\n    }\n  }\n  if (\"wb_category_templates\" === 'wb_product_registry') {\n    const rows = $input.all().map((item) => item.json || {});\n    let taskId = '';\n    try { taskId = String($('Build Step').first().json.job?.task_id || ''); } catch (_) {}\n    if (!taskId) try { taskId = String($('When Executed by Another Workflow').first().json.taskId || ''); } catch (_) {}\n    if (!taskId) taskId = 'unknown';\n    const data = await runtimeRequest('POST', '/api/v1/wb/runtime/jobs/' + encodeURIComponent(taskId) + '/registry', { rows });\n    return toItems(data.items || []);\n  }\n  if (\"wb_category_templates\" === 'wb_system_errors') {\n    const data = await runtimeRequest('POST', '/api/v1/wb/runtime/errors', $json);\n    return toItems(data.error || data);\n  }\n  return migrated(\"Save Live Schemas\");\n})();"
+      }
+    },
+    {
+      "id": "de9875f7-9e15-4c2a-a81c-7dc40e4c3867",
+      "name": "Collapse Schema Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2120,
+        -120
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "return [{ json: { count: $input.all().length } }];"
+      }
+    },
+    {
+      "id": "61a6f0cb-0e34-4a97-b558-ce755a2a925e",
+      "name": "No Confirmed Subject Yet",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1680,
+        140
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "return [{ json: { skipped: true } }];"
+      }
+    },
+    {
+      "id": "061c1b9e-0046-483f-a0ce-23c965623383",
+      "name": "Reload Templates for Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2340,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nasync function runtimeRequest(method, endpoint, body, timeoutMs = 30_000) {\n  const base = String($env.MERCHROUTE_RUNTIME_BASE_URL || 'http://127.0.0.1:4173').replace(/\\/+$/, '');\n  const key = String($env.MERCHROUTE_RUNTIME_KEY || '').trim();\n  if (!key) throw new Error('MERCHROUTE_RUNTIME_KEY 未配置，无法访问 MerchRoute WB runtime API');\n  const RuntimeURL = require('url').URL;\n  const target = new RuntimeURL(base + endpoint);\n  const payload = body === undefined ? '' : JSON.stringify(body);\n  const transport = target.protocol === 'https:' ? require('https') : require('http');\n  const response = await new Promise((resolve, reject) => {\n    const request = transport.request(target, {\n      method,\n      headers: {\n        'Accept': 'application/json',\n        'Content-Type': 'application/json',\n        'X-MerchRoute-Runtime-Key': key,\n        ...(payload ? { 'Content-Length': Buffer.byteLength(payload) } : {}),\n      },\n    }, (incoming) => {\n      const chunks = [];\n      let bytes = 0;\n      incoming.on('data', (chunk) => {\n        bytes += chunk.length;\n        if (bytes > 20 * 1024 * 1024) {\n          request.destroy(new Error('MerchRoute runtime API 响应超过 20 MiB 限制'));\n          return;\n        }\n        chunks.push(chunk);\n      });\n      incoming.on('end', () => resolve({\n        status: Number(incoming.statusCode || 0),\n        text: Buffer.concat(chunks).toString('utf8'),\n      }));\n    });\n    const boundedTimeoutMs = Math.max(1_000, Math.min(180_000, Number(timeoutMs) || 30_000));\n    request.setTimeout(boundedTimeoutMs, () => request.destroy(new Error('MerchRoute runtime API 请求超时')));\n    request.on('error', reject);\n    if (payload) request.write(payload);\n    request.end();\n  });\n  const text = response.text;\n  let data = {};\n  if (text) {\n    try { data = JSON.parse(text); } catch (_) { data = { raw: text }; }\n  }\n  if (response.status < 200 || response.status >= 300) {\n    const nestedError = data && typeof data.error === 'object' && data.error !== null ? data.error : {};\n    const errorValue = typeof data.error === 'string' ? data.error : '';\n    const error = new Error(String(data.message || nestedError.message || errorValue || data.code || nestedError.code || ('MerchRoute runtime API HTTP ' + response.status)));\n    error.code = String(data.code || nestedError.code || errorValue || 'RUNTIME_API_FAILED');\n    error.httpStatus = response.status;\n    error.details = data;\n    throw error;\n  }\n  return data;\n}\nfunction toItems(value) {\n  const rows = Array.isArray(value) ? value : value == null ? [] : [value];\n  return rows.map((row) => ({ json: row || {} }));\n}\nfunction migrated(name) {\n  return [{ json: { ok: false, migrated: true, error: 'MIGRATED_TO_POSTGRESQL', code: 'MIGRATED_TO_POSTGRESQL', message: name + ' 已迁移到 MerchRoute PostgreSQL runtime API' } }];\n}\nfunction runtimeFailureDetails(error) {\n  const queue = [error];\n  const seen = new Set();\n  const codes = [];\n  const messages = [];\n  const statuses = [];\n  while (queue.length && seen.size < 16) {\n    const current = queue.shift();\n    if (!current || typeof current !== 'object' || seen.has(current)) continue;\n    seen.add(current);\n    for (const key of ['code','errno','errorCode']) if (current[key] != null) codes.push(String(current[key]).toUpperCase());\n    for (const key of ['message','description']) if (current[key]) messages.push(String(current[key]));\n    for (const key of ['httpStatus','statusCode','httpCode','status']) {\n      if (current[key] == null) continue;\n      const status = Number(current[key]);\n      if (Number.isFinite(status)) statuses.push(status);\n    }\n    for (const key of ['cause','error','originalError']) {\n      if (current[key] && typeof current[key] === 'object') queue.push(current[key]);\n    }\n  }\n  return { codes, messages, statuses };\n}\nfunction isRuntimeNetworkFailure(error) {\n  const details = runtimeFailureDetails(error);\n  const retryableCodes = new Set([\n    'ETIMEDOUT','ESOCKETTIMEDOUT','ECONNRESET','ECONNABORTED','ECONNREFUSED','ENOTFOUND','EAI_AGAIN','EPIPE',\n    'UND_ERR_CONNECT_TIMEOUT','UND_ERR_HEADERS_TIMEOUT','UND_ERR_BODY_TIMEOUT','UND_ERR_SOCKET',\n  ]);\n  if (details.codes.some((code) => retryableCodes.has(code))) return true;\n  if (details.statuses.some((status) => [408, 425, 429].includes(status) || status >= 500)) return true;\n  const message = details.messages.join(' | ');\n  return /\\b(?:ETIMEDOUT|ESOCKETTIMEDOUT|ECONNRESET|ECONNABORTED|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|EPIPE|UND_ERR_CONNECT_TIMEOUT|UND_ERR_HEADERS_TIMEOUT|UND_ERR_BODY_TIMEOUT|UND_ERR_SOCKET)\\b|fetch failed|failed to fetch|timed?\\s*out|请求超时|socket hang up|temporary tls eof|network socket disconnected/i.test(message);\n}\nfunction persistentNetworkDelaySeconds(attempt) {\n  const schedule = [30, 60, 300, 900];\n  return schedule[Math.min(Math.max(1, Number(attempt || 1)), schedule.length) - 1];\n}\n\nreturn (async () => {\n  const values = {};\n  values[\"id\"] = \"\";\n  if (\"wb_category_templates\" === 'wb_runtime_config') {\n    if (\"Reload Templates for Report\" === 'Load Dispatch Config') {\n      const gate = $getWorkflowStaticData('global');\n      gate.runtimeNetworkRecovery = gate.runtimeNetworkRecovery && typeof gate.runtimeNetworkRecovery === 'object'\n        ? gate.runtimeNetworkRecovery : {};\n      const recovery = gate.runtimeNetworkRecovery;\n      if (recovery.active === true && Number.isFinite(Date.parse(String(recovery.nextAttemptAt || '')))\n          && Date.parse(String(recovery.nextAttemptAt)) > Date.now()) {\n        return [{ json: { __runtimeNetworkWait: true, networkRecovery: recovery } }];\n      }\n      try {\n        const data = await runtimeRequest('GET', '/api/v1/wb/runtime/config', undefined);\n        if (recovery.active === true) {\n          gate.runtimeNetworkRecovery = {\n            ...recovery, active: false, recoveredAt: new Date().toISOString(), nextAttemptAt: null,\n          };\n        }\n        return toItems(data.config || data);\n      } catch (error) {\n        if (!isRuntimeNetworkFailure(error)) throw error;\n        const attempt = recovery.active === true ? Number(recovery.attempt || 0) + 1 : 1;\n        const delaySeconds = persistentNetworkDelaySeconds(attempt);\n        gate.runtimeNetworkRecovery = {\n          active: true, phase: 'WB_RUNTIME_CONFIG', resumeState: 'DISPATCH', attempt,\n          pauseStartedAt: recovery.pauseStartedAt || new Date().toISOString(),\n          lastFailureAt: new Date().toISOString(),\n          nextAttemptAt: new Date(Date.now() + delaySeconds * 1000).toISOString(),\n          lastErrorCode: String(error?.code || 'RUNTIME_NETWORK_ERROR'),\n          lastErrorMessage: String(error?.message || 'MerchRoute runtime API 网络不可用').slice(0, 1000),\n        };\n        return [{ json: { __runtimeNetworkWait: true, networkRecovery: gate.runtimeNetworkRecovery } }];\n      }\n    }\n    const data = await runtimeRequest('GET', '/api/v1/wb/runtime/config', undefined);\n    return toItems(data.config || data);\n  }\n  if (\"wb_category_templates\" === 'wb_publish_jobs') {\n    if (values.task_id) {\n      try {\n        const data = await runtimeRequest('GET', '/api/v1/wb/runtime/jobs/' + encodeURIComponent(String(values.task_id)), undefined);\n        return toItems(data.job || data);\n      } catch (error) {\n        if (\"Reload Templates for Report\" === 'Lookup Job Status' && Number(error.httpStatus || 0) === 404) {\n          return [{ json: { __runtimeJobNotFound: true, task_id_requested: String(values.task_id) } }];\n        }\n        throw error;\n      }\n    }\n    const params = ['pageSize=100'];\n    if (values.product_code) params.push('productCode=' + encodeURIComponent(String(values.product_code)));\n    if (values.store_id) params.push('storeId=' + encodeURIComponent(String(values.store_id)));\n    if (\"Reload Templates for Report\".includes('Dispatch')) params.push('due=true');\n    const data = await runtimeRequest('GET', '/api/v1/wb/runtime/jobs?' + params.join('&'), undefined);\n    const rows = Array.isArray(data.items) ? data.items : [];\n    if (\"Reload Templates for Report\" === 'Get Product Jobs' && rows.length === 0) {\n      return [{ json: { __emptyProductJobs: true } }];\n    }\n    return toItems(rows);\n  }\n  if (\"wb_category_templates\" === 'wb_product_registry') {\n    if (!values.product_code) return [];\n    const params = ['productCode=' + encodeURIComponent(String(values.product_code))];\n    if (values.store_id) params.push('storeId=' + encodeURIComponent(String(values.store_id)));\n    const data = await runtimeRequest('GET', '/api/v1/wb/runtime/registry?' + params.join('&'), undefined);\n    return toItems(data.items || []);\n  }\n  if (\"wb_category_templates\" === 'wb_category_templates') {\n    if (!values.category_key) return [];\n    const data = await runtimeRequest('GET', '/api/v1/wb/runtime/categories/' + encodeURIComponent(String(values.category_key)), undefined);\n    return toItems(data.category || data);\n  }\n  return migrated(\"Reload Templates for Report\");\n})();"
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "id": "3c49b9c5-0839-44c6-a896-417297a02ffd",
+      "name": "WB List Seller Warehouses",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2560,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://marketplace-api.wildberries.ru/api/v3/warehouses",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 60000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          },
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 650
+            }
+          }
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "id": "6ed509ee-5b2d-4161-a101-a03ac950580c",
+      "name": "WB Probe Price Access",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2780,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://discounts-prices-api.wildberries.ru/api/v2/list/goods/filter?limit=1&offset=0",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 60000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          },
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 650
+            }
+          }
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "id": "9c5f7ff3-a95c-4ff2-95ae-c8c5ea0e89ae",
+      "name": "Build Preflight Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3000,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nconst original = $('Load Preflight Config').first().json || {};\nconst warehouseResponse = $('WB List Seller Warehouses').first().json || {};\nconst priceResponse = $('WB Probe Price Access').first().json || {};\nconst warehouseBody = warehouseResponse.body !== undefined ? warehouseResponse.body : warehouseResponse;\nconst priceBody = priceResponse.body !== undefined ? priceResponse.body : priceResponse;\nconst warehouses = Array.isArray(warehouseBody) ? warehouseBody : (warehouseBody.warehouses || warehouseBody.data || []);\nconst selectedWarehouse = (Array.isArray(warehouses) ? warehouses : []).find((row) => String(row.id) === String(original.warehouse_id || ''));\nconst goods = priceBody?.data?.listGoods || priceBody?.data?.goods || priceBody?.data || [];\nconst firstGood = Array.isArray(goods) ? goods[0] : null;\nconst templates = $('Reload Templates for Report').all().map((item) => item.json).filter((row) => row && row.category_key).map((row) => ({\n  categoryKey: row.category_key, status: row.status, enabled: Boolean(row.enabled), projectionStatus: row.projection_status,\n  templateVersion: Number(row.template_version || 1), subjectId: row.subject_id, subjectName: row.subject_name,\n  schemaHash: row.schema_hash, observedSchemaHash: row.observed_schema_hash || '', driftDetectedAt: row.drift_detected_at || null,\n  confirmedAt: row.confirmed_at || null, confirmedBy: row.confirmed_by || '',\n}));\nconst contentResponses = $('WB Search Subjects').all().map((item) => item.json || {});\nconst contentAccess = contentResponses.length > 0 && contentResponses.every((response) => Number(response.statusCode || 200) < 400 && (response.body?.error !== true));\nconst marketplaceAccess = Number(warehouseResponse.statusCode || 200) < 400;\nconst priceAccess = Number(priceResponse.statusCode || 200) < 400;\nconst configuredMediaBatchSize = Number(original.media_batch_size ?? 7);\nconst configuredMediaIntervalMs = Number(original.media_upload_interval_ms ?? 650);\nconst mediaConfigValid = Number.isInteger(configuredMediaBatchSize) && configuredMediaBatchSize >= 1 && configuredMediaBatchSize <= 7\n  && Number.isInteger(configuredMediaIntervalMs) && configuredMediaIntervalMs >= 650;\nconst mediaBatchSize = Math.max(1, Math.min(7, Math.trunc(configuredMediaBatchSize || 7)));\nconst mediaUploadIntervalMs = Math.max(650, Math.trunc(configuredMediaIntervalMs || 650));\nconst videoOptimizeEnabled = original.video_optimize_enabled == null ? true : Boolean(original.video_optimize_enabled);\nconst videoOptimizeThresholdBytes = Math.max(1024 * 1024, Math.min(49 * 1024 * 1024, Math.trunc(Number(original.video_optimize_threshold_bytes) || 5 * 1024 * 1024)));\nconst videoOptimizeTargetKbps = Math.max(500, Math.min(5000, Math.trunc(Number(original.video_optimize_target_kbps) || 1500)));\nconst videoOptimizeMaxrateKbps = Math.max(videoOptimizeTargetKbps, Math.min(6000, Math.trunc(Number(original.video_optimize_maxrate_kbps) || 1800)));\nconst videoConfigValid = Number.isInteger(Number(original.video_optimize_threshold_bytes ?? 5 * 1024 * 1024))\n  && Number(original.video_optimize_threshold_bytes ?? 5 * 1024 * 1024) >= 1024 * 1024\n  && Number(original.video_optimize_threshold_bytes ?? 5 * 1024 * 1024) <= 49 * 1024 * 1024\n  && Number.isInteger(Number(original.video_optimize_target_kbps ?? 1500))\n  && Number(original.video_optimize_target_kbps ?? 1500) >= 500 && Number(original.video_optimize_target_kbps ?? 1500) <= 5000\n  && Number.isInteger(Number(original.video_optimize_maxrate_kbps ?? 1800))\n  && Number(original.video_optimize_maxrate_kbps ?? 1800) >= Number(original.video_optimize_target_kbps ?? 1500)\n  && Number(original.video_optimize_maxrate_kbps ?? 1800) <= 6000;\nconst report = {\n  checkedAt: new Date().toISOString(),\n  contentAccess,\n  marketplaceAccess,\n  priceAccess,\n  warehouseConfigured: Boolean(selectedWarehouse),\n  selectedWarehouse: selectedWarehouse ? { id: String(selectedWarehouse.id), name: selectedWarehouse.name, isDeleting: selectedWarehouse.isDeleting, isProcessing: selectedWarehouse.isProcessing } : null,\n  observedPriceCurrency: firstGood?.currencyIsoCode4217 || null,\n  expectedPriceCurrency: original.price_currency_expected || 'CNY',\n  mediaConfig: { valid: mediaConfigValid, batchSize: configuredMediaBatchSize, uploadIntervalMs: configuredMediaIntervalMs },\n  videoOptimizationConfig: {\n    valid: videoConfigValid, enabled: videoOptimizeEnabled, thresholdBytes: videoOptimizeThresholdBytes,\n    targetKbps: videoOptimizeTargetKbps, maxrateKbps: videoOptimizeMaxrateKbps,\n  },\n  templates,\n  readyForEnable: contentAccess && marketplaceAccess && priceAccess && Boolean(selectedWarehouse) && mediaConfigValid && videoConfigValid && templates.every((row) =>\n    row.status === 'READY' && row.enabled && row.subjectId && row.schemaHash && row.confirmedAt && row.confirmedBy\n    && (row.templateVersion < 2 || row.projectionStatus === 'SYNCED')),\n  note: '本工作流不会自动把 credential_ready/publish_enabled 改为 true；需人工确认类目表单投影、TNVED/KIZ、仓库、币种及媒体批次配置。',\n};\nconst row = {\n  config_id: 'default', schema_version: Number(original.schema_version || 1), config_version: Number(original.config_version || 1),\n  publish_enabled: Boolean(original.publish_enabled), credential_ready: Boolean(original.credential_ready),\n  import_root: String(original.import_root || ''), warehouse_id: String(original.warehouse_id || ''), timezone: String(original.timezone || 'Asia/Shanghai'),\n  dispatch_batch_size: Number(original.dispatch_batch_size || 1),\n  dispatch_concurrency: Math.max(1, Math.min(20, Math.trunc(Number(original.dispatch_concurrency || 1)))),\n  global_concurrency: Math.max(1, Math.min(2, Math.trunc(Number(original.global_concurrency || 2)))),\n  per_store_concurrency: 1,\n  media_batch_size: mediaBatchSize, media_upload_interval_ms: mediaUploadIntervalMs,\n  video_optimize_enabled: videoOptimizeEnabled, video_optimize_threshold_bytes: videoOptimizeThresholdBytes,\n  video_optimize_target_kbps: videoOptimizeTargetKbps, video_optimize_maxrate_kbps: videoOptimizeMaxrateKbps,\n  lock_ttl_seconds: Number(original.lock_ttl_seconds || 600),\n  max_daily_styles: Number(original.max_daily_styles || 100), price_currency_expected: String(original.price_currency_expected || 'CNY'),\n  preflight_report_json: JSON.stringify(report), updated_at: new Date().toISOString(),\n};\nreturn [{ json: row }];\n"
+      }
+    },
+    {
+      "id": "0debd6e5-263b-4c4b-9897-632cb00ca77c",
+      "name": "Save Preflight Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3220,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nasync function runtimeRequest(method, endpoint, body, timeoutMs = 30_000) {\n  const base = String($env.MERCHROUTE_RUNTIME_BASE_URL || 'http://127.0.0.1:4173').replace(/\\/+$/, '');\n  const key = String($env.MERCHROUTE_RUNTIME_KEY || '').trim();\n  if (!key) throw new Error('MERCHROUTE_RUNTIME_KEY 未配置，无法访问 MerchRoute WB runtime API');\n  const RuntimeURL = require('url').URL;\n  const target = new RuntimeURL(base + endpoint);\n  const payload = body === undefined ? '' : JSON.stringify(body);\n  const transport = target.protocol === 'https:' ? require('https') : require('http');\n  const response = await new Promise((resolve, reject) => {\n    const request = transport.request(target, {\n      method,\n      headers: {\n        'Accept': 'application/json',\n        'Content-Type': 'application/json',\n        'X-MerchRoute-Runtime-Key': key,\n        ...(payload ? { 'Content-Length': Buffer.byteLength(payload) } : {}),\n      },\n    }, (incoming) => {\n      const chunks = [];\n      let bytes = 0;\n      incoming.on('data', (chunk) => {\n        bytes += chunk.length;\n        if (bytes > 20 * 1024 * 1024) {\n          request.destroy(new Error('MerchRoute runtime API 响应超过 20 MiB 限制'));\n          return;\n        }\n        chunks.push(chunk);\n      });\n      incoming.on('end', () => resolve({\n        status: Number(incoming.statusCode || 0),\n        text: Buffer.concat(chunks).toString('utf8'),\n      }));\n    });\n    const boundedTimeoutMs = Math.max(1_000, Math.min(180_000, Number(timeoutMs) || 30_000));\n    request.setTimeout(boundedTimeoutMs, () => request.destroy(new Error('MerchRoute runtime API 请求超时')));\n    request.on('error', reject);\n    if (payload) request.write(payload);\n    request.end();\n  });\n  const text = response.text;\n  let data = {};\n  if (text) {\n    try { data = JSON.parse(text); } catch (_) { data = { raw: text }; }\n  }\n  if (response.status < 200 || response.status >= 300) {\n    const nestedError = data && typeof data.error === 'object' && data.error !== null ? data.error : {};\n    const errorValue = typeof data.error === 'string' ? data.error : '';\n    const error = new Error(String(data.message || nestedError.message || errorValue || data.code || nestedError.code || ('MerchRoute runtime API HTTP ' + response.status)));\n    error.code = String(data.code || nestedError.code || errorValue || 'RUNTIME_API_FAILED');\n    error.httpStatus = response.status;\n    error.details = data;\n    throw error;\n  }\n  return data;\n}\nfunction toItems(value) {\n  const rows = Array.isArray(value) ? value : value == null ? [] : [value];\n  return rows.map((row) => ({ json: row || {} }));\n}\nfunction migrated(name) {\n  return [{ json: { ok: false, migrated: true, error: 'MIGRATED_TO_POSTGRESQL', code: 'MIGRATED_TO_POSTGRESQL', message: name + ' 已迁移到 MerchRoute PostgreSQL runtime API' } }];\n}\nfunction runtimeFailureDetails(error) {\n  const queue = [error];\n  const seen = new Set();\n  const codes = [];\n  const messages = [];\n  const statuses = [];\n  while (queue.length && seen.size < 16) {\n    const current = queue.shift();\n    if (!current || typeof current !== 'object' || seen.has(current)) continue;\n    seen.add(current);\n    for (const key of ['code','errno','errorCode']) if (current[key] != null) codes.push(String(current[key]).toUpperCase());\n    for (const key of ['message','description']) if (current[key]) messages.push(String(current[key]));\n    for (const key of ['httpStatus','statusCode','httpCode','status']) {\n      if (current[key] == null) continue;\n      const status = Number(current[key]);\n      if (Number.isFinite(status)) statuses.push(status);\n    }\n    for (const key of ['cause','error','originalError']) {\n      if (current[key] && typeof current[key] === 'object') queue.push(current[key]);\n    }\n  }\n  return { codes, messages, statuses };\n}\nfunction isRuntimeNetworkFailure(error) {\n  const details = runtimeFailureDetails(error);\n  const retryableCodes = new Set([\n    'ETIMEDOUT','ESOCKETTIMEDOUT','ECONNRESET','ECONNABORTED','ECONNREFUSED','ENOTFOUND','EAI_AGAIN','EPIPE',\n    'UND_ERR_CONNECT_TIMEOUT','UND_ERR_HEADERS_TIMEOUT','UND_ERR_BODY_TIMEOUT','UND_ERR_SOCKET',\n  ]);\n  if (details.codes.some((code) => retryableCodes.has(code))) return true;\n  if (details.statuses.some((status) => [408, 425, 429].includes(status) || status >= 500)) return true;\n  const message = details.messages.join(' | ');\n  return /\\b(?:ETIMEDOUT|ESOCKETTIMEDOUT|ECONNRESET|ECONNABORTED|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|EPIPE|UND_ERR_CONNECT_TIMEOUT|UND_ERR_HEADERS_TIMEOUT|UND_ERR_BODY_TIMEOUT|UND_ERR_SOCKET)\\b|fetch failed|failed to fetch|timed?\\s*out|请求超时|socket hang up|temporary tls eof|network socket disconnected/i.test(message);\n}\nfunction persistentNetworkDelaySeconds(attempt) {\n  const schedule = [30, 60, 300, 900];\n  return schedule[Math.min(Math.max(1, Number(attempt || 1)), schedule.length) - 1];\n}\n\nreturn (async () => {\n  const $json = ($input.first()?.json || {});\n  const keyValue = (() => { const $json = ($input.first()?.json || {}); return ($json.config_id); })();\n  if (\"wb_runtime_config\" === 'wb_publish_jobs') {\n    const taskId = String($json.task_id || keyValue || '').trim();\n    if (!taskId) throw new Error('task_id 必填，不能写入 WB runtime job');\n    const expectedRowVersion = Number($json.row_version || $json.rowVersion || 0);\n    if (!Number.isInteger(expectedRowVersion) || expectedRowVersion < 1) {\n      throw new Error('WB runtime job 原始 rowVersion 无效: ' + taskId);\n    }\n    try {\n      const registryRows = Array.isArray($json.__registryRows) ? $json.__registryRows : [];\n      const persistedJob = { ...$json };\n      delete persistedJob.__registryRows;\n      const data = await runtimeRequest('POST', '/api/v1/wb/runtime/jobs/' + encodeURIComponent(taskId) + '/transition', {\n        rowVersion: expectedRowVersion,\n        eventType: 'N8N_JOB_TRANSITION',\n        message: \"Save Preflight Report\" + ' 写入 PostgreSQL runtime',\n        job: persistedJob,\n        ...(registryRows.length ? { registryRows } : {}),\n      });\n      return toItems(data.job || data);\n    } catch (error) {\n      if (Number(error?.httpStatus || 0) !== 409) throw error;\n      // 旧执行结果不得通过读取最新 rowVersion 后重放。冲突时只回读当前状态，\n      // 由调度器下一轮重新加载任务并计算；intent 冲突也不得继续调用 WB 写接口。\n      const latestData = await runtimeRequest('GET', '/api/v1/wb/runtime/jobs/' + encodeURIComponent(taskId), undefined);\n      const latest = latestData.job || latestData || {};\n      return toItems({ ...latest, __transitionConflict: true, __transitionSource: \"Save Preflight Report\" });\n    }\n  }\n  if (\"wb_runtime_config\" === 'wb_product_registry') {\n    const rows = $input.all().map((item) => item.json || {});\n    let taskId = '';\n    try { taskId = String($('Build Step').first().json.job?.task_id || ''); } catch (_) {}\n    if (!taskId) try { taskId = String($('When Executed by Another Workflow').first().json.taskId || ''); } catch (_) {}\n    if (!taskId) taskId = 'unknown';\n    const data = await runtimeRequest('POST', '/api/v1/wb/runtime/jobs/' + encodeURIComponent(taskId) + '/registry', { rows });\n    return toItems(data.items || []);\n  }\n  if (\"wb_runtime_config\" === 'wb_system_errors') {\n    const data = await runtimeRequest('POST', '/api/v1/wb/runtime/errors', $json);\n    return toItems(data.error || data);\n  }\n  return migrated(\"Save Preflight Report\");\n})();"
+      }
+    },
+    {
+      "id": "cd53b82d-b1ff-4a22-a727-2f14855eb9d2",
+      "name": "Return Preflight Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3440,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nconst row = $input.first().json || {};\nlet report = {};\ntry { report = JSON.parse(row.preflight_report_json || '{}'); } catch (_) {}\nreturn [{ json: report }];\n"
+      }
+    }
+  ],
+  "connections": {
+    "POST Store Preflight": {
+      "main": [
+        [
+          {
+            "node": "Validate Store Preflight",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Store Preflight": {
+      "main": [
+        [
+          {
+            "node": "Store Preflight Is Valid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Preflight Is Valid": {
+      "main": [
+        [
+          {
+            "node": "Prepare Store Gateway Checks",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Store Preflight",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Store Gateway Checks": {
+      "main": [
+        [
+          {
+            "node": "Call WB-A001 Store Preflight",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call WB-A001 Store Preflight": {
+      "main": [
+        [
+          {
+            "node": "Build Store Preflight Report",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Sanitize Store Preflight Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Store Preflight Report": {
+      "main": [
+        [
+          {
+            "node": "Persist Store Preflight Report",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Sanitize Store Preflight Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Persist Store Preflight Report": {
+      "main": [
+        [
+          {
+            "node": "Respond Store Preflight",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Sanitize Store Preflight Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sanitize Store Preflight Error": {
+      "main": [
+        [
+          {
+            "node": "Respond Store Preflight",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Preflight": {
+      "main": [
+        [
+          {
+            "node": "Load Preflight Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Preflight Config": {
+      "main": [
+        [
+          {
+            "node": "Load Preflight Templates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Preflight Templates": {
+      "main": [
+        [
+          {
+            "node": "Prepare Category Search",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Category Search": {
+      "main": [
+        [
+          {
+            "node": "WB Search Subjects",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WB Search Subjects": {
+      "main": [
+        [
+          {
+            "node": "Analyze Subject Candidates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze Subject Candidates": {
+      "main": [
+        [
+          {
+            "node": "Save Subject Candidates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Subject Candidates": {
+      "main": [
+        [
+          {
+            "node": "Collapse Subject Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collapse Subject Results": {
+      "main": [
+        [
+          {
+            "node": "Reload Templates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reload Templates": {
+      "main": [
+        [
+          {
+            "node": "Prepare Characteristic Queries",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Characteristic Queries": {
+      "main": [
+        [
+          {
+            "node": "Has Confirmed Subject",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Confirmed Subject": {
+      "main": [
+        [
+          {
+            "node": "WB Get Characteristics",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Confirmed Subject Yet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WB Get Characteristics": {
+      "main": [
+        [
+          {
+            "node": "Analyze Characteristics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze Characteristics": {
+      "main": [
+        [
+          {
+            "node": "Save Live Schemas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Live Schemas": {
+      "main": [
+        [
+          {
+            "node": "Collapse Schema Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collapse Schema Results": {
+      "main": [
+        [
+          {
+            "node": "Reload Templates for Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "No Confirmed Subject Yet": {
+      "main": [
+        [
+          {
+            "node": "Reload Templates for Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reload Templates for Report": {
+      "main": [
+        [
+          {
+            "node": "WB List Seller Warehouses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WB List Seller Warehouses": {
+      "main": [
+        [
+          {
+            "node": "WB Probe Price Access",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WB Probe Price Access": {
+      "main": [
+        [
+          {
+            "node": "Build Preflight Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Preflight Report": {
+      "main": [
+        [
+          {
+            "node": "Save Preflight Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Preflight Report": {
+      "main": [
+        [
+          {
+            "node": "Return Preflight Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Shanghai",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "none",
+    "executionTimeout": 300,
+    "errorWorkflow": "JcTDgNsprA7rPoMA",
+    "callerPolicy": "workflowsFromSameOwner",
+    "binaryMode": "separate"
+  }
+}

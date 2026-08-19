@@ -1,0 +1,352 @@
+{
+  "id": "3hyAiON1l3fEHBzA",
+  "name": "OZON-A001-多店铺安全API网关",
+  "active": true,
+  "nodes": [
+    {
+      "id": "ceb216a3-eacd-47ab-90ea-a446541c065c",
+      "name": "网关说明",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -700,
+        -520
+      ],
+      "parameters": {
+        "content": "# OZON-A001 多店铺安全 API 网关\n\nVAULT 请求只转发 `taskId + publicationId` 或预检 `storeId`、`requestRef`、`operation`和受约束 `payload` 到 MerchRoute 内部网关。四个 task-scoped 写 operation 必须携带当前 claim 的顶层 `leaseToken`；task 只读回查可不带 token，storeId 分支禁止 token。\n\n固定默认店的历史 `LEGACY_PUBLICATION/PURE_LEGACY` 仅在后端冻结快照返回受信 signal 时进入唯一旧 Credential 兼容节点；调用方不能传 binding mode、URL、method、认证头或店铺覆盖。PURE_LEGACY 禁止写入，兼容请求必须回传 runtime ledger receipt。\n\n本地 JSON 不嵌入凭据；安全部署时按固定节点名保留 live credential binding。写请求结果不明时保留 `UNKNOWN/READBACK_REQUIRED`，禁止盲重发。",
+        "width": 760,
+        "height": 420
+      }
+    },
+    {
+      "id": "92cc65f2-ec83-470b-8abd-d41fca836e17",
+      "name": "When Executed by Another Workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -420,
+        0
+      ],
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "taskId"
+            },
+            {
+              "name": "storeId"
+            },
+            {
+              "name": "publicationId"
+            },
+            {
+              "name": "leaseToken"
+            },
+            {
+              "name": "requestRef"
+            },
+            {
+              "name": "operation"
+            },
+            {
+              "name": "payload",
+              "type": "object"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "c83e195e-aadb-4533-b6b2-66c48def4e09",
+      "name": "调用 MerchRoute OZON 安全网关",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -160,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nasync function ozonRuntimeRequest(method, endpoint, body, timeoutMs = 60_000) {\n  const base = String($env.MERCHROUTE_RUNTIME_BASE_URL || 'http://127.0.0.1:4173').replace(/\\/+$/, '');\n  const key = String($env.MERCHROUTE_RUNTIME_KEY || '').trim();\n  if (!key) {\n    const error = new Error('MERCHROUTE_RUNTIME_KEY 未配置，无法访问 MerchRoute OZON runtime API');\n    error.code = 'RUNTIME_KEY_MISSING';\n    error.beforeSend = true;\n    throw error;\n  }\n  const RuntimeURL = require('url').URL;\n  const target = new RuntimeURL(base + endpoint);\n  if (!['http:', 'https:'].includes(target.protocol)) throw new Error('MerchRoute runtime URL 协议无效');\n  const payload = body === undefined ? '' : JSON.stringify(body);\n  const transport = target.protocol === 'https:' ? require('https') : require('http');\n  const response = await new Promise((resolve, reject) => {\n    const request = transport.request(target, {\n      method,\n      headers: {\n        Accept: 'application/json',\n        'Content-Type': 'application/json',\n        'X-MerchRoute-Runtime-Key': key,\n        ...(payload ? { 'Content-Length': Buffer.byteLength(payload) } : {}),\n      },\n    }, (incoming) => {\n      const chunks = [];\n      let bytes = 0;\n      incoming.on('data', (chunk) => {\n        bytes += chunk.length;\n        if (bytes > 20 * 1024 * 1024) {\n          request.destroy(new Error('MerchRoute runtime API 响应超过 20 MiB 限制'));\n          return;\n        }\n        chunks.push(chunk);\n      });\n      incoming.on('end', () => resolve({\n        status: Number(incoming.statusCode || 0),\n        text: Buffer.concat(chunks).toString('utf8'),\n      }));\n    });\n    request.setTimeout(Math.max(1_000, Math.min(180_000, Number(timeoutMs) || 60_000)), () => {\n      const error = new Error('MerchRoute runtime API 请求超时');\n      error.code = 'RUNTIME_REQUEST_TIMEOUT';\n      request.destroy(error);\n    });\n    request.on('error', reject);\n    if (payload) request.write(payload);\n    request.end();\n  });\n  let data = {};\n  if (response.text) {\n    try { data = JSON.parse(response.text); }\n    catch (_) { data = { raw: response.text.slice(0, 2_000) }; }\n  }\n  if (response.status < 200 || response.status >= 300) {\n    const nested = data && typeof data.error === 'object' && data.error !== null ? data.error : {};\n    const error = new Error(String(data.message || nested.message || data.error || data.code || nested.code || ('MerchRoute runtime API HTTP ' + response.status)));\n    error.code = String(data.code || nested.code || 'RUNTIME_API_FAILED');\n    error.httpStatus = response.status;\n    error.details = data;\n    throw error;\n  }\n  return data;\n}\n\nconst ALLOWED_OPERATIONS = new Set([\n  'sellerInfo','limits','warehouses','categoryTree','categoryAttributes','attributeValues','attributeValuesSearch',\n  'importProduct','importInfo','picturesImport','picturesInfo','listProducts','infoList','attributesInfo',\n  'pricesRead','stocksRead','pricesWrite','stocksWrite'\n]);\nconst WRITE_OPERATIONS = new Set(['importProduct','picturesImport','pricesWrite','stocksWrite']);\nconst DEFAULT_STORE_ID = '00000000-0000-4000-8000-000000000002';\nconst UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;\nconst FORBIDDEN_KEYS = new Set([\n  'authorization','client-id','client_id','clientid','api-key','api_key','apikey','token','cookie','credential','credentials',\n  'url','method','headers','header','iswrite','is_write','storeid','store_id','storealias','store_alias','credentialversionid','credential_version_id',\n  'credentialbindingmode','credential_binding_mode','leasetoken','lease_token','images360','photo_360'\n]);\nfunction contractError(code, message) {\n  const error = new Error(message);\n  error.code = code;\n  error.beforeSend = true;\n  return error;\n}\nfunction containsForbidden(value, depth = 0) {\n  if (depth > 12 || value == null) return false;\n  if (typeof value === 'string') return /^Bearer\\s+[A-Za-z0-9._-]{8,}$/i.test(value.trim());\n  if (typeof value !== 'object') return false;\n  if (Array.isArray(value)) return value.some((entry) => containsForbidden(entry, depth + 1));\n  return Object.entries(value).some(([key, entry]) => FORBIDDEN_KEYS.has(String(key).toLowerCase()) || containsForbidden(entry, depth + 1));\n}\nfunction normalizedFailure(error, input, inputIndex) {\n  const details = error?.details && typeof error.details === 'object' ? error.details : {};\n  if (['NOT_SENT','UNKNOWN','RESPONDED'].includes(String(details.deliveryState || ''))) {\n    return { json: {\n      ...details,\n      ok: false,\n      operation: input.operation,\n      requestRef: input.requestRef,\n      requestId: input.requestRef,\n      inputIndex,\n      body: details.result && typeof details.result === 'object' ? details.result : {},\n    }, pairedItem: { item: inputIndex } };\n  }\n  const code = String(error?.code || 'MERCHROUTE_GATEWAY_UNAVAILABLE').toUpperCase();\n  const statusCode = Number(error?.httpStatus || 0);\n  const explicitClientRejection = statusCode >= 400 && statusCode < 500 && ![408,425,429].includes(statusCode);\n  const definitelyNotSent = error?.beforeSend === true || explicitClientRejection || ['ECONNREFUSED','ENOTFOUND','EAI_AGAIN','UND_ERR_CONNECT_TIMEOUT'].includes(code);\n  const deliveryState = definitelyNotSent ? 'NOT_SENT' : 'UNKNOWN';\n  const retryClass = definitelyNotSent\n    ? (error?.beforeSend === true || explicitClientRejection ? 'PERMANENT' : 'RETRYABLE')\n    : (WRITE_OPERATIONS.has(input.operation) ? 'READBACK_REQUIRED' : 'RETRYABLE');\n  return { json: {\n    ok: false,\n    statusCode,\n    result: {},\n    body: {},\n    deliveryState,\n    retryClass,\n    requestRef: input.requestRef,\n    requestId: input.requestRef,\n    operation: input.operation,\n    inputIndex,\n    error: { code, message: String(error?.message || 'MerchRoute OZON gateway 不可用').slice(0, 1_000) },\n  }, pairedItem: { item: inputIndex } };\n}\nfunction trustedLegacySignal(data, input, inputIndex) {\n  const result = data && data.result && typeof data.result === 'object' && !Array.isArray(data.result) ? data.result : {};\n  if (!Object.prototype.hasOwnProperty.call(result, '__merchRouteLegacy')) return null;\n  const signal = result.__merchRouteLegacy;\n  const signalKeys = new Set(['version','bindingMode','storeId','operation','requestRef','taskId','publicationId','payloadHash']);\n  if (!signal || typeof signal !== 'object' || Array.isArray(signal)\n    || Object.keys(result).length !== 1\n    || Object.keys(signal).some((key) => !signalKeys.has(key))) {\n    throw contractError('LEGACY_SIGNAL_INVALID', '后端 legacy signal 格式无效');\n  }\n  if (data.ok !== false || Number(data.statusCode || 0) !== 428\n    || String(data.deliveryState || '') !== 'NOT_SENT' || String(data.retryClass || '') !== 'NONE') {\n    throw contractError('LEGACY_SIGNAL_INVALID', '后端 legacy signal 外层状态无效');\n  }\n  if (Number(signal.version) !== 1\n    || !['LEGACY_PUBLICATION','PURE_LEGACY'].includes(String(signal.bindingMode || ''))\n    || String(signal.storeId || '') !== DEFAULT_STORE_ID\n    || String(signal.operation || '') !== input.operation\n    || String(signal.requestRef || '') !== input.requestRef\n    || String(signal.taskId || '') !== input.taskId\n    || String(signal.publicationId || '') !== input.publicationId\n    || !/^sha256:[a-f0-9]{64}$/.test(String(signal.payloadHash || ''))) {\n    throw contractError('LEGACY_SIGNAL_MISMATCH', '后端 legacy signal 与请求冻结快照不匹配');\n  }\n  if (!input.taskId || input.storeId || !input.publicationId) {\n    throw contractError('LEGACY_SIGNAL_SCOPE_INVALID', 'legacy 凭据兼容仅允许 taskId + publicationId 分支');\n  }\n  return {\n    ok: false,\n    statusCode: 428,\n    result: {},\n    body: {},\n    deliveryState: 'NOT_SENT',\n    retryClass: 'NONE',\n    requestRef: input.requestRef,\n    requestId: input.requestRef,\n    operation: input.operation,\n    inputIndex,\n    __merchRouteRoute: 'LEGACY_DEFAULT_V1',\n    __merchRouteLegacy: {\n      version: 1,\n      bindingMode: String(signal.bindingMode),\n      storeId: DEFAULT_STORE_ID,\n      operation: input.operation,\n      requestRef: input.requestRef,\n      taskId: input.taskId,\n      publicationId: input.publicationId,\n      payloadHash: String(signal.payloadHash),\n    },\n  };\n}\nreturn (async () => {\n  const outputs = [];\n  const items = $input.all();\n  for (let inputIndex = 0; inputIndex < items.length; inputIndex += 1) {\n    const raw = items[inputIndex].json || {};\n    const allowedTopLevel = new Set(['taskId','storeId','publicationId','leaseToken','requestRef','operation','payload']);\n    const input = {\n      taskId: String(raw.taskId || '').trim(),\n      storeId: String(raw.storeId || '').trim(),\n      publicationId: String(raw.publicationId || '').trim(),\n      leaseToken: String(raw.leaseToken || '').trim(),\n      requestRef: String(raw.requestRef || '').trim(),\n      operation: String(raw.operation || '').trim(),\n      payload: raw.payload && typeof raw.payload === 'object' && !Array.isArray(raw.payload) ? raw.payload : {},\n    };\n    try {\n      if (Object.keys(raw).some((key) => !allowedTopLevel.has(key))) throw contractError('GATEWAY_INPUT_ADDITIONAL_PROPERTY', 'OZON 网关输入含非白名单字段');\n      if (!ALLOWED_OPERATIONS.has(input.operation)) throw contractError('OPERATION_NOT_ALLOWED', 'OZON 网关拒绝非白名单操作 ' + input.operation);\n      if (!input.requestRef || input.requestRef.length > 256 || !/^[A-Za-z0-9._:|-]+$/.test(input.requestRef)) throw contractError('REQUEST_REF_INVALID', 'requestRef 格式无效');\n      if (input.taskId && input.storeId) throw contractError('GATEWAY_SCOPE_AMBIGUOUS', 'taskId/storeId 不能同时提交');\n      if (!input.taskId && !input.storeId) throw contractError('GATEWAY_SCOPE_REQUIRED', 'taskId/storeId 必须且只能提交一个');\n      if (input.taskId && input.taskId.length > 256) throw contractError('TASK_ID_INVALID', 'taskId 格式无效');\n      if (input.storeId && !UUID_PATTERN.test(input.storeId)) throw contractError('STORE_ID_INVALID', 'storeId 必须是 UUID');\n      if (input.taskId && !input.publicationId) throw contractError('PUBLICATION_ID_REQUIRED', '任务网关调用必须提供 publicationId');\n      if (input.publicationId && !UUID_PATTERN.test(input.publicationId)) throw contractError('PUBLICATION_ID_INVALID', 'publicationId 必须是 UUID');\n      if (input.storeId && input.publicationId) throw contractError('PUBLICATION_ID_FORBIDDEN', '店铺预检/全局读取分支禁止提交 publicationId');\n      if (input.storeId && input.leaseToken) throw contractError('LEASE_TOKEN_FORBIDDEN', '店铺预检/全局读取分支禁止提交 leaseToken');\n      if (input.leaseToken && !UUID_PATTERN.test(input.leaseToken)) throw contractError('LEASE_TOKEN_INVALID', 'leaseToken 必须是 UUID');\n      if (input.taskId && WRITE_OPERATIONS.has(input.operation) && !input.leaseToken) throw contractError('LEASE_TOKEN_REQUIRED', '任务写操作必须提供当前 claim leaseToken');\n      if (containsForbidden(input.payload)) throw contractError('GATEWAY_PAYLOAD_FORBIDDEN', 'payload 禁止携带 URL、method、店铺覆盖字段或认证信息');\n      const requestBody = {\n        ...(input.taskId ? { taskId: input.taskId } : { storeId: input.storeId }),\n        ...(input.publicationId ? { publicationId: input.publicationId } : {}),\n        ...(input.leaseToken ? { leaseToken: input.leaseToken } : {}),\n        requestRef: input.requestRef,\n        operation: input.operation,\n        payload: input.payload,\n      };\n      const data = await ozonRuntimeRequest('POST', '/api/v1/ozon/runtime/gateway', requestBody, 60_000);\n      const deliveryState = String(data.deliveryState || '');\n      const retryClass = String(data.retryClass || '');\n      if (!['NOT_SENT','UNKNOWN','RESPONDED'].includes(deliveryState)) throw contractError('GATEWAY_RESPONSE_INVALID', 'deliveryState 非法');\n      if (!['NONE','READBACK_REQUIRED','RETRYABLE','PERMANENT'].includes(retryClass)) throw contractError('GATEWAY_RESPONSE_INVALID', 'retryClass 非法');\n      if (String(data.requestRef || '') !== input.requestRef || String(data.operation || '') !== input.operation) throw contractError('GATEWAY_CORRELATION_MISMATCH', '网关响应关联字段不匹配');\n      const legacy = trustedLegacySignal(data, input, inputIndex);\n      if (legacy) {\n        outputs.push({ json: legacy, pairedItem: { item: inputIndex } });\n        continue;\n      }\n      const result = data.result && typeof data.result === 'object' ? data.result : {};\n      outputs.push({ json: { ...data, result, body: result, requestId: input.requestRef, inputIndex }, pairedItem: { item: inputIndex } });\n    } catch (error) {\n      outputs.push(normalizedFailure(error, input, inputIndex));\n    }\n  }\n  return outputs;\n})();"
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "d792d0a4-c6b3-4d11-a4a9-c3cb146f4f08",
+      "name": "是否由后端授权默认店历史凭据",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        100,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "e8edaef7-7028-4ec3-9a46-d998d73e744f",
+              "leftValue": "={{ $json.__merchRouteRoute === \"LEGACY_DEFAULT_V1\" }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "3a292b05-ed73-4c3b-8f22-854808bb9ac5",
+      "name": "准备默认店历史兼容请求",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        360,
+        -160
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nconst crypto = require('crypto');\nconst DEFAULT_STORE_ID = '00000000-0000-4000-8000-000000000002';\nconst WRITE_OPERATIONS = new Set(['importProduct','picturesImport','pricesWrite','stocksWrite']);\nconst OPERATIONS = Object.freeze({\n  sellerInfo: '/v1/seller/info',\n  limits: '/v4/product/info/limit',\n  warehouses: '/v2/warehouse/list',\n  categoryTree: '/v1/description-category/tree',\n  categoryAttributes: '/v1/description-category/attribute',\n  attributeValues: '/v1/description-category/attribute/values',\n  attributeValuesSearch: '/v1/description-category/attribute/values/search',\n  importProduct: '/v3/product/import',\n  importInfo: '/v1/product/import/info',\n  picturesImport: '/v1/product/pictures/import',\n  picturesInfo: '/v2/product/pictures/info',\n  listProducts: '/v3/product/list',\n  infoList: '/v3/product/info/list',\n  attributesInfo: '/v4/product/info/attributes',\n  pricesRead: '/v5/product/info/prices',\n  stocksRead: '/v4/product/info/stocks',\n  pricesWrite: '/v1/product/import/prices',\n  stocksWrite: '/v2/products/stocks',\n});\nfunction stableJson(value) {\n  if (Array.isArray(value)) return '[' + value.map(stableJson).join(',') + ']';\n  if (value && typeof value === 'object') return '{' + Object.keys(value).sort().map((key) => JSON.stringify(key) + ':' + stableJson(value[key])).join(',') + '}';\n  const primitive = JSON.stringify(value);\n  return primitive === undefined ? 'null' : primitive;\n}\nfunction containsRemovedImageFields(value) {\n  if (!value || typeof value !== 'object') return false;\n  if (Array.isArray(value)) return value.some(containsRemovedImageFields);\n  return Object.entries(value).some(([key, child]) => key === 'images360' || key === 'photo_360' || containsRemovedImageFields(child));\n}\nconst sourceItems = $('When Executed by Another Workflow').all();\nreturn $input.all().map((item, routeIndex) => {\n  const routed = item.json || {};\n  if (routed.__merchRouteRoute !== 'LEGACY_DEFAULT_V1') throw new Error('LEGACY_ROUTE_NOT_TRUSTED');\n  const signal = routed.__merchRouteLegacy || {};\n  const inputIndex = Number(routed.inputIndex);\n  if (!Number.isInteger(inputIndex) || inputIndex < 0 || inputIndex >= sourceItems.length) throw new Error('LEGACY_INPUT_INDEX_INVALID');\n  const source = sourceItems[inputIndex]?.json || {};\n  const payload = source.payload && typeof source.payload === 'object' && !Array.isArray(source.payload) ? source.payload : {};\n  const payloadHash = 'sha256:' + crypto.createHash('sha256').update(stableJson(payload)).digest('hex');\n  const operation = String(source.operation || '');\n  const bindingMode = String(signal.bindingMode || '');\n  if (Number(signal.version) !== 1\n    || String(signal.storeId || '') !== DEFAULT_STORE_ID\n    || !['LEGACY_PUBLICATION','PURE_LEGACY'].includes(bindingMode)\n    || String(signal.taskId || '') !== String(source.taskId || '')\n    || String(signal.publicationId || '') !== String(source.publicationId || '')\n    || String(signal.operation || '') !== operation\n    || String(signal.requestRef || '') !== String(source.requestRef || '')\n    || String(signal.payloadHash || '') !== payloadHash) throw new Error('LEGACY_FROZEN_SNAPSHOT_MISMATCH');\n  const endpoint = OPERATIONS[operation];\n  if (!endpoint) throw new Error('LEGACY_OPERATION_NOT_ALLOWED');\n  const isWrite = WRITE_OPERATIONS.has(operation);\n  if (bindingMode === 'PURE_LEGACY' && isWrite) throw new Error('PURE_LEGACY_WRITE_FORBIDDEN');\n  if (containsRemovedImageFields(payload)) throw new Error('OZON_REMOVED_IMAGE_FIELD');\n  if (operation === 'importProduct') {\n    const offers = Array.isArray(payload.items) ? payload.items : [];\n    if (!offers.length || offers.some((offer) => !offer || typeof offer !== 'object' || !String(offer.offer_id || '').trim())) {\n      throw new Error('OZON_IMPORT_OFFER_ID_REQUIRED');\n    }\n  }\n  return {\n    json: {\n      __legacyInputIndex: inputIndex,\n      __legacyWrite: isWrite,\n      __legacyBindingMode: bindingMode,\n      __legacyPayloadHash: payloadHash,\n      __legacyRequestRef: String(source.requestRef || ''),\n      __legacyOperation: operation,\n      __legacyRequest: { method: 'POST', url: 'https://api-seller.ozon.ru' + endpoint, body: payload },\n    },\n    pairedItem: { item: inputIndex },\n  };\n});"
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "d0233592-fc89-4578-bc70-21479d95f8a7",
+      "name": "OZON API请求（在此选择店铺凭据）",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        640,
+        -160
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.__legacyRequest.url }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpCustomAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.__legacyRequest.body || {}) }}",
+        "options": {
+          "timeout": "={{ $json.__legacyWrite ? 30000 : 15000 }}",
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          },
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 0
+            }
+          }
+        }
+      },
+      "retryOnFail": false,
+      "maxTries": 1,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "ba6fe822-66f9-4bf7-933b-536f8f91a290",
+      "name": "标准化默认店历史响应",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        -160
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\n// OZON_LEGACY_RECEIPT_CLASSIFICATION_V2\nfunction record(value) { return value && typeof value === 'object' && !Array.isArray(value) ? value : {}; }\nfunction redact(value, depth = 0) {\n  if (depth > 12) return '[TRUNCATED]';\n  if (Array.isArray(value)) return value.slice(0, 1000).map((entry) => redact(entry, depth + 1));\n  if (!value || typeof value !== 'object') return typeof value === 'string' ? value.slice(0, 2000000) : value;\n  return Object.fromEntries(Object.entries(value).slice(0, 2000).map(([key, child]) => [key,\n    /authorization|client[-_]?id|api[-_]?key|token|cookie|secret|credential/i.test(key) ? '[REDACTED]' : redact(child, depth + 1)\n  ]));\n}\nfunction pairedIndex(item, fallback) {\n  const paired = Array.isArray(item.pairedItem) ? item.pairedItem[0] : item.pairedItem;\n  const value = Number(paired && paired.item);\n  return Number.isInteger(value) && value >= 0 ? value : fallback;\n}\nfunction retryAfterMs(headers) {\n  const row = record(headers);\n  const value = row['retry-after'] ?? row['Retry-After'];\n  if (value === undefined || value === null || value === '') return undefined;\n  const seconds = Number(value);\n  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(86400000, Math.round(seconds * 1000));\n  const date = new Date(String(value)).getTime();\n  return Number.isFinite(date) ? Math.max(0, Math.min(86400000, date - Date.now())) : undefined;\n}\nconst prepared = $('准备默认店历史兼容请求').all();\nreturn $input.all().map((item, outputIndex) => {\n  const preparedIndex = pairedIndex(item, outputIndex);\n  const context = prepared[preparedIndex]?.json || prepared.find((entry) => Number(entry.json?.__legacyInputIndex) === preparedIndex)?.json || {};\n  const raw = record(item.json);\n  const statusCode = Number(raw.statusCode || raw.status || 0);\n  const isWrite = context.__legacyWrite === true;\n  const errorRow = record(raw.error);\n  const errorCode = String(errorRow.code || raw.code || (statusCode ? 'OZON_HTTP_' + statusCode : 'OZON_LEGACY_TRANSPORT')).toUpperCase();\n  const explicitBody = Object.prototype.hasOwnProperty.call(raw, 'body') ? raw.body : (Object.prototype.hasOwnProperty.call(raw, 'data') ? raw.data : {});\n  const result = statusCode ? redact(explicitBody) : { error: { code: errorCode, message: String(errorRow.message || raw.message || '历史凭据请求传输失败').slice(0, 1000) } };\n  let deliveryState;\n  let retryClass;\n  if (statusCode >= 200 && statusCode < 300) {\n    deliveryState = 'RESPONDED'; retryClass = 'NONE';\n  } else if (statusCode === 408 || statusCode >= 500) {\n    deliveryState = isWrite ? 'UNKNOWN' : 'NOT_SENT'; retryClass = isWrite ? 'READBACK_REQUIRED' : 'RETRYABLE';\n  } else if (statusCode === 425 || statusCode === 429) {\n    deliveryState = 'NOT_SENT'; retryClass = 'RETRYABLE';\n  } else if (statusCode > 0) {\n    deliveryState = 'RESPONDED'; retryClass = 'PERMANENT';\n  } else {\n    const definitelyNotSent = ['ECONNREFUSED','ENOTFOUND','EAI_AGAIN','UND_ERR_CONNECT_TIMEOUT'].includes(errorCode);\n    deliveryState = definitelyNotSent || !isWrite ? 'NOT_SENT' : 'UNKNOWN';\n    retryClass = deliveryState === 'UNKNOWN' ? 'READBACK_REQUIRED' : 'RETRYABLE';\n  }\n  const retryAfter = retryAfterMs(raw.headers);\n  return {\n    json: {\n      __legacyInputIndex: Number(context.__legacyInputIndex),\n      __legacyWrite: isWrite,\n      __legacyReceipt: {\n        requestRef: String(context.__legacyRequestRef || ''),\n        operation: String(context.__legacyOperation || ''),\n        payloadHash: String(context.__legacyPayloadHash || ''),\n        statusCode,\n        result,\n        deliveryState,\n        retryClass,\n        ...(retryAfter !== undefined ? { retryAfterMs: retryAfter } : {}),\n      },\n    },\n    pairedItem: { item: Number(context.__legacyInputIndex) },\n  };\n});"
+      }
+    },
+    {
+      "id": "420e3b32-7ec5-497c-b4ad-3677a2b0608d",
+      "name": "提交默认店历史回执",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1160,
+        -160
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nasync function ozonRuntimeRequest(method, endpoint, body, timeoutMs = 60_000) {\n  const base = String($env.MERCHROUTE_RUNTIME_BASE_URL || 'http://127.0.0.1:4173').replace(/\\/+$/, '');\n  const key = String($env.MERCHROUTE_RUNTIME_KEY || '').trim();\n  if (!key) {\n    const error = new Error('MERCHROUTE_RUNTIME_KEY 未配置，无法访问 MerchRoute OZON runtime API');\n    error.code = 'RUNTIME_KEY_MISSING';\n    error.beforeSend = true;\n    throw error;\n  }\n  const RuntimeURL = require('url').URL;\n  const target = new RuntimeURL(base + endpoint);\n  if (!['http:', 'https:'].includes(target.protocol)) throw new Error('MerchRoute runtime URL 协议无效');\n  const payload = body === undefined ? '' : JSON.stringify(body);\n  const transport = target.protocol === 'https:' ? require('https') : require('http');\n  const response = await new Promise((resolve, reject) => {\n    const request = transport.request(target, {\n      method,\n      headers: {\n        Accept: 'application/json',\n        'Content-Type': 'application/json',\n        'X-MerchRoute-Runtime-Key': key,\n        ...(payload ? { 'Content-Length': Buffer.byteLength(payload) } : {}),\n      },\n    }, (incoming) => {\n      const chunks = [];\n      let bytes = 0;\n      incoming.on('data', (chunk) => {\n        bytes += chunk.length;\n        if (bytes > 20 * 1024 * 1024) {\n          request.destroy(new Error('MerchRoute runtime API 响应超过 20 MiB 限制'));\n          return;\n        }\n        chunks.push(chunk);\n      });\n      incoming.on('end', () => resolve({\n        status: Number(incoming.statusCode || 0),\n        text: Buffer.concat(chunks).toString('utf8'),\n      }));\n    });\n    request.setTimeout(Math.max(1_000, Math.min(180_000, Number(timeoutMs) || 60_000)), () => {\n      const error = new Error('MerchRoute runtime API 请求超时');\n      error.code = 'RUNTIME_REQUEST_TIMEOUT';\n      request.destroy(error);\n    });\n    request.on('error', reject);\n    if (payload) request.write(payload);\n    request.end();\n  });\n  let data = {};\n  if (response.text) {\n    try { data = JSON.parse(response.text); }\n    catch (_) { data = { raw: response.text.slice(0, 2_000) }; }\n  }\n  if (response.status < 200 || response.status >= 300) {\n    const nested = data && typeof data.error === 'object' && data.error !== null ? data.error : {};\n    const error = new Error(String(data.message || nested.message || data.error || data.code || nested.code || ('MerchRoute runtime API HTTP ' + response.status)));\n    error.code = String(data.code || nested.code || 'RUNTIME_API_FAILED');\n    error.httpStatus = response.status;\n    error.details = data;\n    throw error;\n  }\n  return data;\n}\n\nconst WRITE_OPERATIONS = new Set(['importProduct','picturesImport','pricesWrite','stocksWrite']);\nfunction receiptFailure(error, receipt, inputIndex, isWrite) {\n  const code = String(error?.code || 'LEGACY_RECEIPT_UNAVAILABLE').toUpperCase();\n  return { json: {\n    ok: false,\n    statusCode: 0,\n    result: {},\n    body: {},\n    deliveryState: isWrite ? 'UNKNOWN' : 'NOT_SENT',\n    retryClass: isWrite ? 'READBACK_REQUIRED' : 'RETRYABLE',\n    requestRef: String(receipt.requestRef || ''),\n    requestId: String(receipt.requestRef || ''),\n    operation: String(receipt.operation || ''),\n    inputIndex,\n    error: { code, message: String(error?.message || '历史凭据结果回执失败').slice(0, 1000) },\n  }, pairedItem: { item: inputIndex } };\n}\nreturn (async () => {\n  const outputs = [];\n  for (const item of $input.all()) {\n    const raw = item.json || {};\n    const receipt = raw.__legacyReceipt && typeof raw.__legacyReceipt === 'object' ? raw.__legacyReceipt : {};\n    const inputIndex = Number(raw.__legacyInputIndex);\n    const isWrite = raw.__legacyWrite === true || WRITE_OPERATIONS.has(String(receipt.operation || ''));\n    try {\n      if (!Number.isInteger(inputIndex) || inputIndex < 0) throw Object.assign(new Error('legacy receipt inputIndex 无效'), { code: 'LEGACY_RECEIPT_INVALID', beforeSend: true });\n      const receiptKeys = new Set(['requestRef','operation','payloadHash','statusCode','result','deliveryState','retryClass','retryAfterMs']);\n      if (Object.keys(receipt).some((key) => !receiptKeys.has(key))\n        || !String(receipt.requestRef || '')\n        || !String(receipt.operation || '')\n        || !/^sha256:[a-f0-9]{64}$/.test(String(receipt.payloadHash || ''))\n        || !Number.isInteger(Number(receipt.statusCode))\n        || !receipt.result || typeof receipt.result !== 'object' || Array.isArray(receipt.result)\n        || !['NOT_SENT','UNKNOWN','RESPONDED'].includes(String(receipt.deliveryState || ''))\n        || !['NONE','READBACK_REQUIRED','RETRYABLE','PERMANENT'].includes(String(receipt.retryClass || ''))) {\n        throw Object.assign(new Error('legacy receipt 请求合同无效'), { code: 'LEGACY_RECEIPT_INVALID', beforeSend: true });\n      }\n      const data = await ozonRuntimeRequest('POST', '/api/v1/ozon/runtime/gateway/legacy-receipt', receipt, 60000);\n      const deliveryState = String(data.deliveryState || '');\n      const retryClass = String(data.retryClass || '');\n      if (!['NOT_SENT','UNKNOWN','RESPONDED'].includes(deliveryState)\n        || !['NONE','READBACK_REQUIRED','RETRYABLE','PERMANENT'].includes(retryClass)\n        || String(data.requestRef || '') !== String(receipt.requestRef || '')\n        || String(data.operation || '') !== String(receipt.operation || '')\n        || (data.result && typeof data.result === 'object' && Object.prototype.hasOwnProperty.call(data.result, '__merchRouteLegacy'))) {\n        throw Object.assign(new Error('历史凭据回执响应合同无效'), { code: 'LEGACY_RECEIPT_RESPONSE_INVALID' });\n      }\n      const result = data.result && typeof data.result === 'object' ? data.result : {};\n      outputs.push({ json: { ...data, result, body: result, requestId: String(receipt.requestRef), inputIndex }, pairedItem: { item: inputIndex } });\n    } catch (error) {\n      outputs.push(receiptFailure(error, receipt, Number.isInteger(inputIndex) ? inputIndex : 0, isWrite));\n    }\n  }\n  return outputs;\n})();"
+      }
+    },
+    {
+      "id": "97e0ec52-545e-4d99-8efe-592bd7f461ad",
+      "name": "返回脱敏网关结果",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1420,
+        -40
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nfunction sanitize(value, depth = 0) {\n  if (depth > 12) return '[TRUNCATED]';\n  if (Array.isArray(value)) return value.map((entry) => sanitize(entry, depth + 1));\n  if (!value || typeof value !== 'object') return value;\n  return Object.fromEntries(Object.entries(value)\n    .filter(([key]) => !String(key).startsWith('__merchRoute') && !String(key).startsWith('__legacy'))\n    .map(([key, entry]) => [key, /authorization|client[-_]?id|api[-_]?key|cookie|secret|credential/i.test(key) ? '[REDACTED]' : sanitize(entry, depth + 1)]));\n}\nreturn $input.all().map((item, index) => ({ json: sanitize(item.json || {}), pairedItem: item.pairedItem ?? { item: index } }));"
+      }
+    },
+    {
+      "id": "a5a6a298-a081-48a1-99bf-cf2d84025f31",
+      "name": "标准化网关合同异常",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        180,
+        100
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nconst requestItems = $('When Executed by Another Workflow').all();\nconst raw = $input.first().json || {};\nreturn requestItems.map((item, inputIndex) => ({ json: {\n  ok: false,\n  statusCode: 0,\n  result: {},\n  body: {},\n  deliveryState: 'NOT_SENT',\n  retryClass: 'PERMANENT',\n  requestRef: String(item.json?.requestRef || ''),\n  requestId: String(item.json?.requestRef || ''),\n  operation: String(item.json?.operation || ''),\n  inputIndex,\n  error: { code: String(raw.code || raw.error?.code || 'GATEWAY_CONTRACT_ERROR'), message: String(raw.message || raw.error?.message || 'OZON 网关请求合同无效').slice(0, 1_000) },\n}, pairedItem: { item: inputIndex } }));"
+      }
+    }
+  ],
+  "connections": {
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "调用 MerchRoute OZON 安全网关",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "调用 MerchRoute OZON 安全网关": {
+      "main": [
+        [
+          {
+            "node": "是否由后端授权默认店历史凭据",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "标准化网关合同异常",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "是否由后端授权默认店历史凭据": {
+      "main": [
+        [
+          {
+            "node": "准备默认店历史兼容请求",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "返回脱敏网关结果",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "准备默认店历史兼容请求": {
+      "main": [
+        [
+          {
+            "node": "OZON API请求（在此选择店铺凭据）",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "标准化网关合同异常",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OZON API请求（在此选择店铺凭据）": {
+      "main": [
+        [
+          {
+            "node": "标准化默认店历史响应",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "标准化默认店历史响应",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "标准化默认店历史响应": {
+      "main": [
+        [
+          {
+            "node": "提交默认店历史回执",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "提交默认店历史回执": {
+      "main": [
+        [
+          {
+            "node": "返回脱敏网关结果",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "none",
+    "errorWorkflow": "kU8XxFLUign9LiQC",
+    "binaryMode": "separate",
+    "executionTimeout": 240
+  }
+}

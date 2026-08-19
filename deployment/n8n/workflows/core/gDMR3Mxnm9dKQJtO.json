@@ -1,0 +1,138 @@
+{
+  "id": "gDMR3Mxnm9dKQJtO",
+  "name": "S016-JSON文件-解析",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "folderPath"
+            },
+            {
+              "name": "filePrefix"
+            },
+            {
+              "name": "fileExtension"
+            },
+            {
+              "name": "returnMode"
+            }
+          ]
+        }
+      },
+      "id": "ed7c6d6e-ab90-4c2a-be9d-338443adcb60",
+      "name": "When Executed by Another Workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -768,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first()?.json || {};\n\nfunction cleanOuterQuotes(value) {\n  let text = String(value ?? '').trim();\n  const pairs = [['\"', '\"'], [\"'\", \"'\"], ['“', '”'], ['‘', '’']];\n  for (const [left, right] of pairs) {\n    if (text.startsWith(left) && text.endsWith(right) && text.length >= left.length + right.length) {\n      text = text.slice(left.length, text.length - right.length).trim();\n      break;\n    }\n  }\n  return text;\n}\n\nfunction cleanFolderPath(value) {\n  const text = cleanOuterQuotes(value);\n  if (!/^file:\\/\\//i.test(text)) return text;\n  try {\n    const url = new URL(text);\n    let pathname = decodeURIComponent(url.pathname || '');\n    if (/^\\/[A-Za-z]:\\//.test(pathname)) pathname = pathname.slice(1);\n    if (url.host && url.host.toLowerCase() !== 'localhost') return '//' + url.host + pathname;\n    return pathname;\n  } catch {\n    return text;\n  }\n}\n\nconst normalized = {\n  folderPath: cleanFolderPath(input.folderPath),\n  filePrefix: String(input.filePrefix || 'n8n_setParameter_').trim() || 'n8n_setParameter_',\n  fileExtension: String(input.fileExtension || '.json').trim() || '.json',\n  returnMode: 'latest',\n};\n\nreturn [{\n  json: {\n    ...normalized,\n    scanInputBase64: Buffer.from(JSON.stringify(normalized), 'utf8').toString('base64'),\n  },\n}];"
+      },
+      "id": "2ce893af-845f-4ce1-a02c-2757feda4ed8",
+      "name": "Normalize Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -496,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "command": "=node -e \"eval(require('zlib').gunzipSync(Buffer.from(process.argv[1],'base64')).toString('utf8'))\" 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 {{ $json.scanInputBase64 }}"
+      },
+      "id": "0f567096-d3c7-4d35-afa2-0f33ae98a52c",
+      "name": "Find Latest SetParameter JSON",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        -224,
+        0
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const commandOutput = $input.first()?.json || {};\nconst normalized = $('Normalize Input').first()?.json || {};\n\nfunction internalFailure() {\n  return {\n    success: false,\n    returnMode: 'latest',\n    errorType: 'INTERNAL_EXECUTION_ERROR',\n    rootFolderPath: normalized.folderPath || '',\n    latestFile: null,\n    data: null,\n    message: '执行本地 JSON 扫描命令失败',\n    warnings: [],\n  };\n}\n\nlet response;\ntry {\n  const stdout = typeof commandOutput.stdout === 'string' ? commandOutput.stdout.trim() : '';\n  if (!stdout) throw new Error('Missing stdout');\n  response = JSON.parse(stdout);\n  if (!response || typeof response !== 'object' || typeof response.success !== 'boolean') {\n    throw new Error('Invalid response');\n  }\n} catch {\n  response = internalFailure();\n}\n\nreturn [{ json: response }];"
+      },
+      "id": "aa215f99-2471-4468-bb37-7008c481b87a",
+      "name": "Build Response / Return",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        80,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## S016-JSON文件-解析\n\n### 功能\n父工作流传入 `folderPath`，递归查找最新的 `n8n_setParameter_*.json`，读取 UTF-8 JSON 并把完整内容放入 `data` 返回。\n\n### 输入\n- `folderPath`：必填，本地根目录；支持 Windows 盘符、macOS 绝对路径、`~/`、`file:///`。\n- `filePrefix`：默认 `n8n_setParameter_`。\n- `fileExtension`：默认 `.json`。\n- `returnMode`：固定为 `latest`。\n\n### 输出\n单个 item。父工作流可读取 `$json.success`、`$json.data`、`$json.latestFile.filePath`、`$json.latestFile.fileName`。\n\n### 注意\n使用 Execute Command 调用本机 Node.js；n8n 运行账号必须能读取目标目录。Docker 部署需挂载宿主目录并传入容器内路径。不可访问的子目录记录到 `warnings`，不会中断其他目录扫描。",
+        "height": 390,
+        "width": 840,
+        "color": 4
+      },
+      "id": "bfdcb1d6-760a-4da7-a1b3-aa0b226ef035",
+      "name": "Workflow Summary Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -768,
+        -464
+      ]
+    }
+  ],
+  "connections": {
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Normalize Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Input": {
+      "main": [
+        [
+          {
+            "node": "Find Latest SetParameter JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Latest SetParameter JSON": {
+      "main": [
+        [
+          {
+            "node": "Build Response / Return",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Response / Return",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  }
+}

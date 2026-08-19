@@ -1,0 +1,90 @@
+const fs = require('fs');
+const path = require('path');
+const source = $('Collect Image Files').first().json || {};
+const job = source.job || {};
+
+function normalizeForCompare(value) {
+  const resolved = path.resolve(String(value || ''));
+  return path.sep === '\\' ? resolved.toLowerCase() : resolved;
+}
+
+function isInside(root, target) {
+  const relative = path.relative(root, target);
+  return relative === '' || (relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative));
+}
+
+function atomicWriteJson(target, value) {
+  if (fs.existsSync(target)) throw new Error('E004_OUTPUT_METADATA_ALREADY_EXISTS: ' + target);
+  const temporary = target + '.tmp-' + String($execution.id || Date.now());
+  let completed = false;
+  try {
+    fs.writeFileSync(temporary, JSON.stringify(value, null, 2) + '\n', { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+    fs.renameSync(temporary, target);
+    completed = true;
+  } finally {
+    if (!completed && fs.existsSync(temporary)) fs.rmSync(temporary, { force: true });
+  }
+}
+
+if (typeof job.SKU !== 'string' || !/^\d{7}$/.test(job.SKU.trim())) throw new Error('job.SKU 必须是 7 位 String。');
+if (typeof job.productName !== 'string' || !job.productName.trim()) throw new Error('job.productName 必须是非空 String。');
+if (typeof job.variants !== 'string' || !job.variants.trim()) throw new Error('job.variants 必须是非空 String。');
+if (!Array.isArray(job.imagePaths) || job.imagePaths.length !== Number(job.imageCount || 0)) throw new Error('job.imagePaths 与 imageCount 不一致。');
+
+const outputParentDir = path.resolve(String(job.params?.outputParentDir || ''));
+const outputSubDir = path.resolve(String(job.outputSubDir || ''));
+if (!outputParentDir || !outputSubDir || !isInside(outputParentDir, outputSubDir) || normalizeForCompare(outputParentDir) === normalizeForCompare(outputSubDir)) {
+  throw new Error('Unsafe outputSubDir outside outputParentDir: ' + outputSubDir);
+}
+if (!fs.existsSync(outputParentDir) || !fs.lstatSync(outputParentDir).isDirectory() || fs.lstatSync(outputParentDir).isSymbolicLink()) {
+  throw new Error('outputParentDir must be an existing real directory: ' + outputParentDir);
+}
+const parentReal = fs.realpathSync(outputParentDir);
+if (!isInside(parentReal, fs.realpathSync(outputParentDir))) throw new Error('outputParentDir realpath validation failed.');
+
+const expectedJobPath = path.resolve(outputSubDir, 'job.json');
+const requestedJobPath = path.resolve(String(source.jobJsonPath || ''));
+if (normalizeForCompare(expectedJobPath) !== normalizeForCompare(requestedJobPath)) throw new Error('jobJsonPath must be outputSubDir/job.json');
+
+const renderJob = {
+  ...job,
+  schemaVersion: 2,
+  workflowCode: 'E004',
+  status: 'RENDERING',
+  renderStartedAt: new Date().toISOString(),
+  sourcePackageSha256: String(source.folderStableContentSha256 || ''),
+};
+const taskContext = {
+  schemaVersion: 2,
+  workflowCode: 'E004',
+  status: 'RENDERING',
+  SKU: job.SKU.trim(),
+  productName: job.productName.trim(),
+  variants: job.variants.trim(),
+  ...(job.variantId ? { variantId: String(job.variantId) } : {}),
+  ...(job.readySubmissionId ? { sourceSubmissionId: String(job.readySubmissionId) } : {}),
+  n8nExecutionId: String(job.n8nExecutionId || $execution.id || ''),
+  renderStartedAt: renderJob.renderStartedAt,
+};
+
+fs.mkdirSync(outputSubDir, { recursive: false });
+if (fs.lstatSync(outputSubDir).isSymbolicLink() || !fs.lstatSync(outputSubDir).isDirectory()) throw new Error('outputSubDir must be a real directory.');
+if (!isInside(parentReal, fs.realpathSync(outputSubDir))) throw new Error('outputSubDir realpath escaped outputParentDir.');
+const taskContextPath = path.resolve(outputSubDir, 'task-context.json');
+atomicWriteJson(expectedJobPath, renderJob);
+atomicWriteJson(taskContextPath, taskContext);
+
+const parsedJob = JSON.parse(fs.readFileSync(expectedJobPath, 'utf8'));
+const parsedContext = JSON.parse(fs.readFileSync(taskContextPath, 'utf8'));
+if (parsedJob.status !== 'RENDERING' || parsedJob.imagePaths.length !== Number(job.imageCount)) throw new Error('job.json verification failed.');
+if (parsedContext.status !== 'RENDERING' || parsedContext.variants !== taskContext.variants) throw new Error('task-context.json verification failed.');
+
+return [{ json: {
+  ...source,
+  job: renderJob,
+  taskContextPath: taskContextPath.replace(/\\/g, '/'),
+  jobJsonWritten: true,
+  jobJsonPath: expectedJobPath.replace(/\\/g, '/'),
+  jobJsonSizeBytes: fs.statSync(expectedJobPath).size,
+  jobJsonImageCount: parsedJob.imagePaths.length,
+} }];

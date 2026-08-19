@@ -1,0 +1,637 @@
+{
+  "id": "noHJuIiHfHryuA2e",
+  "name": "E004-v01-主图生视频-FFmpeg",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## E004-v01-主图生视频-FFmpeg\n\n监听 E004 产品包；递归验证 `_READY.json`、`selection-manifest.json`、`task-context.json`、参数 JSON 与所有嵌套图片的身份、大小和 SHA-256 稳定窗口，然后调用 S015 生成视频。\n\n- 拒绝符号链接、目录越界、未登记图片和永久无效控制文件。\n- `._E004_RENDER.lock` 防止同一提交并发渲染；失败锁 30 分钟后才可回收。\n- 输出目录先写入状态为 `RENDERING` 的 `job.json` / `task-context.json`；仅在 FFprobe 验证通过后写入 `_COMPLETE.json`。\n- 最终回执要求 S015 同时返回 `success=true` 与 `ok=true`。\n\n### 必需环境变量\n\n`NODE_FUNCTION_ALLOW_BUILTIN=fs,path`；修改后必须重启 n8n。不要扩大为 `*`。",
+        "height": 906,
+        "width": 756
+      },
+      "id": "39315426-c275-4377-a125-27769ec7bd36",
+      "name": "Workflow Summary",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        752,
+        1536
+      ]
+    },
+    {
+      "parameters": {
+        "triggerOn": "folder",
+        "path": "__MERCHROUTE_DATA_ROOT__/01_monitorFolder/E004-主图生视频-监听",
+        "events": [
+          "addDir"
+        ],
+        "options": {
+          "awaitWriteFinish": true,
+          "ignored": ".staging",
+          "ignoreInitial": true,
+          "depth": 0,
+          "usePolling": true,
+          "ignoreMode": "contain"
+        }
+      },
+      "id": "5ac93684-c6e6-4bc4-8110-8e0647b8c1d8",
+      "name": "Watch Source Parent Directory",
+      "type": "n8n-nodes-base.localFileTrigger",
+      "typeVersion": 1,
+      "position": [
+        1584,
+        1728
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "18e7dfe4-dc0e-4050-9daa-6c2ba0d14f13",
+              "name": "outputParentDir",
+              "value": "={{ $json.data.outputParentDir }}",
+              "type": "string"
+            },
+            {
+              "id": "1ecc96eb-8ce2-462b-a41c-7289c37c1006",
+              "name": "SKU",
+              "value": "={{ $json.data.SKU }}",
+              "type": "string"
+            },
+            {
+              "id": "b5dd8917-9238-402b-ab02-7ded7a6bc124",
+              "name": "productName",
+              "value": "={{ $json.data.productName }}",
+              "type": "string"
+            },
+            {
+              "id": "0fd9361c-bc87-47bf-99ee-5d8d15a0c40f",
+              "name": "renderWorkflowId",
+              "value": "={{ $json.data.renderWorkflowId }}",
+              "type": "string"
+            },
+            {
+              "id": "e3667f15-cf99-4985-866d-35e62496a94b",
+              "name": "logoPath",
+              "value": "={{ $json.data.logoPath }}",
+              "type": "string"
+            },
+            {
+              "id": "65ee75e6-8e96-4388-80ab-84c498012ce5",
+              "name": "musicPath",
+              "value": "={{ $json.data.musicPath }}",
+              "type": "string"
+            },
+            {
+              "id": "425d0649-30c0-4405-8320-68f46933498a",
+              "name": "ffmpegPath",
+              "value": "={{ $json.data.ffmpegPath }}",
+              "type": "string"
+            },
+            {
+              "id": "d7e639eb-a99e-4b66-8e53-0236352329c1",
+              "name": "effectPreset",
+              "value": "={{ $json.data.effectPreset }}",
+              "type": "string"
+            },
+            {
+              "id": "c8b72546-8a18-4861-b771-1f31af686965",
+              "name": "targetDuration",
+              "value": "={{ $json.data.targetDuration }}",
+              "type": "number"
+            },
+            {
+              "id": "f9a657d0-a4e3-4893-ac3b-fdabce8bea2c",
+              "name": "width",
+              "value": "={{ $json.data.width }}",
+              "type": "number"
+            },
+            {
+              "id": "fb38c38d-b2f3-4e12-b2f1-ed84781db24d",
+              "name": "height",
+              "value": "={{ $json.data.height }}",
+              "type": "number"
+            },
+            {
+              "id": "4ff97148-6023-4c03-a11d-aa908f85467f",
+              "name": "fps",
+              "value": "={{ $json.data.fps }}",
+              "type": "number"
+            },
+            {
+              "id": "4c416d07-9bb5-47bd-a36f-8e7127eb0965",
+              "name": "audioVolume",
+              "value": "={{ $json.data.audioVolume }}",
+              "type": "number"
+            },
+            {
+              "id": "d33618f5-ce7d-48dc-a840-437ad2d9fd2c",
+              "name": "audioFadeIn",
+              "value": "={{ $json.data.audioFadeIn }}",
+              "type": "number"
+            },
+            {
+              "id": "e004-param-13",
+              "name": "audioFadeOut",
+              "value": "={{ $json.data.audioFadeOut }}",
+              "type": "number"
+            },
+            {
+              "id": "da5b8249-f3a4-4bcd-9391-17110ccfad39",
+              "name": "enableLogo",
+              "value": "={{ $json.data.enableLogo }}",
+              "type": "boolean"
+            },
+            {
+              "id": "e9701a86-069e-4011-9879-790bf50d5758",
+              "name": "logoWidth",
+              "value": "={{ $json.data.logoWidth }}",
+              "type": "number"
+            },
+            {
+              "id": "9b56224b-2fea-4a9f-887f-050d1a71284a",
+              "name": "logoMarginX",
+              "value": "={{ $json.data.logoMarginX }}",
+              "type": "number"
+            },
+            {
+              "id": "008a4245-500c-4fdf-b7e4-6788a876f8f8",
+              "name": "logoMarginY",
+              "value": "={{ $json.data.logoMarginY }}",
+              "type": "number"
+            },
+            {
+              "id": "d9e06ec1-7ee5-4a8e-bca1-6c383b9ab521",
+              "name": "logoOpacity",
+              "value": "={{ $json.data.logoOpacity }}",
+              "type": "number"
+            },
+            {
+              "id": "833ce65c-93ac-4e95-a55f-5644640547f2",
+              "name": "logoPosition",
+              "value": "={{ $json.data.logoPosition }}",
+              "type": "string"
+            },
+            {
+              "id": "e004-param-20",
+              "name": "minImageCount",
+              "value": "={{ $json.data.minImageCount }}",
+              "type": "number"
+            },
+            {
+              "id": "557bedcc-d8b2-48bc-911a-1c78cda5dad8",
+              "name": "maxImageCount",
+              "value": "={{ $json.data.maxImageCount }}",
+              "type": "number"
+            },
+            {
+              "id": "b730972a-93fd-490d-afda-f607373470d0",
+              "name": "waitStableSeconds",
+              "value": "={{ $json.data.waitStableSeconds }}",
+              "type": "number"
+            },
+            {
+              "id": "0fa0e0dd-6476-4d6e-963c-9ff98aa0ec99",
+              "name": "maxWaitSeconds",
+              "value": "={{ $json.data.maxWaitSeconds }}",
+              "type": "number"
+            },
+            {
+              "id": "0765a224-216e-4e1f-8b81-4a216d03b4cd",
+              "name": "allowedImageExtensions",
+              "value": "={{ $json.data.allowedImageExtensions }}",
+              "type": "array"
+            },
+            {
+              "id": "merchroute-runtime-variants-e004",
+              "name": "variants",
+              "value": "={{ $json.data.variants }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "7ac1ae0f-a5bf-441d-8ce9-4e090edd41c5",
+      "name": "setParameter",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2032,
+        1728
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const __hiddenFs = require('fs');\nconst __hiddenPath = require('path');\nconst __HIDDEN_PS_TEMPLATE = \"$ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue';[Console]::OutputEncoding=New-Object System.Text.UTF8Encoding $false;$OutputEncoding=[Console]::OutputEncoding;function q([string]$a){if($null -eq $a){return '\\\"\\\"'}if($a.Length -eq 0){return '\\\"\\\"'}if($a -notmatch '[\\\\s\\\"]'){return $a}$r='\\\"';$b=0;foreach($c in $a.ToCharArray()){if($c -eq '\\\\'){$b++;continue}if($c -eq '\\\"'){$r+=('\\\\'*($b*2+1))+'\\\"';$b=0;continue}if($b -gt 0){$r+='\\\\'*$b;$b=0}$r+=$c}if($b -gt 0){$r+='\\\\'*($b*2)}return $r+'\\\"'};$sp=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__SPEC_PATH_B64__'));$o=[IO.Path]::GetTempFileName();$e=[IO.Path]::GetTempFileName();try{$s=Get-Content -LiteralPath $sp -Raw -Encoding UTF8|ConvertFrom-Json;$av=@();foreach($x in $s.args){$av+=[string]$x};$al=($av|%{q $_}) -join ' ';$p=Start-Process -FilePath ([string]$s.executable) -ArgumentList $al -WindowStyle Hidden -Wait -PassThru -RedirectStandardOutput $o -RedirectStandardError $e;$out=if(Test-Path -LiteralPath $o){[IO.File]::ReadAllText($o,[Text.Encoding]::UTF8)}else{''};$err=if(Test-Path -LiteralPath $e){[IO.File]::ReadAllText($e,[Text.Encoding]::UTF8)}else{''};if($out){[Console]::Out.Write($out)};if($err){[Console]::Error.Write($err)};exit $p.ExitCode}finally{Remove-Item -LiteralPath $o,$e -Force -ErrorAction SilentlyContinue;if(Test-Path -LiteralPath $sp){Remove-Item -LiteralPath $sp -Force -ErrorAction SilentlyContinue}}\";\nfunction __hiddenB64Utf8(value) { return Buffer.from(String(value ?? ''), 'utf8').toString('base64'); }\nfunction __hiddenShQuote(value) { const text = String(value ?? ''); return \"'\" + text.replace(/'/g, \"'\\\"'\\\"'\") + \"'\"; }\nfunction __useWindowsHiddenCommand() { return __hiddenPath.sep === '\\\\'; }\nfunction __buildHiddenCommand(executable, args) {\n  const __isWin = __useWindowsHiddenCommand();\n  const __tempRoot = __isWin ? '__MERCHROUTE_TEMP_DIR__' : '/tmp';\n  const dir = __hiddenPath.join(__tempRoot, 'n8n-hidden-command-specs');\n  __hiddenFs.mkdirSync(dir, { recursive: true });\n  const specPath = __hiddenPath.join(dir, 'cmd-' + Date.now() + '-' + Math.random().toString(36).slice(2, 10) + '.json');\n  const spec = { executable: String(executable), args: args.map((arg) => String(arg ?? '')), createdAt: new Date().toISOString(), version: 'n8n-hidden-cli-v1' };\n  __hiddenFs.writeFileSync(specPath, JSON.stringify(spec), 'utf8');\n  const psScript = __HIDDEN_PS_TEMPLATE.replace('__SPEC_PATH_B64__', __hiddenB64Utf8(specPath));\n  return 'powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -OutputFormat Text -EncodedCommand ' + Buffer.from(psScript, 'utf16le').toString('base64');\n}\nfunction __buildNodeCommand(args) {\n  const normalizedArgs = args.map((arg) => String(arg ?? ''));\n  if (__useWindowsHiddenCommand()) return __buildHiddenCommand('node', normalizedArgs);\n  return ['node', ...normalizedArgs.map(__hiddenShQuote)].join(' ');\n}\nfunction __buildNodeEvalCommand(scriptBase64, scriptArgs = []) {\n  return __buildNodeCommand(['-e', \"eval(Buffer.from(process.argv[1],'base64').toString('utf8'))\", scriptBase64, ...scriptArgs.map((arg) => String(arg ?? ''))]);\n}\nfunction __buildNodeGzipEvalCommand(scriptBase64, scriptArgs = []) {\n  return __buildNodeCommand(['-e', \"eval(require('zlib').gunzipSync(Buffer.from(process.argv[1],'base64')).toString('utf8'))\", scriptBase64, ...scriptArgs.map((arg) => String(arg ?? ''))]);\n}\n\nconst E004_WAIT_STABLE_SCRIPT_GZIP_BASE64 = 'H4sIAAAAAAACCr0ba5PbtvG7fwVuxmOSNc2TncekcmSP49itk9j1nJxJ2/NVxpGghBxJqAB4OuVO/72zeBEgKd3Z7TQfciKw2Ad2sbvYhXPWCIlKgWaIk3+3lJM4KkWUPL2Xq5k1lit/Dr672Zxv15L583oEIByCbcVwgWbop/nf3mVrzAWJf2jLkvCs5KyO15zlRIgM8+Xl6ZMzdHODoihF0TkW5NuvoySTbC45bZZx1Mryuyhx1EtWFYSjmWIy40Sw6pLEBtjQzQyQwtotpY0k/BJXb0Hwc9Y2BSneNJIsCXcrPZjnz9HjyWSSoqgbjFL0BIa+mUwmDq+QmEsC0v6IJckatomTp/cqIlGNr37DVB4iWJASt5V8qyHnJGdNoWk/AdKj08BFir6dTBL0J8WjpiYkPq+IIvaNG6ywkHO6bLBsOUEzFEU+8Jw2OYwa4HxF8gvRfcPiE4IFa2Blw+RCQZAiAlVXWAj0HucXeElecc44IleSAPv66/oeQmqHeJtLxuOcFSRFkuNGUNLIFBVEYloBvetdosAREu2aaNDkqRqQKyoy+EYzBH+8UYcKzTq03nyH3/yCud29nTVTURGyRjMU17SqqNCbm6DZM9SQDXrPWU0FiWNjZGpCEPmB1oS10g6nKFjtrKJhvMYV/QP4ji9x1WoExlLVgDHQjJN1hXMSH3/8eLxMUXSsjlLZNrmkrOlbjlqaogqfkwqIN7Ru6xRsDX4k3bajpq3P1Vl5p34YLmATaIniIz2aUWExa/gE2DJLv7f4vbFnISnYa842ess8Y4g/3b9WPO4WrJULVi44bpbkU4pKXAmSomtkJOmLgHaJVhRCnMiWN4byU9Cc25US06pvUmhmkQ9Naw+X+4wyCakJXJMP5ErGFSllijhdrqTGa1g0eoVpOL2gVslpHSdoNpvZWbUsnA7J0EbQgsScMZkiifmSSF+hnFRY0kvSuT/9HS542nHVLZjB0Qctxm7sCMayLEIPHqAjO5opbyZ+o3IVf8qy+9eKkCDr3adEAapvKl6cC1a1kjh0SU8ULATh8kfKCRz+LSBkrZxv64o2F3Fhx7V4yh5LkZErKqSYb5vcg0i0riPt1Rc1FYI2ywi0ZszZ+WEJGi9FVsHvHhpr9woso2K+rc9ZRfNfgJ8+EaH5XJSMn9OiIE3UnRuLwMk2WA2e0hGOfIWUIuMEV7CJA/aGu3dClm2F+WtaWRXD/08IrlJU0sr3AmpP3ogP/aPgmw82OutHT0DViRfYoF1iJQwONcAttMj+sQZ0087/afTmUN/Jjh1RWKHiUsu5lgkAYLRkHMVG7WRZwyQrUWfE64rK2JpukpW0koTHPzBWEdwk1nN1eBXo74w2sRlLLV4ThkYs1EAOt8Zo49OYXm7boIPGbCl2LB005o6jgTkf0pel4vnhAzwFygrOhzLbIS9wOLg27AWQ/lzTwZVmIThHQy48M9YHBuCH3FgsX2jP5lhfO5vVdFKzV7vwVHOCi58Ea/5XB9pkY2j23/sLJY3kW3MynFyGRKqD9dRP6LUOCqCmrVODZt1W2OQd9gGhHcqxzFcoJhB57Rns6eN3wZoFbS5xRQtfCTURAi/J1IZSheN5ZoYhsBms1miD6L3CT775Vm2LVp4XuPXlJcs5wZL8FYtVHGnwKMnadYHlUFCFI8kKuiRCxtGKXEU99+2M5cR4pPdYroLMzVejJFeg3s7CdKLW5YX/+ph9PH54nELe4Axcrbq5Uav9qA3pI4wf/+v0xaN/4kd/nE0/Hh9nEngF2OEZsNvtx1Lt/OC0a/zKoerM1HgeA5EJVpPYfqoc98i65Jsb551VApJFw6Es2s9QP1ec6q0Kjp7jQ3lvzaGvig2uLkBzoncifAWAQkHU07NuBy6poKAVP1WZPbNG24Uf0sCpYaVxSUVBeRjZgfsNlStg4sN2TcRUJS5o58KQY6OtqiAWeTgUmazBtb0XHXTKgMnB3Z70rHVGPJL1HHKDQMNFrZBMkBpZIZHe05A5JYakTUvsyM7DNx5LOn7XJKe4UmHky5g+GFQGu3g4qDi29sSUz+FLWWS2bsUq7mLLVFlI6tIcH8FYHqWQJi4WGeSwv8ofa20AaJChAuV+2BJtJWNyJTn2blQ2Ruh7u6onTI2E5pCA1IGUaiTR0xtMJSlMSWNq76hx3BVR0CNbW0nQsSp0QGHoNb0iRfxVYtDomoX+nWWZYjLVIvoykJrK15hWLSc6dqSIXFH5EgoN/pXZ8gpBVcHBnUziJiesDG6OiuBzDaN+T4eXS2cRIOtClZEaXC3UmujLgxuwyiqSqcFYRWShFtJyGxtlaa0oCE8DhaqkpCbEQ2Fnz6S7EAfz3TVZAZmrcgBixpQGkkSxa4t9sN+x23SlHiy2TY6ckmpMmzi48JqD5jKcffdJY1lAbrOiFUGjZoS+n3U1OXcJ0EWvhzP02NSOXBbk+Ydi+15XRTvvrGmmKFqcvHrx4z8ySF2inmepcUNLIuT+xYJUREn/yMKOIpJYXLxkDcS//bgA6FGuoUaxKEFOSM54oQq4XjpqkQS+TUudokj9Vn7Wv3f3EBuUhkCmQrbvPtVkpkGh+KDwGN9pCFR4qS4IMNVRGt3Su4rhqyBFkf08IIwFQbMesaFIRy84x1uoh8Df2KlQa5WonFGodGx8KqtIswR1zmZoYvfCsRiA2qwo6m/IGnNcE0lU3v8O1+5aDdV0yBhseVzvf/Nd836wwpXKPdHWY1DDwSOvvnUbAfgzxJtJ9gvbEP4SCxInGZSQdSZrbNhPIWykNSh06Ach/e0JE4neLu09PgO+embh5u9qeQHJFPW4Hre9nDUlXSr+Amqh6Q18wl1Z6rkR4zMWxmcc4MtbCHeCPmXL3ogsLSfFW3w1bIHo6awOehvqhI43O57uQT5Xqcde/BB7NUhHYjAWpegxUAlOwIDEs1kokz2wOvlZbGhTsM2iboVcnJNFRYRYyBVuFjW+UilAZ5t+ZyjcJtvR0XBeT2fAjYUMrwPtubrcs+YNmENwMIM503uwVWg/5/bAQvfsz7g6bE8v5GqtfNZQH5oJWuMleclaKIUZtN2QVsPjyaTHka2+axS6zj2XeEneFCmKXk0mX7tbpMEZwACvNdQe/KQL57LF1RSN4Ozdajr6zon3WBjBkQy8+R6WbiclLnwa8DWGHMbvjlWwluekJ0AwOKQRTN+d1Fg8GPO2A3o9Lz9OsGdkgzD7xre3QWR9M2J6KqJZM94bk7uVexg7HPAP0shDtJ7R2iWpM9/DZPYZsufAsw3jF2XFNi9VK6x3moLw4EPeqn+fhLEcz32kgacaJ9d3N3cmN//51y7vy9acFW0u5xetzj/2LzERY/7zr4M7/fznXz+LBUNU23qfFWXu+3kJ1hqe/JV93ry5PTz62C8xpxhKe0cz1EDF6cGDjkEzaRI7Nz/Op8WUjq4fsGnBAx6D2IGrim1U6ICr9JzIOA7za7MZBk4dwVfw5gBsRCToOToIgKbo9CxxqWRW43W8pzVvA2OYmnprTUfJWw5V2lP86I/Joz+fPbxvCq56OkysDXOZUI8D/MTfzOiAuCCO8QOpv9ra16Z+2dU6+5lfP5sj9ZpxzLd2pY/IyaZr5SDaxyyW9fpmjbm8yXnBNg08XrmxP5L7x1TLC0syvyXs2WBA0zgod+7tpHL1YrHmRBDllCEXtRUzKJ2GWJQKHZ8h9UGZT7tMZRS3y2y1tMJCF9fIlVSXqZBIz0BGKf6wPekanmDZb/E69pnpiXEakNCtm7Okr3vONl3NuhtWtvM6KGiPlyOEd8y6umNX2D6lTUGuUkQlqc+gwL0n0kBlmhIRVnp1tVQS9XBEbtdQPVOf6tEBO/+d5FI1A8LzDSDDPABG3RHwgqFi0NPySHt5vBEDCE225o/7CYKeXdinb75cwSYq++gMfjznU2gWRbuuaI4l8WVwvPpihBRwUXQUQlaO9lrpXgM1HPZcjCq6GGS3shcm+nP9xqmXh6ktBg/3w1YSEaRedjBK0SQ1dd/s7Yu/L+YvXr9avHn34dVfXp0MyOnzAoXA3pnKlkTu3x8FHAodPiDZK6Vy1Wp5prsQyl/7eRtIHqIGED9v6xNI3dppgKVL54YUhzuvG49o5vc1zbqgD67/Az+hOwmfFJPT+9eWnd30/vWAIAxqCrtP/nY4v6KRdVX9Puk9BZi24WRJhSRcRfjTLMsGqrwgWxEnZ84bd74c2oqHDp4faXxKvTjjT+kw68eaoD0jpiHLYSo9YH1gHS6oK0gT0z8nsx8nsevigOesua7/sBKdeiXYtFe/TPtVpXRYyTnz3bhnO5CUc1ZN71/vazq5nENXhPrPAZJkp0wvmAzNzrPnfUg8mwzNS3iPXO/Q01eSCcZlnJjO8U007Ol7nc0O/WwWvqodxD3vbW3Se2jrvxA2UiBSCeKh6L/YdZS7s3grTo/xfh/ELXw2c9UlXwLbXKrY8mBryedEd7RTf9y/6nnjukwxDetSetBUpEJor2IyWOQXbIZrB/UFf9Ietu4S3/ljH456854D1D5lAKgmA/6ZhAMswZcE+R4nRZvDqwl49uryPtHW6KFOYrtzkaJJIJe6HDdyrux52llHOtCKa632K4c+qNrM171utOv8BJStL+lD+2456Svb+Jb+ml4d2lu285Jo22Pu23X4Lh0qq7RZwgOARVCJjUzDe/Td0Rd2fPtd3/9v59e5mLGmbBI0uTuIFD1xi4Od63V+fZj+PxkY8zuT7j0BQhgE1S/q4+7fS7gHhAFnezdLPw2E8u05KRknC6nf2ns7FrSuO2m0/YSdg6lXZdfPB3RXOkVf6e6zbjdnyjpiax2zZ2NvBb4Go/wPTUkmlzgzAAA=';\n\nconst trigger = $input.first().json || {};\n\nfunction normalizePath(value) {\n  let result = String(value || '').trim().replace(/\\\\/g, '/');\n  while (result.length > 1 && result.endsWith('/')) result = result.slice(0, -1);\n  return result;\n}\n\nfunction looksLikeFile(value) {\n  const name = normalizePath(value).split('/').pop() || '';\n  return /\\.[A-Za-z0-9]{1,12}$/.test(name);\n}\n\nfunction basename(value) {\n  const normalized = normalizePath(value);\n  return normalized.split('/').filter(Boolean).pop() || normalized;\n}\n\nconst rawPath = normalizePath(trigger.path || trigger.filePath || trigger.folderPath || trigger.fullPath || '');\nif (!rawPath) throw new Error('Local File Trigger did not provide a path.');\n\nconst eventText = String(trigger.event || trigger.eventName || trigger.type || '').toLowerCase();\nconst isDirectoryEvent = eventText.includes('adddir') || eventText.includes('created') || eventText.includes('folder') || !looksLikeFile(rawPath);\nif (!isDirectoryEvent) return [];\n\nconst waitPayload = Buffer.from(JSON.stringify({\n  folder: rawPath,\n  defaultMaxWaitSeconds: 120,\n  intervalMs: 1000,\n}), 'utf8').toString('base64');\n\nconst waitCommand = __buildNodeGzipEvalCommand(E004_WAIT_STABLE_SCRIPT_GZIP_BASE64, [waitPayload]);\n\nreturn [{\n  json: {\n    rawTriggerPath: rawPath,\n    sourceChildDir: rawPath,\n    sourceChildName: basename(rawPath),\n    waitCommand,\n  },\n}];"
+      },
+      "id": "cbdccba7-49f0-45e8-8d47-cd47219fb3d2",
+      "name": "Normalize Trigger Path",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2256,
+        1728
+      ]
+    },
+    {
+      "parameters": {
+        "command": "={{ $json.waitCommand }}"
+      },
+      "id": "91eabefb-c7c6-4728-a711-9b26a9f18cd7",
+      "name": "Wait Until Folder Stable",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        2480,
+        1728
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const fs = require('fs');\nconst path = require('path');\n\nconst current = $input.first().json || {};\nconst upstream = $('Normalize Trigger Path').first().json || {};\nconst stdout = String(current.stdout || '').trim();\nconst stderr = String(current.stderr || '').trim();\n\nfunction parseLastJson(text) {\n  const lines = String(text || '').split(/\\r?\\n/).map((line) => line.trim()).filter(Boolean).reverse();\n  for (const line of lines) {\n    try {\n      const parsed = JSON.parse(line);\n      if (parsed && typeof parsed === 'object') return parsed;\n    } catch {}\n  }\n  return null;\n}\n\nconst stable = parseLastJson(stdout);\nif (!stable || stable.stable !== true) {\n  const detail = stable?.reason || stable?.error || stderr || stdout || 'Wait node did not return stable JSON.';\n  throw new Error('E004_PACKAGE_NOT_READY: ' + detail);\n}\n\nconst submissionId = String(stable.submissionId || '').trim();\nconst parameterFileName = String(stable.parameterFileName || '').trim();\nif (!submissionId) throw new Error('E004_SUBMISSION_ID_MISSING');\nif (!parameterFileName.toLowerCase().endsWith('.json')) throw new Error('E004_PARAMETER_FILE_INVALID');\nif (String(stable.targetStageId || '') !== 'E004') throw new Error('E004_TARGET_STAGE_MISMATCH');\n\nconst state = $getWorkflowStaticData('global');\nif (!state.e004CompletedSubmissions || typeof state.e004CompletedSubmissions !== 'object' || Array.isArray(state.e004CompletedSubmissions)) {\n  state.e004CompletedSubmissions = {};\n}\nif (state.p007CompletedSubmissions && typeof state.p007CompletedSubmissions === 'object' && !Array.isArray(state.p007CompletedSubmissions)) {\n  for (const [key, completedAt] of Object.entries(state.p007CompletedSubmissions)) {\n    if (!Object.prototype.hasOwnProperty.call(state.e004CompletedSubmissions, key)) state.e004CompletedSubmissions[key] = completedAt;\n  }\n  delete state.p007CompletedSubmissions;\n}\n\nconst now = Date.now();\nconst completedKeepMs = 30 * 24 * 60 * 60 * 1000;\nfor (const [key, completedAt] of Object.entries(state.e004CompletedSubmissions)) {\n  if (!Number.isFinite(Number(completedAt)) || now - Number(completedAt) > completedKeepMs) delete state.e004CompletedSubmissions[key];\n}\nif (state.e004CompletedSubmissions[submissionId]) {\n  throw new Error('E004_SUBMISSION_ALREADY_COMPLETED: submissionId=' + submissionId + ', completedAt=' + new Date(Number(state.e004CompletedSubmissions[submissionId])).toISOString());\n}\n\nconst sourceChildDir = path.resolve(String(upstream.sourceChildDir || ''));\nif (!sourceChildDir || !fs.existsSync(sourceChildDir) || !fs.lstatSync(sourceChildDir).isDirectory()) {\n  throw new Error('E004_SOURCE_DIRECTORY_INVALID');\n}\nif (fs.lstatSync(sourceChildDir).isSymbolicLink()) throw new Error('E004_SOURCE_DIRECTORY_SYMLINK_FORBIDDEN');\nconst lockPath = path.join(sourceChildDir, '._E004_RENDER.lock');\nconst lockTtlMs = 30 * 60 * 1000;\n\nif (fs.existsSync(lockPath)) {\n  const lockStat = fs.lstatSync(lockPath);\n  if (lockStat.isSymbolicLink() || !lockStat.isFile()) throw new Error('E004_RENDER_LOCK_INVALID');\n  let lock = {};\n  try { lock = JSON.parse(fs.readFileSync(lockPath, 'utf8')); } catch {}\n  const startedAt = Date.parse(String(lock.startedAt || ''));\n  if (!Number.isFinite(startedAt) || now - startedAt > lockTtlMs) {\n    fs.rmSync(lockPath, { force: true });\n  } else {\n    throw new Error('E004_SUBMISSION_IN_PROGRESS: submissionId=' + String(lock.submissionId || 'unknown') + ', executionId=' + String(lock.executionId || 'unknown'));\n  }\n}\n\nlet descriptor;\ntry {\n  descriptor = fs.openSync(lockPath, 'wx', 0o600);\n  fs.writeFileSync(descriptor, JSON.stringify({\n    schemaVersion: 1,\n    workflowCode: 'E004',\n    submissionId,\n    executionId: String($execution.id || ''),\n    startedAt: new Date(now).toISOString(),\n  }, null, 2), 'utf8');\n} catch (error) {\n  if (error?.code === 'EEXIST') throw new Error('E004_SUBMISSION_IN_PROGRESS: concurrent lock acquired');\n  throw error;\n} finally {\n  if (descriptor !== undefined) fs.closeSync(descriptor);\n}\n\nreturn [{\n  json: {\n    ...upstream,\n    readySubmissionId: submissionId,\n    parameterFileName,\n    parameterFilePrefix: parameterFileName.slice(0, -5),\n    e004RenderLockPath: lockPath.replace(/\\\\/g, '/'),\n    folderStable: true,\n    folderStableResult: stable,\n    imagePathsFromStable: Array.isArray(stable.imageFiles) ? stable.imageFiles : [],\n    folderStableImageCount: Number(stable.imageCount || 0),\n    folderStableWaitedSeconds: Number(stable.waitedSeconds || 0),\n    folderStableChecks: Number(stable.checks || 0),\n    folderStableContentSha256: String(stable.contentSha256 || ''),\n  },\n}];"
+      },
+      "id": "b956a1c0-04d6-43be-8e66-f3f9edb53572",
+      "name": "Parse Stable Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2704,
+        1728
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const fs = require('fs');\nconst path = require('path');\n\nconst params = $input.first().json || {};\nconst packageInput = $('Parse Stable Result').first().json || {};\nconst configResponse = $(\"Call 'S016-JSON文件-解析'\").first().json || {};\n\nconst expectedKeys = ['SKU','productName','variants','outputParentDir','renderWorkflowId','logoPath','musicPath','ffmpegPath','effectPreset','targetDuration','width','height','fps','audioVolume','audioFadeIn','audioFadeOut','enableLogo','logoWidth','logoMarginX','logoMarginY','logoOpacity','logoPosition','minImageCount','maxImageCount','waitStableSeconds','maxWaitSeconds','allowedImageExtensions'];\nif (configResponse.success !== true || !configResponse.data || typeof configResponse.data !== 'object') {\n  throw new Error('S016 参数文件解析失败：' + (configResponse.message || configResponse.errorType || 'data is missing'));\n}\nconst missingKeys = expectedKeys.filter((key) => !Object.prototype.hasOwnProperty.call(configResponse.data, key));\nif (missingKeys.length) throw new Error('参数 JSON 缺少字段：' + missingKeys.join(', '));\n\nif (typeof configResponse.data.SKU !== 'string') throw new Error('参数 JSON 的 SKU 必须是 String。');\nif (typeof configResponse.data.productName !== 'string') throw new Error('参数 JSON 的 productName 必须是 String。');\nif (typeof configResponse.data.variants !== 'string') throw new Error('参数 JSON 的 variants 必须是 String。');\nconst requiredText = ['SKU', 'productName', 'variants', 'outputParentDir', 'renderWorkflowId', 'ffmpegPath', 'effectPreset'];\nconst emptyRequired = requiredText.filter((key) => !String(params[key] ?? '').trim());\nif (params.enableLogo === true && !String(params.logoPath || '').trim()) emptyRequired.push('logoPath');\nif (emptyRequired.length) throw new Error('参数字段不能为空：' + [...new Set(emptyRequired)].join(', '));\nif (String(params.renderWorkflowId).trim() !== 'x8D4EHfqI2DHcgL7') throw new Error('E004_RENDER_WORKFLOW_ID_INVALID');\n\nfunction normalizeUserPath(value, options = {}) {\n  const trimTrailingSlash = options.trimTrailingSlash !== false;\n  let result = String(value ?? '').trim();\n  if (result.length >= 2) {\n    const first = result[0];\n    const last = result[result.length - 1];\n    if ((first === '\"' && last === '\"') || (first === \"'\" && last === \"'\")) result = result.slice(1, -1).trim();\n  }\n  result = result.replace(/\\\\+/g, '/').replace(/^([A-Za-z]:)\\/+/, '$1/');\n  if (trimTrailingSlash) while (result.length > 1 && result.endsWith('/') && !/^[A-Za-z]:\\/$/.test(result)) result = result.slice(0, -1);\n  return result;\n}\n\nfunction cleanName(value, fallback) {\n  return String(value || fallback || 'product').trim().replace(/[<>:\"/\\\\|?*\\x00-\\x1F]/g, '_').replace(/[. ]+$/g, '') || fallback || 'product';\n}\n\nfunction extensionOf(value) {\n  const name = String(value || '').split('/').pop() || '';\n  const index = name.lastIndexOf('.');\n  return index >= 0 ? name.slice(index).toLowerCase() : '';\n}\n\nfunction normalizeRelativePath(value, label) {\n  const normalized = normalizeUserPath(value, { trimTrailingSlash: false }).replace(/^\\.\\/+/, '');\n  if (!normalized || normalized.startsWith('/') || /^[A-Za-z]:\\//.test(normalized)) throw new Error(label + ' 必须是非空相对路径。');\n  const segments = normalized.split('/');\n  if (segments.some((segment) => !segment || segment === '.' || segment === '..')) throw new Error(label + ' 包含不安全的路径片段：' + normalized);\n  return segments.join('/');\n}\n\nfunction resolveInside(root, relativePath, label) {\n  const absoluteRoot = path.resolve(root);\n  const absoluteTarget = path.resolve(absoluteRoot, ...relativePath.split('/'));\n  const relative = path.relative(absoluteRoot, absoluteTarget);\n  if (!relative || relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) throw new Error(label + ' 超出来源目录：' + relativePath);\n  return absoluteTarget;\n}\n\nfunction relativeFromRoot(root, filePath, label) {\n  const absoluteRoot = path.resolve(root);\n  const absoluteFile = path.resolve(filePath);\n  const relative = path.relative(absoluteRoot, absoluteFile);\n  if (!relative || relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) throw new Error(label + ' 超出来源目录：' + filePath);\n  return relative.split(path.sep).join('/');\n}\n\nfunction boundedInteger(value, label, minimum, maximum) {\n  const number = Number(value);\n  if (!Number.isInteger(number) || number < minimum || number > maximum) throw new Error(label + ' 必须是 ' + minimum + '–' + maximum + ' 的整数。');\n  return number;\n}\n\nfunction orderManifestFiles(manifest) {\n  if (!manifest || !Array.isArray(manifest.selectedFiles) || manifest.selectedFiles.length === 0) throw new Error('selection-manifest.json 的 selectedFiles 必须是非空数组。');\n  const files = manifest.selectedFiles.map((entry, index) => {\n    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw new Error('selection-manifest.json 的 selectedFiles[' + index + '] 无效。');\n    return { ...entry };\n  });\n  const hasSortOrder = files.map((entry) => Object.prototype.hasOwnProperty.call(entry, 'sortOrder'));\n  if (hasSortOrder.some(Boolean) && !hasSortOrder.every(Boolean)) throw new Error('selection-manifest.json 的 sortOrder 不得部分缺失。');\n  if (!hasSortOrder.every(Boolean)) return { files, orderSource: 'selection-manifest-array' };\n  const seen = new Set();\n  for (const [index, entry] of files.entries()) {\n    if (!Number.isInteger(entry.sortOrder) || entry.sortOrder < 0) throw new Error('selection-manifest.json 的 selectedFiles[' + index + '].sortOrder 必须是非负整数。');\n    if (seen.has(entry.sortOrder)) throw new Error('selection-manifest.json 的 sortOrder 重复：' + entry.sortOrder);\n    seen.add(entry.sortOrder);\n  }\n  const ordered = [...files].sort((left, right) => left.sortOrder - right.sortOrder);\n  ordered.forEach((entry, index) => {\n    if (entry.sortOrder !== index) throw new Error('selection-manifest.json 的 sortOrder 必须从 0 连续递增。');\n  });\n  return { files: ordered, orderSource: 'selection-manifest-sortOrder' };\n}\n\nconst sourceChildDir = normalizeUserPath(packageInput.sourceChildDir || '');\nif (!sourceChildDir) throw new Error('Parse Stable Result 缺少 sourceChildDir。');\nconst allowed = new Set((Array.isArray(params.allowedImageExtensions) ? params.allowedImageExtensions : [])\n  .map((entry) => String(entry || '').toLowerCase().trim()).filter((entry) => /^\\.[a-z0-9]+$/.test(entry)));\nif (!allowed.size) throw new Error('allowedImageExtensions 必须包含至少一个合法扩展名。');\nconst stableImagePaths = (Array.isArray(packageInput.imagePathsFromStable) ? packageInput.imagePathsFromStable : [])\n  .map(normalizeUserPath).filter((filePath) => allowed.has(extensionOf(filePath)));\n\nconst stableByRelativePath = new Map();\nfor (const imagePath of stableImagePaths) {\n  const relativePath = relativeFromRoot(sourceChildDir, imagePath, '稳定扫描图片');\n  if (stableByRelativePath.has(relativePath)) throw new Error('稳定扫描结果包含重复图片：' + relativePath);\n  stableByRelativePath.set(relativePath, imagePath);\n}\n\nconst manifestPath = path.join(sourceChildDir, 'selection-manifest.json');\nif (!fs.existsSync(manifestPath)) throw new Error('E004_SELECTION_MANIFEST_REQUIRED');\nlet manifest;\ntry { manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')); }\ncatch (error) { throw new Error('读取 selection-manifest.json 失败：' + (error?.message || String(error))); }\nif (String(manifest.n8nParameterFileName || '') !== String(packageInput.parameterFileName || '')) throw new Error('manifest 与 _READY.json 的参数文件名不一致。');\nif (String(manifest.targetStageId || '') !== 'E004') throw new Error('manifest.targetStageId 必须是 E004。');\nif (String(manifest.productSku || '') !== String(params.SKU || '')) throw new Error('manifest.productSku 与参数 SKU 不一致。');\nif (String(manifest.productName || '') !== String(params.productName || '')) throw new Error('manifest.productName 与参数 productName 不一致。');\n\nconst ordered = orderManifestFiles(manifest);\nconst seenTargets = new Set();\nconst orderedSelection = ordered.files.map((entry, index) => {\n  const targetRelativePath = normalizeRelativePath(entry.targetRelativePath, 'selectedFiles[' + index + '].targetRelativePath');\n  if (!allowed.has(extensionOf(targetRelativePath))) throw new Error('manifest 包含不支持的图片类型：' + targetRelativePath);\n  if (seenTargets.has(targetRelativePath)) throw new Error('manifest 包含重复的 targetRelativePath：' + targetRelativePath);\n  seenTargets.add(targetRelativePath);\n  const absolutePath = resolveInside(sourceChildDir, targetRelativePath, 'selectedFiles[' + index + '].targetRelativePath');\n  const stablePath = stableByRelativePath.get(targetRelativePath);\n  if (!stablePath || path.resolve(stablePath) !== path.resolve(absolutePath)) throw new Error('manifest 图片不在稳定扫描结果中：' + targetRelativePath);\n  return {\n    sortOrder: index,\n    targetRelativePath,\n    sourceRelativePath: entry.sourceRelativePath == null ? null : normalizeRelativePath(entry.sourceRelativePath, 'selectedFiles[' + index + '].sourceRelativePath'),\n    absolutePath: stablePath,\n  };\n});\nif (seenTargets.size !== stableByRelativePath.size) {\n  const extra = [...stableByRelativePath.keys()].filter((relativePath) => !seenTargets.has(relativePath));\n  throw new Error('来源目录中的图片与 manifest 不一致，未登记图片：' + extra.join(', '));\n}\nconst selectedImages = orderedSelection.map((entry) => entry.absolutePath);\n\nconst minImageCount = boundedInteger(params.minImageCount, 'minImageCount', 1, 100);\nconst maxImageCount = boundedInteger(params.maxImageCount, 'maxImageCount', 1, 100);\nif (minImageCount > maxImageCount) throw new Error('minImageCount 不得大于 maxImageCount。');\nif (selectedImages.length < minImageCount) throw new Error('子目录中没有足够图片：至少需要 ' + minImageCount + ' 张，当前 ' + selectedImages.length + ' 张。');\nif (selectedImages.length > maxImageCount) throw new Error('图片数量超过上限：最多允许 ' + maxImageCount + ' 张，当前 ' + selectedImages.length + ' 张。');\n\nconst sourceChildName = cleanName(packageInput.sourceChildName, 'product');\nconst SKU = String(params.SKU || '').trim();\nconst productName = String(params.productName || '').trim();\nconst variants = String(params.variants || '').trim();\nconst executionId = String($execution.id || '').trim();\nif (!/^\\d{7}$/.test(SKU)) throw new Error('n8n_setParameter_xxx.json 的 SKU 必须是保留前导零的 7 位数字。');\nif (!productName) throw new Error('n8n_setParameter_xxx.json 的 productName 不能为空。');\nif (!variants) throw new Error('n8n_setParameter_xxx.json 的 variants 不能为空。');\nif (!/^\\d+$/.test(executionId)) throw new Error('当前工作流 executionId 无效。');\nconst outputParentDir = normalizeUserPath(params.outputParentDir || '');\nconst outputSubDir = outputParentDir + '/' + SKU + '-' + cleanName(productName, 'product') + '-' + executionId;\nconst outputVideoPath = outputSubDir + '/' + sourceChildName + '.mp4';\nconst jobJsonPath = outputSubDir + '/job.json';\n\nconst job = {\n  sourceChildDir,\n  sourceChildName,\n  SKU,\n  productName,\n  variants,\n  n8nExecutionId: executionId,\n  readySubmissionId: packageInput.readySubmissionId,\n  parameterFileName: packageInput.parameterFileName,\n  e004RenderLockPath: packageInput.e004RenderLockPath,\n  sourcePackageSha256: packageInput.folderStableContentSha256,\n  imagePaths: selectedImages,\n  imageCount: selectedImages.length,\n  skippedImageCount: 0,\n  imageOrderSource: ordered.orderSource,\n  orderedSelection: orderedSelection.map(({ absolutePath, ...entry }) => entry),\n  selectionManifestPath: normalizeUserPath(manifestPath),\n  outputSubDir,\n  outputVideoPath,\n  effectPreset: params.effectPreset || 'case1',\n  createdAt: new Date().toISOString(),\n  params,\n};\n\nreturn [{ json: { ...job, job, jobJsonPath, renderWorkflowId: 'x8D4EHfqI2DHcgL7' } }];"
+      },
+      "id": "1c8f1e95-e779-4973-9622-0f6f71f190c6",
+      "name": "Collect Image Files",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1616,
+        1984
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const fs = require('fs');\nconst path = require('path');\nconst source = $('Collect Image Files').first().json || {};\nconst job = source.job || {};\n\nfunction normalizeForCompare(value) {\n  const resolved = path.resolve(String(value || ''));\n  return path.sep === '\\\\' ? resolved.toLowerCase() : resolved;\n}\n\nfunction isInside(root, target) {\n  const relative = path.relative(root, target);\n  return relative === '' || (relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative));\n}\n\nfunction atomicWriteJson(target, value) {\n  if (fs.existsSync(target)) throw new Error('E004_OUTPUT_METADATA_ALREADY_EXISTS: ' + target);\n  const temporary = target + '.tmp-' + String($execution.id || Date.now());\n  let completed = false;\n  try {\n    fs.writeFileSync(temporary, JSON.stringify(value, null, 2) + '\\n', { encoding: 'utf8', flag: 'wx', mode: 0o600 });\n    fs.renameSync(temporary, target);\n    completed = true;\n  } finally {\n    if (!completed && fs.existsSync(temporary)) fs.rmSync(temporary, { force: true });\n  }\n}\n\nif (typeof job.SKU !== 'string' || !/^\\d{7}$/.test(job.SKU.trim())) throw new Error('job.SKU 必须是 7 位 String。');\nif (typeof job.productName !== 'string' || !job.productName.trim()) throw new Error('job.productName 必须是非空 String。');\nif (typeof job.variants !== 'string' || !job.variants.trim()) throw new Error('job.variants 必须是非空 String。');\nif (!Array.isArray(job.imagePaths) || job.imagePaths.length !== Number(job.imageCount || 0)) throw new Error('job.imagePaths 与 imageCount 不一致。');\n\nconst outputParentDir = path.resolve(String(job.params?.outputParentDir || ''));\nconst outputSubDir = path.resolve(String(job.outputSubDir || ''));\nif (!outputParentDir || !outputSubDir || !isInside(outputParentDir, outputSubDir) || normalizeForCompare(outputParentDir) === normalizeForCompare(outputSubDir)) {\n  throw new Error('Unsafe outputSubDir outside outputParentDir: ' + outputSubDir);\n}\nif (!fs.existsSync(outputParentDir) || !fs.lstatSync(outputParentDir).isDirectory() || fs.lstatSync(outputParentDir).isSymbolicLink()) {\n  throw new Error('outputParentDir must be an existing real directory: ' + outputParentDir);\n}\nconst parentReal = fs.realpathSync(outputParentDir);\nif (!isInside(parentReal, fs.realpathSync(outputParentDir))) throw new Error('outputParentDir realpath validation failed.');\n\nconst expectedJobPath = path.resolve(outputSubDir, 'job.json');\nconst requestedJobPath = path.resolve(String(source.jobJsonPath || ''));\nif (normalizeForCompare(expectedJobPath) !== normalizeForCompare(requestedJobPath)) throw new Error('jobJsonPath must be outputSubDir/job.json');\n\nconst renderJob = {\n  ...job,\n  schemaVersion: 2,\n  workflowCode: 'E004',\n  status: 'RENDERING',\n  renderStartedAt: new Date().toISOString(),\n  sourcePackageSha256: String(source.folderStableContentSha256 || ''),\n};\nconst taskContext = {\n  schemaVersion: 2,\n  workflowCode: 'E004',\n  status: 'RENDERING',\n  SKU: job.SKU.trim(),\n  productName: job.productName.trim(),\n  variants: job.variants.trim(),\n  ...(job.variantId ? { variantId: String(job.variantId) } : {}),\n  ...(job.readySubmissionId ? { sourceSubmissionId: String(job.readySubmissionId) } : {}),\n  n8nExecutionId: String(job.n8nExecutionId || $execution.id || ''),\n  renderStartedAt: renderJob.renderStartedAt,\n};\n\nfs.mkdirSync(outputSubDir, { recursive: false });\nif (fs.lstatSync(outputSubDir).isSymbolicLink() || !fs.lstatSync(outputSubDir).isDirectory()) throw new Error('outputSubDir must be a real directory.');\nif (!isInside(parentReal, fs.realpathSync(outputSubDir))) throw new Error('outputSubDir realpath escaped outputParentDir.');\nconst taskContextPath = path.resolve(outputSubDir, 'task-context.json');\natomicWriteJson(expectedJobPath, renderJob);\natomicWriteJson(taskContextPath, taskContext);\n\nconst parsedJob = JSON.parse(fs.readFileSync(expectedJobPath, 'utf8'));\nconst parsedContext = JSON.parse(fs.readFileSync(taskContextPath, 'utf8'));\nif (parsedJob.status !== 'RENDERING' || parsedJob.imagePaths.length !== Number(job.imageCount)) throw new Error('job.json verification failed.');\nif (parsedContext.status !== 'RENDERING' || parsedContext.variants !== taskContext.variants) throw new Error('task-context.json verification failed.');\n\nreturn [{ json: {\n  ...source,\n  job: renderJob,\n  taskContextPath: taskContextPath.replace(/\\\\/g, '/'),\n  jobJsonWritten: true,\n  jobJsonPath: expectedJobPath.replace(/\\\\/g, '/'),\n  jobJsonSizeBytes: fs.statSync(expectedJobPath).size,\n  jobJsonImageCount: parsedJob.imagePaths.length,\n} }];"
+      },
+      "id": "2f18e72f-5874-4e6f-b30e-56f8c8dfb3ab",
+      "name": "Prepare Job Json",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2064,
+        1984
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "={{ $(\"Collect Image Files\").first().json.renderWorkflowId }}",
+          "mode": "id",
+          "cachedResultName": "P007-Render-主图视频"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "imagePaths": "={{ $(\"Collect Image Files\").first().json.imagePaths }}",
+            "outputVideoPath": "={{ $(\"Collect Image Files\").first().json.outputVideoPath }}",
+            "outputSubDir": "={{ $(\"Collect Image Files\").first().json.outputSubDir }}",
+            "effectPreset": "={{ $(\"Collect Image Files\").first().json.effectPreset }}",
+            "params": "={{ $(\"Collect Image Files\").first().json.params }}",
+            "sourceChildDir": "={{ $(\"Collect Image Files\").first().json.sourceChildDir }}",
+            "sourceChildName": "={{ $(\"Collect Image Files\").first().json.sourceChildName }}",
+            "jobJsonPath": "={{ $(\"Collect Image Files\").first().json.jobJsonPath }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "imagePaths",
+              "displayName": "imagePaths",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "array",
+              "removed": false
+            },
+            {
+              "id": "outputVideoPath",
+              "displayName": "outputVideoPath",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "outputSubDir",
+              "displayName": "outputSubDir",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "effectPreset",
+              "displayName": "effectPreset",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "params",
+              "displayName": "params",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "object",
+              "removed": false
+            },
+            {
+              "id": "sourceChildDir",
+              "displayName": "sourceChildDir",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "sourceChildName",
+              "displayName": "sourceChildName",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "jobJsonPath",
+              "displayName": "jobJsonPath",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "fd4def9d-30aa-4606-9255-404d92c9fd1f",
+      "name": "Call Render Video Workflow",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        2288,
+        1984
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const fs = require('fs');\nconst path = require('path');\nconst render = $input.first().json || {};\nconst job = $('Collect Image Files').first().json || {};\nconst packageState = $('Parse Stable Result').first().json || {};\n\nif (render.success !== true || render.ok !== true) {\n  throw new Error('E004_RENDER_RESULT_INVALID: success=' + String(render.success) + ', ok=' + String(render.ok));\n}\nif (!job.readySubmissionId) throw new Error('E004_RENDER_RESULT_MISSING_SUBMISSION_ID');\nif (!render.outputVideoPath || Number(render.sizeBytes || 0) <= 0) throw new Error('E004_RENDER_OUTPUT_INVALID');\n\nfunction atomicWriteJson(target, value) {\n  const temporary = target + '.tmp-' + String($execution.id || Date.now());\n  let completed = false;\n  try {\n    fs.writeFileSync(temporary, JSON.stringify(value, null, 2) + '\\n', { encoding: 'utf8', flag: 'wx', mode: 0o600 });\n    fs.renameSync(temporary, target);\n    completed = true;\n  } finally {\n    if (!completed && fs.existsSync(temporary)) fs.rmSync(temporary, { force: true });\n  }\n}\n\nconst outputSubDir = path.resolve(String(job.outputSubDir || ''));\nconst outputVideoPath = path.resolve(String(render.outputVideoPath || ''));\nconst relativeOutput = path.relative(outputSubDir, outputVideoPath);\nif (!relativeOutput || relativeOutput === '..' || relativeOutput.startsWith('..' + path.sep) || path.isAbsolute(relativeOutput)) {\n  throw new Error('E004_RENDER_OUTPUT_OUTSIDE_DIRECTORY');\n}\nconst completedAt = new Date().toISOString();\nconst completionPath = path.join(outputSubDir, '_COMPLETE.json');\natomicWriteJson(completionPath, {\n  schemaVersion: 1,\n  workflowCode: 'E004',\n  status: 'COMPLETED',\n  submissionId: job.readySubmissionId,\n  n8nExecutionId: String(job.n8nExecutionId || $execution.id || ''),\n  completedAt,\n  outputVideoPath: outputVideoPath.replace(/\\\\/g, '/'),\n  sizeBytes: Number(render.sizeBytes),\n  durationSeconds: Number(render.durationSeconds || 0),\n  mediaProbe: render.mediaProbe || null,\n});\n\nconst state = $getWorkflowStaticData('global');\nif (!state.e004CompletedSubmissions || typeof state.e004CompletedSubmissions !== 'object' || Array.isArray(state.e004CompletedSubmissions)) state.e004CompletedSubmissions = {};\nconst now = Date.now();\nconst keepMs = 30 * 24 * 60 * 60 * 1000;\nfor (const [key, completedTimestamp] of Object.entries(state.e004CompletedSubmissions)) {\n  if (!Number.isFinite(Number(completedTimestamp)) || now - Number(completedTimestamp) > keepMs) delete state.e004CompletedSubmissions[key];\n}\nstate.e004CompletedSubmissions[job.readySubmissionId] = now;\n\nconst lockPath = path.resolve(String(packageState.e004RenderLockPath || ''));\nconst sourceRoot = path.resolve(String(job.sourceChildDir || ''));\nif (lockPath && path.dirname(lockPath) === sourceRoot && path.basename(lockPath) === '._E004_RENDER.lock') {\n  fs.rmSync(lockPath, { force: true });\n}\n\nreturn [{ json: {\n  success: true,\n  submissionId: job.readySubmissionId,\n  parameterFileName: job.parameterFileName || '',\n  sourceChildDir: job.sourceChildDir,\n  sourceChildName: job.sourceChildName,\n  imageCount: job.imageCount,\n  effectPreset: job.effectPreset,\n  outputSubDir: job.outputSubDir,\n  outputVideoPath: render.outputVideoPath,\n  outputSizeBytes: Number(render.sizeBytes),\n  durationSeconds: Number(render.durationSeconds || job.params?.targetDuration || 0),\n  completionFile: completionPath.replace(/\\\\/g, '/'),\n  completedAt,\n  render,\n} }];"
+      },
+      "id": "b4298166-8afc-43a0-ab28-ced6dec58a1d",
+      "name": "Build Final Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2512,
+        1984
+      ]
+    },
+    {
+      "parameters": {
+        "content": "",
+        "height": 240,
+        "width": 1328,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        1520,
+        1920
+      ],
+      "typeVersion": 1,
+      "id": "2a2cb0d3-5ca5-4fb4-9036-fdf60466cb0e",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "content": "",
+        "height": 240,
+        "width": 1316,
+        "color": 2
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        1520,
+        1680
+      ],
+      "typeVersion": 1,
+      "id": "e836603b-e0de-4035-921a-fac7bbe7bee1",
+      "name": "Sticky Note1"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "gDMR3Mxnm9dKQJtO",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/gDMR3Mxnm9dKQJtO",
+          "cachedResultName": "S016-JSON文件-解析"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "folderPath": "={{ $json.sourceChildDir }}",
+            "filePrefix": "={{ $json.parameterFilePrefix }}",
+            "fileExtension": ".json",
+            "returnMode": "latest"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "folderPath",
+              "displayName": "folderPath",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "filePrefix",
+              "displayName": "filePrefix",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "fileExtension",
+              "displayName": "fileExtension",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "returnMode",
+              "displayName": "returnMode",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "dcfcedcd-8a34-4428-b732-fc538a735620",
+      "name": "Call 'S016-JSON文件-解析'",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        1824,
+        1728
+      ]
+    }
+  ],
+  "connections": {
+    "Watch Source Parent Directory": {
+      "main": [
+        [
+          {
+            "node": "Normalize Trigger Path",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "setParameter": {
+      "main": [
+        [
+          {
+            "node": "Collect Image Files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Trigger Path": {
+      "main": [
+        [
+          {
+            "node": "Wait Until Folder Stable",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait Until Folder Stable": {
+      "main": [
+        [
+          {
+            "node": "Parse Stable Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Stable Result": {
+      "main": [
+        [
+          {
+            "node": "Call 'S016-JSON文件-解析'",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect Image Files": {
+      "main": [
+        [
+          {
+            "node": "Prepare Job Json",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call Render Video Workflow": {
+      "main": [
+        [
+          {
+            "node": "Build Final Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call 'S016-JSON文件-解析'": {
+      "main": [
+        [
+          {
+            "node": "setParameter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Job Json": {
+      "main": [
+        [
+          {
+            "node": "Call Render Video Workflow",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  }
+}

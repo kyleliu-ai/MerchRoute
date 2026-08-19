@@ -1,0 +1,198 @@
+{
+  "id": "KmZ1AibtVGxzCgzc",
+  "name": "S001-Url文件下载-v02",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "fileUrl"
+            },
+            {
+              "name": "folderPath"
+            },
+            {
+              "name": "fileName"
+            },
+            {
+              "name": "contentText"
+            },
+            {
+              "name": "mimeType"
+            },
+            {
+              "name": "fileKind"
+            },
+            {
+              "name": "batchItems",
+              "type": "array"
+            },
+            {
+              "name": "concurrency",
+              "type": "number"
+            },
+            {
+              "name": "supportFolderPath"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        32,
+        -688
+      ],
+      "id": "fe45eafe-2bbd-45ac-8996-af9f03aa3d57",
+      "name": "ExecutedbyWorkflow"
+    },
+    {
+      "parameters": {
+        "content": "## S001-Url文件下载-v02\n\n### 功能\n作为可复用下载/写盘子工作流，兼容两种输入：\n- 旧模式：单条 `fileUrl/folderPath/fileName/contentText/mimeType/fileKind`。\n- 批量模式：`batchItems` 数组或 JSON 字符串，一次处理多条 URL 下载与文本/JSON 写盘任务。\n\n### 批量参数\n- `batchItems`：数组，每项包含 `fileUrl` 或 `contentText`、`folderPath`、`fileName`、`mimeType`、`fileKind`。\n- `concurrency`：并发数，默认 `8`，内部限制为 `1-16`。\n\n### 实现\n归一化输入后写入临时 jobs/script 文件，再由 Execute Command 调用 Node.js 并发下载 URL 或写入文本文件。\n\n### 输出\n每个文件返回一条结果：`ok`、`fileKind`、`fileName`、`savedPath`、`sourceUrl`、`mimeType`、`error`。部分失败不会吞掉成功项。",
+        "height": 668,
+        "width": 560,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -16,
+        -1184
+      ],
+      "id": "54bdbcf3-3fd8-4a2c-bc3d-da7481c391cc",
+      "name": "Workflow Summary Note"
+    },
+    {
+      "parameters": {
+        "jsCode": "const inputItems = $input.all();\n\nfunction text(value) {\n  return value === undefined || value === null ? '' : String(value);\n}\n\nfunction clean(value) {\n  return text(value).trim();\n}\n\nfunction parseBatchItems(value) {\n  if (value === undefined || value === null || value === '') return [];\n  if (Array.isArray(value)) return value;\n  if (typeof value === 'string') {\n    const parsed = JSON.parse(value);\n    if (!Array.isArray(parsed)) throw new Error('batchItems must be an array or JSON array string');\n    return parsed;\n  }\n  throw new Error('batchItems must be an array or JSON array string');\n}\n\nfunction sanitizeFileName(value) {\n  const fileName = clean(value)\n    .replace(/[<>:\"/\\\\|?*\\x00-\\x1F]/g, '_')\n    .replace(/[. ]+$/g, '');\n  if (!fileName) throw new Error('fileName is required');\n  return fileName;\n}\n\nfunction cleanFolderPath(value) {\n  const folderPath = clean(value).replace(/\\\\/g, '/').replace(/\\/+$/g, '');\n  if (!folderPath) throw new Error('folderPath is required');\n  return folderPath;\n}\n\nfunction hasContent(job) {\n  return Object.prototype.hasOwnProperty.call(job, 'contentText') && job.contentText !== undefined && job.contentText !== null;\n}\n\nfunction normalizeJob(raw, index) {\n  const source = raw && typeof raw === 'object' ? raw : {};\n  const fileUrl = clean(source.fileUrl || source.url || source.remoteUrl);\n  const hasText = hasContent(source);\n  if (!fileUrl && !hasText) {\n    throw new Error(`Job ${index + 1}: fileUrl or contentText is required`);\n  }\n\n  const folderPath = cleanFolderPath(source.folderPath);\n  const fileName = sanitizeFileName(source.fileName);\n  const localPath = clean(source.localPath).replace(/\\\\/g, '/') || `${folderPath}/${fileName}`;\n  const fileKind = clean(source.fileKind || (fileUrl ? 'image' : 'text')).toLowerCase() || (fileUrl ? 'image' : 'text');\n  const mimeType = clean(source.mimeType || (fileUrl ? 'image/png' : 'text/plain; charset=utf-8'));\n\n  return {\n    ...source,\n    fileUrl,\n    contentText: hasText ? text(source.contentText) : '',\n    folderPath,\n    fileName,\n    localPath,\n    savedPath: localPath,\n    sourceUrl: fileUrl,\n    fileKind,\n    mimeType,\n  };\n}\n\nlet concurrency = 8;\nconst jobs = [];\n\nfor (const item of inputItems) {\n  const json = item.json || {};\n  if (json.concurrency !== undefined && json.concurrency !== null && json.concurrency !== '') {\n    const parsed = Number(json.concurrency);\n    if (Number.isFinite(parsed)) concurrency = parsed;\n  }\n\n  const batchItems = parseBatchItems(json.batchItems);\n  if (batchItems.length) {\n    for (const batchItem of batchItems) jobs.push(batchItem);\n  } else if (json.fileUrl || Object.prototype.hasOwnProperty.call(json, 'contentText')) {\n    jobs.push(json);\n  }\n}\n\nif (!jobs.length) {\n  throw new Error('No download jobs found. Provide fileUrl/contentText or batchItems.');\n}\n\nconcurrency = Math.max(1, Math.min(16, Math.floor(concurrency || 8)));\nconst normalizedJobs = jobs.map((job, index) => normalizeJob(job, index));\n\nconst rootFolder = normalizedJobs.find((job) => job.fileName === 'manifest.json' || job.fileName === 'prompts.json')?.folderPath || normalizedJobs[0].folderPath;\nconst requestedSupportFolder = clean(inputItems.find((item) => item.json?.supportFolderPath)?.json?.supportFolderPath || normalizedJobs.find((job) => job.supportFolderPath)?.supportFolderPath);\nconst tempRoot = requestedSupportFolder ? cleanFolderPath(requestedSupportFolder) : rootFolder;\nconst token = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;\nconst jobsFilePath = `${tempRoot}/s001-download-${token}-jobs.json`;\nconst scriptFilePath = `${tempRoot}/s001-download-${token}.js`;\nconst resultsFilePath = `${tempRoot}/s001-download-${token}-results.json`;\n\nconst downloaderScript = String.raw`\nconst fs = require('fs');\nconst path = require('path');\nconst http = require('http');\nconst https = require('https');\n\nfunction normalizePath(value) {\n  return String(value || '').replace(/\\\\/g, '/');\n}\n\nfunction ensureParent(filePath) {\n  fs.mkdirSync(path.dirname(filePath), { recursive: true });\n}\n\nfunction makeFailure(error, extra) {\n  return { ok: false, error: error && error.message ? error.message : String(error), ...(extra || {}) };\n}\n\nfunction download(url, filePath, redirectCount = 0) {\n  return new Promise((resolve, reject) => {\n    if (!url) return reject(new Error('Missing fileUrl'));\n    const client = /^https:/i.test(url) ? https : http;\n    const req = client.get(url, { headers: { 'User-Agent': 'Mozilla/5.0 n8n-s001-batch-downloader' } }, (res) => {\n      const statusCode = res.statusCode || 0;\n      const location = res.headers.location;\n      if ([301, 302, 303, 307, 308].includes(statusCode) && location && redirectCount < 5) {\n        res.resume();\n        const nextUrl = new URL(location, url).toString();\n        resolve(download(nextUrl, filePath, redirectCount + 1));\n        return;\n      }\n      if (statusCode < 200 || statusCode >= 300) {\n        const chunks = [];\n        res.on('data', (chunk) => chunks.push(chunk));\n        res.on('end', () => reject(new Error('HTTP ' + statusCode + ': ' + Buffer.concat(chunks).toString('utf8').slice(0, 300))));\n        res.on('error', reject);\n        return;\n      }\n      ensureParent(filePath);\n      const out = fs.createWriteStream(filePath);\n      res.pipe(out);\n      res.on('error', reject);\n      out.on('finish', () => out.close(() => resolve({ statusCode })));\n      out.on('error', reject);\n    });\n    req.setTimeout(120000, () => req.destroy(new Error('Download timeout after 120000ms')));\n    req.on('error', reject);\n  });\n}\n\nasync function runJob(job, index) {\n  const startedAt = Date.now();\n  const filePath = normalizePath(job.localPath || job.savedPath || ((job.folderPath || '') + '/' + (job.fileName || '')));\n  try {\n    if (!filePath) throw new Error('Missing savedPath/localPath');\n    if (job.fileUrl) {\n      await download(job.fileUrl, filePath, 0);\n      return { ok: true, index, type: job.type || 'image', fileKind: job.fileKind || 'image', fileName: job.fileName || path.basename(filePath), savedPath: filePath, sourceUrl: job.fileUrl, mimeType: job.mimeType || '', durationMs: Date.now() - startedAt };\n    }\n    ensureParent(filePath);\n    fs.writeFileSync(filePath, String(job.contentText ?? ''), 'utf8');\n    return { ok: true, index, type: job.type || 'text', fileKind: job.fileKind || 'text', fileName: job.fileName || path.basename(filePath), savedPath: filePath, sourceUrl: '', mimeType: job.mimeType || 'text/plain; charset=utf-8', durationMs: Date.now() - startedAt };\n  } catch (error) {\n    return makeFailure(error, { index, type: job.type || '', fileKind: job.fileKind || '', fileName: job.fileName || '', savedPath: filePath, sourceUrl: job.fileUrl || '', mimeType: job.mimeType || '', durationMs: Date.now() - startedAt });\n  }\n}\n\nfunction cleanupFiles(paths) {\n  for (const filePath of paths || []) {\n    try {\n      fs.unlinkSync(normalizePath(filePath));\n    } catch (error) {}\n  }\n}\n\nasync function main() {\n  const jobsPath = process.argv[2];\n  const concurrencyArg = Number(process.argv[3] || '8');\n  const payload = JSON.parse(fs.readFileSync(jobsPath, 'utf8'));\n  const jobs = Array.isArray(payload.jobs) ? payload.jobs : [];\n  const concurrency = Math.max(1, Math.min(16, Math.floor(concurrencyArg || payload.concurrency || 8)));\n  const resultsPath = normalizePath(payload.resultsFilePath || jobsPath.replace(/-jobs\\.json$/, '-results.json'));\n  const results = new Array(jobs.length);\n  let nextIndex = 0;\n\n  async function worker() {\n    while (nextIndex < jobs.length) {\n      const index = nextIndex++;\n      results[index] = await runJob(jobs[index], index);\n    }\n  }\n\n  await Promise.all(Array.from({ length: Math.min(concurrency, Math.max(jobs.length, 1)) }, () => worker()));\n  const summary = {\n    ok: results.every((item) => item && item.ok),\n    total: results.length,\n    success: results.filter((item) => item && item.ok).length,\n    failed: results.filter((item) => !item || !item.ok).length,\n    concurrency,\n    resultsPath,\n    results,\n  };\n  ensureParent(resultsPath);\n  fs.writeFileSync(resultsPath, JSON.stringify(summary, null, 2), 'utf8');\n  console.log(JSON.stringify(summary));\n  cleanupFiles(payload.cleanupFilePaths);\n}\n\nmain().catch((error) => {\n  const summary = { ok: false, total: 0, success: 0, failed: 1, concurrency: 0, results: [makeFailure(error, { fileKind: '', fileName: '', savedPath: '', sourceUrl: '' })] };\n  console.log(JSON.stringify(summary));\n});\n`;\n\nconst cleanupFilePaths = [jobsFilePath, scriptFilePath, resultsFilePath];\nconst jobsPayload = JSON.stringify({ createdAt: new Date().toISOString(), concurrency, resultsFilePath, cleanupFilePaths, jobs: normalizedJobs }, null, 2);\n\nfunction binaryItem(filePath, content, fileName, fileExtension) {\n  return {\n    json: {\n      supportFilePath: filePath,\n      jobsFilePath,\n      scriptFilePath,\n      resultsFilePath,\n      concurrency,\n      totalJobs: normalizedJobs.length,\n      fileName,\n    },\n    binary: {\n      data: {\n        data: Buffer.from(content, 'utf8').toString('base64'),\n        mimeType: 'text/plain; charset=utf-8',\n        fileName,\n        fileExtension,\n      },\n    },\n  };\n}\n\nreturn [\n  binaryItem(jobsFilePath, jobsPayload, 'download-jobs.json', 'json'),\n  binaryItem(scriptFilePath, downloaderScript, 's001-batch-downloader.js', 'js'),\n];"
+      },
+      "id": "b1f0fb21-0181-491e-a4c2-7b17fc0a7101",
+      "name": "Normalize Batch Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        256,
+        -688
+      ],
+      "notes": "Normalize legacy single-file input, multi-item input, or batchItems into one jobs file and one Node.js downloader script."
+    },
+    {
+      "parameters": {
+        "operation": "write",
+        "fileName": "={{ $json.supportFilePath }}",
+        "options": {}
+      },
+      "id": "6dc96808-0640-4603-b9e0-9b2ddda77449",
+      "name": "Write Batch Support Files",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        480,
+        -688
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const __hiddenFs = require('fs');\nconst __hiddenPath = require('path');\nconst __HIDDEN_PS_TEMPLATE = \"$ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue';[Console]::OutputEncoding=New-Object System.Text.UTF8Encoding $false;$OutputEncoding=[Console]::OutputEncoding;function q([string]$a){if($null -eq $a){return '\\\"\\\"'}if($a.Length -eq 0){return '\\\"\\\"'}if($a -notmatch '[\\\\s\\\"]'){return $a}$r='\\\"';$b=0;foreach($c in $a.ToCharArray()){if($c -eq '\\\\'){$b++;continue}if($c -eq '\\\"'){$r+=('\\\\'*($b*2+1))+'\\\"';$b=0;continue}if($b -gt 0){$r+='\\\\'*$b;$b=0}$r+=$c}if($b -gt 0){$r+='\\\\'*($b*2)}return $r+'\\\"'};$sp=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__SPEC_PATH_B64__'));$o=[IO.Path]::GetTempFileName();$e=[IO.Path]::GetTempFileName();try{$s=Get-Content -LiteralPath $sp -Raw -Encoding UTF8|ConvertFrom-Json;$av=@();foreach($x in $s.args){$av+=[string]$x};$al=($av|%{q $_}) -join ' ';$p=Start-Process -FilePath ([string]$s.executable) -ArgumentList $al -WindowStyle Hidden -Wait -PassThru -RedirectStandardOutput $o -RedirectStandardError $e;$out=if(Test-Path -LiteralPath $o){[IO.File]::ReadAllText($o,[Text.Encoding]::UTF8)}else{''};$err=if(Test-Path -LiteralPath $e){[IO.File]::ReadAllText($e,[Text.Encoding]::UTF8)}else{''};if($out){[Console]::Out.Write($out)};if($err){[Console]::Error.Write($err)};exit $p.ExitCode}finally{Remove-Item -LiteralPath $o,$e -Force -ErrorAction SilentlyContinue;if(Test-Path -LiteralPath $sp){Remove-Item -LiteralPath $sp -Force -ErrorAction SilentlyContinue}}\";\nfunction __hiddenB64Utf8(value) { return Buffer.from(String(value ?? ''), 'utf8').toString('base64'); }\nfunction __hiddenShQuote(value) { const text = String(value ?? ''); return \"'\" + text.replace(/'/g, \"'\\\"'\\\"'\") + \"'\"; }\nfunction __useWindowsHiddenCommand() { return __hiddenPath.sep === '\\\\'; }\nfunction __buildHiddenCommand(executable, args) {\n  const __isWin = __useWindowsHiddenCommand();\n  const __tempRoot = __isWin ? '__MERCHROUTE_TEMP_DIR__' : '/tmp';\n  const dir = __hiddenPath.join(__tempRoot, 'n8n-hidden-command-specs');\n  __hiddenFs.mkdirSync(dir, { recursive: true });\n  const specPath = __hiddenPath.join(dir, 'cmd-' + Date.now() + '-' + Math.random().toString(36).slice(2, 10) + '.json');\n  const spec = { executable: String(executable), args: args.map((arg) => String(arg ?? '')), createdAt: new Date().toISOString(), version: 'n8n-hidden-cli-v1' };\n  __hiddenFs.writeFileSync(specPath, JSON.stringify(spec), 'utf8');\n  const psScript = __HIDDEN_PS_TEMPLATE.replace('__SPEC_PATH_B64__', __hiddenB64Utf8(specPath));\n  return 'powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -OutputFormat Text -EncodedCommand ' + Buffer.from(psScript, 'utf16le').toString('base64');\n}\nfunction __buildNodeCommand(args) {\n  const normalizedArgs = args.map((arg) => String(arg ?? ''));\n  if (__useWindowsHiddenCommand()) return __buildHiddenCommand('node', normalizedArgs);\n  return ['node', ...normalizedArgs.map(__hiddenShQuote)].join(' ');\n}\nfunction __buildNodeEvalCommand(scriptBase64, scriptArgs = []) {\n  return __buildNodeCommand(['-e', \"eval(Buffer.from(process.argv[1],'base64').toString('utf8'))\", scriptBase64, ...scriptArgs.map((arg) => String(arg ?? ''))]);\n}\nfunction __buildNodeGzipEvalCommand(scriptBase64, scriptArgs = []) {\n  return __buildNodeCommand(['-e', \"eval(require('zlib').gunzipSync(Buffer.from(process.argv[1],'base64')).toString('utf8'))\", scriptBase64, ...scriptArgs.map((arg) => String(arg ?? ''))]);\n}\n\nconst normalized = $('Normalize Batch Input').first().json;\nconst command = __buildNodeCommand([normalized.scriptFilePath, normalized.jobsFilePath, String(normalized.concurrency)]);\n\nreturn [{\n  json: {\n    ok: true,\n    command,\n    jobsFilePath: normalized.jobsFilePath,\n    scriptFilePath: normalized.scriptFilePath,\n    resultsFilePath: normalized.resultsFilePath,\n    concurrency: normalized.concurrency,\n    totalJobs: normalized.totalJobs,\n  },\n}];"
+      },
+      "id": "f486a1f2-cd15-49df-9032-776eeea794a8",
+      "name": "Prepare Batch Command",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        704,
+        -688
+      ]
+    },
+    {
+      "parameters": {
+        "command": "={{ $json.command }}"
+      },
+      "id": "0bf511a6-37a5-457e-95d1-eecc0e50931c",
+      "name": "Run Batch Downloader",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        928,
+        -688
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const run = $input.first().json || {};\nconst stdout = String(run.stdout || '').trim();\nconst stderr = String(run.stderr || '').trim();\n\nfunction parseSummary(value) {\n  const lines = value.split(/\\r?\\n/).map((line) => line.trim()).filter(Boolean).reverse();\n  for (const line of lines) {\n    try {\n      const parsed = JSON.parse(line);\n      if (parsed && typeof parsed === 'object') return parsed;\n    } catch (error) {}\n  }\n  return null;\n}\n\nconst summary = parseSummary(stdout);\nif (!summary || !Array.isArray(summary.results)) {\n  return [{\n    json: {\n      ok: false,\n      fileKind: '',\n      fileName: '',\n      savedPath: '',\n      sourceUrl: '',\n      mimeType: '',\n      error: `Batch downloader did not return valid JSON. stderr=${stderr.slice(0, 500)} stdout=${stdout.slice(0, 500)}`,\n    },\n  }];\n}\n\nreturn summary.results.map((result) => ({\n  json: {\n    ok: result.ok === true,\n    fileKind: result.fileKind || result.type || '',\n    fileType: result.fileKind || result.type || '',\n    fileName: result.fileName || '',\n    finalFileName: result.fileName || '',\n    savedPath: result.savedPath || '',\n    sourceUrl: result.sourceUrl || '',\n    mimeType: result.mimeType || '',\n    durationMs: result.durationMs || 0,\n    error: result.error || '',\n    batchTotal: summary.total || summary.results.length,\n    batchSuccess: summary.success || 0,\n    batchFailed: summary.failed || 0,\n    concurrency: summary.concurrency || 0,\n  },\n}));"
+      },
+      "id": "fd96c732-5681-4ac8-8eaa-642a1912cf39",
+      "name": "Return Batch Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1152,
+        -688
+      ]
+    }
+  ],
+  "connections": {
+    "ExecutedbyWorkflow": {
+      "main": [
+        [
+          {
+            "node": "Normalize Batch Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Batch Input": {
+      "main": [
+        [
+          {
+            "node": "Write Batch Support Files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write Batch Support Files": {
+      "main": [
+        [
+          {
+            "node": "Prepare Batch Command",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Batch Command": {
+      "main": [
+        [
+          {
+            "node": "Run Batch Downloader",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Batch Downloader": {
+      "main": [
+        [
+          {
+            "node": "Return Batch Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  }
+}

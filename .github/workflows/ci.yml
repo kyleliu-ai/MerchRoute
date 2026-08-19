@@ -1,0 +1,134 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deployment-contract:
+    name: Deployment contract (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+      - name: Pin npm
+        run: npm install --global npm@10.9.8
+      - name: Verify deployment contracts
+        run: npm run deployment:test
+      - name: Verify n8n runtime scripts
+        run: npm run n8n-runtime:test
+      - name: Verify public deployment package
+        run: npm run deployment:verify
+
+  jimeng-source:
+    name: Jimeng source, image, and ping
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+      - name: Pin npm
+        run: npm install --global npm@10.9.8
+      - name: Run offline Jimeng regression tests
+        run: npm run jimeng:test
+      - name: Build pinned Jimeng image
+        run: npm run jimeng:build
+      - name: Verify Jimeng health endpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          container_id="$(docker run --detach --rm --publish 127.0.0.1:8000:8000 --tmpfs /app/data:rw merchroute/jimeng-free-api-all:0.9.1-e002-20260813)"
+          trap 'docker stop "$container_id" >/dev/null 2>&1 || true' EXIT
+          for attempt in {1..30}; do
+            response="$(curl --silent --fail http://127.0.0.1:8000/ping || true)"
+            [[ "${response//\"/}" == "pong" ]] && exit 0
+            sleep 2
+          done
+          docker logs "$container_id"
+          exit 1
+
+  verify:
+    name: Verify pinned toolchain
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Pin npm
+        run: npm install --global npm@10.9.8
+      - name: Install dependencies
+        run: npm ci
+      - name: Verify source
+        run: npm run check
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=moderate
+
+  browser-tests:
+    name: Playwright browser tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: merchroute_ci
+          POSTGRES_DB: merchroute_ci
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U merchroute_ci -d merchroute_ci"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    env:
+      DATABASE_URL: postgresql://merchroute_ci@127.0.0.1:5432/merchroute_ci
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Pin npm
+        run: npm install --global npm@10.9.8
+      - name: Install dependencies
+        run: npm ci
+      - name: Build application
+        run: npm run build
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Run browser tests
+        run: npm run test:e2e
+      - name: Upload test report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          if-no-files-found: ignore
+          retention-days: 7

@@ -1,0 +1,313 @@
+{
+  "id": "0FqozLuQ7vuabT8V",
+  "name": "OZON-S000-任务目录认领",
+  "active": true,
+  "nodes": [
+    {
+      "id": "3fedb1a3-075d-4f23-bebd-93c48752cd8f",
+      "name": "认领说明",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -700,
+        -480
+      ],
+      "parameters": {
+        "content": "# OZON-S000 店铺目录与 intake manifest 隔离\n\n新任务只能在 `<ozon-root>/stores/<immutableAlias>/inbox/<SKU>` 中认领，并严格比对后端预先生成的 `.ozon-intake.json` 不可变快照。S000 向后端发送 strict 23 字段；店铺、策略、素材、计划、预设版本及发布模式必须来自 claim 冻结输入且与 marker 一致。五个 hash 均输出规范 `sha256:<64hex>`，ticket 必须是后端签发的 `hmac-sha256:<64hex>`；本地比较可以临时剥离 hash 前缀，但不得把裸 digest 发给后端。\n\n移动前必须使用 `X-MerchRoute-Runtime-Key` 调用 `/api/v1/ozon/internal/intake/verify`，仅 2xx + `verified:true` 可原子移动到中央 `processing/<storeAlias>__<SKU>__r<revision>`；成功后归档到中央 `success/<YYYY-MM-DD>/<taskId>`。`stores/<alias>` 仅保留各店铺素材入口，n8n 不持有票据签名密钥；只有 `PURE_LEGACY` 历史根目录任务可显式跳过票据验证。",
+        "width": 700,
+        "height": 390
+      }
+    },
+    {
+      "id": "0f3a9d56-244c-49f8-8879-03133e1654d0",
+      "name": "When Executed by Another Workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -700,
+        0
+      ],
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "jobId"
+            },
+            {
+              "name": "taskId"
+            },
+            {
+              "name": "sku"
+            },
+            {
+              "name": "productJsonPath"
+            },
+            {
+              "name": "revision",
+              "type": "number"
+            },
+            {
+              "name": "signature"
+            },
+            {
+              "name": "storeId"
+            },
+            {
+              "name": "storeAlias"
+            },
+            {
+              "name": "publicationId"
+            },
+            {
+              "name": "credentialVersionId"
+            },
+            {
+              "name": "credentialBindingMode"
+            },
+            {
+              "name": "storeConfigVersion",
+              "type": "number"
+            },
+            {
+              "name": "warehouseId"
+            },
+            {
+              "name": "rowVersion",
+              "type": "number"
+            },
+            {
+              "name": "leaseOwner"
+            },
+            {
+              "name": "leaseToken"
+            },
+            {
+              "name": "offerContractHash"
+            },
+            {
+              "name": "materializationHash"
+            },
+            {
+              "name": "contentPolicyVersion"
+            },
+            {
+              "name": "materialHash"
+            },
+            {
+              "name": "materialHashVersion"
+            },
+            {
+              "name": "planHash"
+            },
+            {
+              "name": "presetRowVersion",
+              "type": "number"
+            },
+            {
+              "name": "publicationMode"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "c81c8747-6128-49e9-a47a-d3af0e916910",
+      "name": "校验并认领任务目录",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nconst fs = require('fs');\nconst path = require('path');\nconst crypto = require('crypto');\nconst input = $('When Executed by Another Workflow').first().json || {};\nconst intakeVerification = $input.first().json || {};\nfunction fail(code, message) { const error = new Error(message); error.code = code; throw error; }\nconst uuid = (value) => /^[0-9a-f-]{36}$/i.test(String(value || ''));\nconst normalizeHash = (value) => String(value || '').trim().toLowerCase().replace(/^sha256:/, '');\n// n8n secure Code Runner does not expose Node runtime globals; path.sep is provided by\n// the path module and preserves Windows' case-insensitive identity without\n// weakening realpath/path.relative boundary checks on macOS/Linux.\nconst platformPath = (value) => path.sep === '\\\\' ? String(value).toLowerCase() : String(value);\nconst rejectSymlink = (value, label) => {\n  const stat = fs.lstatSync(value);\n  if (stat.isSymbolicLink()) fail('OZON_PATH_SYMLINK', label + ' 不允许是符号链接');\n  return stat;\n};\nconst inside = (root, candidate) => {\n  const relative = path.relative(root, candidate);\n  return Boolean(relative) && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative);\n};\nconst readJson = (file, code, message) => {\n  try { return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\\uFEFF/, '')); }\n  catch (_) { fail(code, message); }\n};\nconst jobId = String(input.jobId || '').trim();\nconst taskId = String(input.taskId || jobId).trim();\nconst sku = String(input.sku || '').trim();\nconst productJsonPath = String(input.productJsonPath || '').trim();\nconst requestedRevision = Number(input.revision || 0);\nconst requestedSignature = String(input.signature || '').trim();\nconst storeId = String(input.storeId || '').trim();\nconst storeAlias = String(input.storeAlias || '').trim().toLowerCase();\nconst publicationId = String(input.publicationId || '').trim();\nconst credentialVersionId = String(input.credentialVersionId || '').trim();\nconst credentialBindingMode = String(input.credentialBindingMode || (credentialVersionId ? 'VAULT' : storeId ? 'LEGACY_PUBLICATION' : 'PURE_LEGACY')).trim().toUpperCase();\nconst storeConfigVersion = Number(input.storeConfigVersion || 0);\nconst warehouseId = String(input.warehouseId || '').trim();\nconst rowVersion = Number(input.rowVersion || 0);\nconst leaseOwner = String(input.leaseOwner || '').trim();\nconst leaseToken = String(input.leaseToken || '').trim();\nconst offerContractHash = normalizeHash(input.offerContractHash);\nconst requestedMaterializationHash = normalizeHash(input.materializationHash);\nconst contentPolicyVersion = String(input.contentPolicyVersion || '').trim();\nconst materialHash = normalizeHash(input.materialHash);\nconst materialHashVersion = String(input.materialHashVersion || '').trim();\nconst planHash = normalizeHash(input.planHash);\nconst presetRowVersion = Number(input.presetRowVersion || 0);\nconst publicationMode = String(input.publicationMode || '').trim().toUpperCase();\nconst storeScoped = Boolean(storeId || storeAlias || publicationId || credentialVersionId);\nif (storeScoped && intakeVerification.intakeVerified !== true) fail('OZON_INTAKE_BACKEND_VERIFY_REQUIRED', '新 intake 未通过 MerchRoute 后端票据验证，禁止移动');\nif (!uuid(jobId) || !taskId) fail('OZON_JOB_ID_INVALID', 'jobId/taskId 无效');\nif (!/^[A-Za-z0-9._-]{1,100}$/.test(sku) || !path.isAbsolute(productJsonPath)) fail('OZON_PRODUCT_PATH_INVALID', 'SKU 或 productJsonPath 无效');\nif (!Number.isInteger(requestedRevision) || requestedRevision < 1) fail('OZON_REVISION_INVALID', 'revision 必须是正整数');\nif (storeScoped) {\n  if (!uuid(storeId) || !/^[a-z0-9][a-z0-9-]{1,31}$/.test(storeAlias) || !uuid(publicationId)) fail('OZON_STORE_SNAPSHOT_INVALID', '店铺/publication 快照无效');\n  if (credentialBindingMode === 'VAULT' && !uuid(credentialVersionId)) fail('OZON_CREDENTIAL_VERSION_REQUIRED', 'VAULT 任务缺少 credentialVersionId');\n  if (taskId !== storeAlias + '__' + sku + '__r' + requestedRevision) fail('OZON_TASK_ID_SCOPE_INVALID', '店铺 taskId 必须是 <alias>__<sku>__rN');\n  if (credentialBindingMode === 'LEGACY_PUBLICATION' && !(storeId === '00000000-0000-4000-8000-000000000002' && storeAlias === 'default' && !credentialVersionId)) fail('OZON_LEGACY_SCOPE_INVALID', '仅 default 店铺可使用 LEGACY_PUBLICATION');\n  if (!['VAULT','LEGACY_PUBLICATION'].includes(credentialBindingMode) || !Number.isInteger(storeConfigVersion) || storeConfigVersion < 1 || !warehouseId || !Number.isInteger(rowVersion) || rowVersion < 1 || !leaseOwner || !leaseToken || !offerContractHash || !requestedMaterializationHash\n    || !['merchroute-ozon-content-v2','merchroute-ozon-content-v3'].includes(contentPolicyVersion)\n    || !materialHash || materialHashVersion !== 'ozon-shared-material-v1' || !planHash\n    || !Number.isInteger(presetRowVersion) || presetRowVersion < 1\n    || !['CREATE_ONLY','COMPATIBLE_UPSERT'].includes(publicationMode)) fail('OZON_FROZEN_SNAPSHOT_INCOMPLETE', '店铺任务不可变快照不完整');\n}\nconst requestedProductPath = path.resolve(productJsonPath);\nif (path.basename(requestedProductPath) !== 'product.json') fail('OZON_PRODUCT_PATH_INVALID', 'productJsonPath 必须指向 product.json');\nconst sourceDirectory = path.dirname(requestedProductPath);\nconst inboxDirectory = path.dirname(sourceDirectory);\nif (path.basename(inboxDirectory).toLowerCase() !== 'inbox' || platformPath(path.basename(sourceDirectory)) !== platformPath(sku)) fail('OZON_PRODUCT_PATH_SCOPE_INVALID', 'productJsonPath 必须位于 inbox/<SKU>/product.json');\nconst storeRootCandidate = path.dirname(inboxDirectory);\nlet ozonRootCandidate = storeRootCandidate;\nif (storeScoped) {\n  const storesDirectory = path.dirname(storeRootCandidate);\n  ozonRootCandidate = path.dirname(storesDirectory);\n  if (platformPath(path.basename(storeRootCandidate)) !== platformPath(storeAlias) || path.basename(storesDirectory).toLowerCase() !== 'stores') fail('OZON_STORE_PATH_MISMATCH', 'productJsonPath 不在 stores/<storeAlias>/inbox 下');\n}\nfor (const [candidate, label] of [[ozonRootCandidate,'OZON 根目录'],[storeRootCandidate,'OZON 店铺根目录'],[inboxDirectory,'OZON inbox 目录']]) {\n  if (!fs.existsSync(candidate)) fail('OZON_PATH_MISSING', label + ' 不存在');\n  rejectSymlink(candidate, label);\n}\nconst ozonRootReal = fs.realpathSync(ozonRootCandidate);\nconst storeRootReal = fs.realpathSync(storeRootCandidate);\nconst inboxReal = fs.realpathSync(inboxDirectory);\nif (storeScoped && (!inside(ozonRootReal, storeRootReal) || platformPath(path.basename(storeRootReal)) !== platformPath(storeAlias))) fail('OZON_STORE_PATH_ESCAPE', '店铺目录逃逸 OZON 根目录');\nif (!inside(storeRootReal, inboxReal) || platformPath(path.dirname(inboxReal)) !== platformPath(storeRootReal)) fail('OZON_INBOX_PATH_ESCAPE', 'inbox 目录逃逸店铺根目录');\nconst processingDirectory = path.join(ozonRootReal, 'processing');\nconst successDirectory = path.join(ozonRootReal, 'success');\nconst lockDirectory = path.join(ozonRootReal, '.locks');\nfor (const directory of [processingDirectory, successDirectory, lockDirectory]) fs.mkdirSync(directory, { recursive: true });\nfor (const [directory, label] of [[processingDirectory,'processing'],[successDirectory,'success'],[lockDirectory,'.locks']]) {\n  rejectSymlink(directory, label);\n  if (!inside(ozonRootReal, fs.realpathSync(directory))) fail('OZON_LIFECYCLE_PATH_ESCAPE', label + ' 逃逸 OZON 根目录');\n}\nconst processingReal = fs.realpathSync(processingDirectory);\nconst successReal = fs.realpathSync(successDirectory);\nconst validateDirectory = (directory, stage, requireMarker) => {\n  rejectSymlink(directory, '任务目录');\n  const real = fs.realpathSync(directory);\n  const expectedRoot = stage === 'INBOX' ? storeRootReal : ozonRootReal;\n  if (!inside(expectedRoot, real)) fail('OZON_TASK_PATH_ESCAPE', '任务目录逃逸冻结生命周期根目录');\n  const productPath = path.join(real, 'product.json');\n  const readyPath = path.join(real, '_READY');\n  for (const [file, label] of [[productPath,'product.json'],[readyPath,'_READY']]) {\n    if (!fs.existsSync(file)) fail('OZON_INTAKE_FILE_MISSING', label + ' 不存在');\n    rejectSymlink(file, label);\n    if (!fs.statSync(file).isFile()) fail('OZON_INTAKE_FILE_INVALID', label + ' 不是普通文件');\n  }\n  const rawProduct = fs.readFileSync(productPath);\n  const product = readJson(productPath, 'OZON_PRODUCT_JSON_INVALID', 'product.json 不是有效 UTF-8 JSON');\n  const ready = readJson(readyPath, 'OZON_READY_INVALID', '_READY 不是有效 UTF-8 JSON');\n  if (![1,2].includes(Number(product.schemaVersion)) || String(product.productCode) !== sku || Number(product.revision) !== requestedRevision) fail('OZON_PRODUCT_IDENTITY_MISMATCH', 'product.json 身份或版本无效');\n  if (String(ready.sku || '') !== sku || Number(ready.revision) !== requestedRevision) fail('OZON_READY_IDENTITY_MISMATCH', '_READY 与 product.json 身份不一致');\n  if (!Array.isArray(product.offers) || !product.offers.length) fail('OZON_OFFERS_MISSING', 'product.json 至少需要一个 offer');\n  const offerIds = product.offers.map((offer) => String(offer.offerId || ''));\n  if (offerIds.some((value) => !/^[A-Za-z0-9._-]{1,50}$/.test(value)) || new Set(offerIds).size !== offerIds.length) fail('OZON_OFFER_ID_INVALID', 'offer_id 格式无效或重复');\n  const legacySignature = 'sha256:' + crypto.createHash('sha256').update(JSON.stringify(product)).digest('hex');\n  const productContentHash = crypto.createHash('sha256').update(rawProduct).digest('hex');\n  const signature = storeScoped ? 'sha256:' + productContentHash : legacySignature;\n  if (!storeScoped && requestedSignature && normalizeHash(requestedSignature) !== normalizeHash(legacySignature)) fail('OZON_PRODUCT_SIGNATURE_MISMATCH', '历史请求 signature 与 product.json 不一致');\n  const markerPath = path.join(real, '.ozon-intake.json');\n  let marker = null;\n  if (fs.existsSync(markerPath)) {\n    rejectSymlink(markerPath, '.ozon-intake.json');\n    marker = readJson(markerPath, 'OZON_INTAKE_MARKER_INVALID', '.ozon-intake.json 不是有效 JSON');\n  } else if (requireMarker || storeScoped) {\n    fail('OZON_INTAKE_MARKER_MISSING', '店铺任务缺少后端生成的 .ozon-intake.json');\n  }\n  if (marker) {\n    const markerValue = (camel, snake = camel) => marker[camel] ?? marker[snake];\n    const conflicts = [\n      ['jobId', String(markerValue('jobId','job_id') || ''), jobId],\n      ['taskId', String(markerValue('taskId','task_id') || jobId), taskId],\n      ['sku', String(marker.sku || ''), sku],\n      ['revision', Number(marker.revision || 0), requestedRevision]\n    ];\n    if (!storeScoped) conflicts.push(['signature', normalizeHash(marker.signature), normalizeHash(legacySignature)]);\n    if (storeScoped) conflicts.push(\n      ['storeId', String(markerValue('storeId','store_id') || ''), storeId],\n      ['storeAlias', String(markerValue('storeAlias','store_alias') || '').toLowerCase(), storeAlias],\n      ['publicationId', String(markerValue('publicationId','publication_id') || ''), publicationId],\n      ['credentialVersionId', String(markerValue('credentialVersionId','credential_version_id') || ''), credentialVersionId],\n      ['credentialBindingMode', String(markerValue('credentialBindingMode','credential_binding_mode') || '').toUpperCase(), credentialBindingMode],\n      ['storeConfigVersion', Number(markerValue('storeConfigVersion','store_config_version') || 0), storeConfigVersion],\n      ['warehouseId', String(markerValue('warehouseId','warehouse_id') || ''), warehouseId],\n      ['offerContractHash', normalizeHash(markerValue('offerContractHash','offer_contract_hash')), offerContractHash],\n      ['productContentHash', normalizeHash(markerValue('productContentHash','product_content_hash')), productContentHash],\n      ['materializationHash', normalizeHash(markerValue('materializationHash','materialization_hash')), requestedMaterializationHash]\n      ,['contentPolicyVersion', String(markerValue('contentPolicyVersion','content_policy_version') || ''), contentPolicyVersion]\n      ,['materialHash', normalizeHash(markerValue('materialHash','material_hash')), materialHash]\n      ,['materialHashVersion', String(markerValue('materialHashVersion','material_hash_version') || ''), materialHashVersion]\n      ,['planHash', normalizeHash(markerValue('planHash','plan_hash')), planHash]\n      ,['presetRowVersion', Number(markerValue('presetRowVersion','preset_row_version') || 0), presetRowVersion]\n      ,['publicationMode', String(markerValue('publicationMode','publication_mode') || '').toUpperCase(), publicationMode]\n    );\n    const conflict = conflicts.find(([,actual,expected]) => actual !== expected);\n    if (conflict) fail('OZON_INTAKE_MARKER_CONFLICT', '.ozon-intake.json ' + conflict[0] + ' 与不可变任务快照冲突');\n  }\n  const taskFolder = sku + '__r' + requestedRevision;\n  const lifecycleFolder = storeScoped ? taskId : taskFolder;\n  if (stage !== 'INBOX' && platformPath(path.basename(real)) !== platformPath(lifecycleFolder)) fail('OZON_LIFECYCLE_NAME_INVALID', '任务目录名与冻结 taskId/SKU/revision 不一致');\n  return { real, productPath, product, offerIds, signature, productContentHash,\n    materializationHash: storeScoped ? requestedMaterializationHash : productContentHash, marker, taskFolder, lifecycleFolder };\n};\nconst workRelative = (candidate) => path.relative(ozonRootReal, candidate).split(path.sep).join('/');\nconst outputOf = (checked, stage) => ({\n  ok: true,\n  jobId,\n  taskId,\n  sku,\n  storeId: storeId || undefined,\n  storeAlias: storeAlias || undefined,\n  publicationId: publicationId || undefined,\n  credentialVersionId: credentialVersionId || undefined,\n  credentialBindingMode,\n  storeConfigVersion: storeConfigVersion || undefined,\n  warehouseId: warehouseId || undefined,\n  rowVersion: rowVersion || undefined,\n  offerContractHash: offerContractHash || undefined,\n  revision: requestedRevision,\n  offerIds: checked.offerIds,\n  productJsonPath: checked.productPath,\n  workDirectory: checked.real,\n  taskFolder: checked.taskFolder,\n  workRelPath: workRelative(checked.real),\n  directoryStage: stage,\n  signature: checked.signature,\n  productContentHash: checked.productContentHash,\n  materializationHash: checked.materializationHash,\n  contentPolicyVersion: contentPolicyVersion || undefined,\n  materialHash: materialHash ? 'sha256:' + materialHash : undefined,\n  materialHashVersion: materialHashVersion || undefined,\n  planHash: planHash ? 'sha256:' + planHash : undefined,\n  presetRowVersion: presetRowVersion || undefined,\n  publicationMode: publicationMode || undefined,\n  product: checked.product\n});\nconst lockPath = path.join(lockDirectory, encodeURIComponent(taskId) + '.lock');\nlet lockOwned = false;\ntry {\n  try { fs.mkdirSync(lockPath); lockOwned = true; }\n  catch (error) {\n    if (error.code !== 'EEXIST') throw error;\n    rejectSymlink(lockPath, '任务认领锁');\n    const ageMs = Date.now() - fs.statSync(lockPath).mtimeMs;\n    if (ageMs <= 15 * 60 * 1000) fail('OZON_INTAKE_LOCKED', '任务目录已被其他执行认领');\n    const stale = lockPath + '.stale-' + String($execution.id) + '-' + Date.now();\n    fs.renameSync(lockPath, stale);\n    fs.rmSync(stale, { recursive: true, force: true });\n    fs.mkdirSync(lockPath);\n    lockOwned = true;\n  }\n  fs.writeFileSync(path.join(lockPath, 'owner.json'), JSON.stringify({ taskId, jobId, executionId: String($execution.id), acquiredAt: new Date().toISOString() }), { encoding: 'utf8', flag: 'wx' });\n  const lifecycleFolder = storeScoped ? taskId : sku + '__r' + requestedRevision;\n  const expectedTarget = path.join(processingReal, lifecycleFolder);\n  if (!fs.existsSync(sourceDirectory)) {\n    if (fs.existsSync(expectedTarget)) return [{ json: outputOf(validateDirectory(expectedTarget, 'PROCESSING', true), 'PROCESSING') }];\n    for (const dateEntry of fs.readdirSync(successReal, { withFileTypes: true })) {\n      if (dateEntry.isSymbolicLink()) fail('OZON_PATH_SYMLINK', 'success 日期目录不允许符号链接');\n      if (!dateEntry.isDirectory()) continue;\n      const candidate = path.join(successReal, dateEntry.name, lifecycleFolder);\n      if (fs.existsSync(candidate)) return [{ json: outputOf(validateDirectory(candidate, 'SUCCESS', true), 'SUCCESS') }];\n    }\n    fail('OZON_INTAKE_SOURCE_MISSING', 'inbox 源目录不存在，且未找到匹配的已认领目录');\n  }\n  rejectSymlink(sourceDirectory, 'inbox SKU 目录');\n  const sourceReal = fs.realpathSync(sourceDirectory);\n  if (!inside(storeRootReal, sourceReal) || platformPath(path.dirname(sourceReal)) !== platformPath(inboxReal) || platformPath(path.basename(sourceReal)) !== platformPath(sku)) fail('OZON_INTAKE_PATH_ESCAPE', 'inbox SKU 目录逃逸或名称不一致');\n  const checked = validateDirectory(sourceReal, 'INBOX', storeScoped);\n  if (fs.existsSync(expectedTarget)) fail('OZON_INTAKE_DUPLICATE', 'inbox 与 processing 同时存在相同任务目录');\n  if (!storeScoped && !checked.marker) {\n    fs.writeFileSync(path.join(sourceReal, '.ozon-intake.json'), JSON.stringify({ jobId, taskId, sku, revision: requestedRevision, signature: checked.signature, materializationHash: checked.materializationHash }, null, 2), { encoding: 'utf8', flag: 'wx' });\n  }\n  fs.renameSync(sourceReal, expectedTarget);\n  return [{ json: outputOf(validateDirectory(expectedTarget, 'PROCESSING', true), 'PROCESSING') }];\n} finally {\n  if (lockOwned) fs.rmSync(lockPath, { recursive: true, force: true });\n}"
+      }
+    },
+    {
+      "id": "efa70660-4e6e-4dcd-9cbb-007d68d76762",
+      "name": "准备后端 intake 验证",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -520,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nconst fs = require('fs');\nconst path = require('path');\nconst crypto = require('crypto');\nconst input = $('When Executed by Another Workflow').first().json || {};\nfunction fail(code, message) { const error = new Error(message); error.code = code; throw error; }\nconst normalizeHash = (value) => String(value || '').trim().toLowerCase().replace(/^sha256:/, '');\nconst canonicalHash = (value) => {\n  const bare = normalizeHash(value);\n  return /^[a-f0-9]{64}$/.test(bare) ? 'sha256:' + bare : '';\n};\nconst storeId = String(input.storeId || '').trim();\nconst storeAlias = String(input.storeAlias || '').trim().toLowerCase();\nconst publicationId = String(input.publicationId || '').trim();\nconst credentialVersionId = String(input.credentialVersionId || '').trim();\nconst credentialBindingMode = String(input.credentialBindingMode || '').trim().toUpperCase();\nconst warehouseId = String(input.warehouseId || '').trim();\nconst storeScoped = Boolean(storeId || storeAlias || publicationId || credentialVersionId);\nif (!storeScoped) {\n  if (credentialBindingMode !== 'PURE_LEGACY') fail('OZON_LEGACY_MODE_INVALID', '无店铺快照的历史任务必须显式为 PURE_LEGACY');\n  return [{ json: { requiresBackendVerification: false, credentialBindingMode } }];\n}\nif (!['VAULT','LEGACY_PUBLICATION'].includes(credentialBindingMode)) fail('OZON_INTAKE_VERIFY_MODE_INVALID', '新 intake 必须是 VAULT 或 LEGACY_PUBLICATION');\nconst sku = String(input.sku || '').trim();\nconst revision = Number(input.revision || 0);\nconst jobId = String(input.jobId || '').trim();\nconst taskId = String(input.taskId || input.jobId || '').trim();\nconst storeConfigVersion = Number(input.storeConfigVersion || 0);\nconst rowVersion = Number(input.rowVersion || 0);\nconst leaseToken = String(input.leaseToken || '').trim();\nconst contentPolicyVersion = String(input.contentPolicyVersion || '').trim();\nconst materialHashVersion = String(input.materialHashVersion || '').trim();\nconst planHash = canonicalHash(input.planHash);\nconst presetRowVersion = Number(input.presetRowVersion || 0);\nconst publicationMode = String(input.publicationMode || '').trim().toUpperCase();\nconst canonicalMaterialHash = canonicalHash(input.materialHash);\nconst uuid = (value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ''));\nconst windowsReservedName = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;\nif (!uuid(jobId) || !taskId || taskId.length > 256 || !uuid(storeId) || !uuid(publicationId)\n  || !/^[a-z0-9][a-z0-9-]{1,31}$/.test(storeAlias) || windowsReservedName.test(storeAlias)\n  || (credentialBindingMode === 'VAULT' && !uuid(credentialVersionId))\n  || (credentialBindingMode === 'LEGACY_PUBLICATION' && credentialVersionId)\n  || !Number.isInteger(storeConfigVersion) || storeConfigVersion < 1\n  || !warehouseId || warehouseId.length > 128\n  || !Number.isInteger(rowVersion) || rowVersion < 1\n  || !uuid(leaseToken)\n  || !['merchroute-ozon-content-v2','merchroute-ozon-content-v3'].includes(contentPolicyVersion)\n  || !canonicalMaterialHash || materialHashVersion !== 'ozon-shared-material-v1' || !planHash\n  || !Number.isInteger(presetRowVersion) || presetRowVersion < 1\n  || !['CREATE_ONLY','COMPATIBLE_UPSERT'].includes(publicationMode)) {\n  fail('OZON_INTAKE_VERIFY_SNAPSHOT_INVALID', '票据验证缺少完整 job/store/alias/credential/config/warehouse/rowVersion/leaseToken 冻结快照');\n}\nconst productJsonPath = path.resolve(String(input.productJsonPath || ''));\nif (!path.isAbsolute(productJsonPath) || path.basename(productJsonPath) !== 'product.json' || !/^\\d{7}$/.test(sku) || !Number.isInteger(revision) || revision < 1) {\n  fail('OZON_INTAKE_VERIFY_CONTEXT_INVALID', '票据验证的 productJsonPath/SKU/revision 无效');\n}\nconst sourceDirectory = path.dirname(productJsonPath);\nconst inboxDirectory = path.dirname(sourceDirectory);\nconst storeRoot = path.dirname(inboxDirectory);\nconst storesDirectory = path.dirname(storeRoot);\nconst ozonRoot = path.dirname(storesDirectory);\nif (path.basename(sourceDirectory) !== sku || path.basename(inboxDirectory).toLowerCase() !== 'inbox'\n  || path.basename(storeRoot).toLowerCase() !== storeAlias || path.basename(storesDirectory).toLowerCase() !== 'stores') {\n  fail('OZON_INTAKE_VERIFY_PATH_INVALID', '票据验证路径必须位于 stores/<alias>/inbox/<SKU>');\n}\nif (taskId !== storeAlias + '__' + sku + '__r' + revision) {\n  fail('OZON_TASK_ID_SCOPE_INVALID', '店铺 taskId 必须是 <alias>__<sku>__rN');\n}\nconst taskFolder = sku + '__r' + revision;\nconst markerCandidates = [\n  path.join(sourceDirectory, '.ozon-intake.json'),\n  path.join(ozonRoot, 'processing', taskId, '.ozon-intake.json')\n];\nconst successRoot = path.join(ozonRoot, 'success');\nif (fs.existsSync(successRoot)) {\n  const successInfo = fs.lstatSync(successRoot);\n  if (successInfo.isSymbolicLink() || !successInfo.isDirectory()) fail('OZON_INTAKE_VERIFY_PATH_INVALID', 'success 不是安全普通目录');\n  for (const entry of fs.readdirSync(successRoot, { withFileTypes: true })) {\n    if (/^\\d{4}-\\d{2}-\\d{2}$/.test(entry.name) && entry.isDirectory() && !entry.isSymbolicLink()) {\n      markerCandidates.push(path.join(successRoot, entry.name, taskId, '.ozon-intake.json'));\n    }\n  }\n}\nconst markerPath = markerCandidates.find((candidate) => {\n  if (!fs.existsSync(candidate)) return false;\n  const info = fs.lstatSync(candidate);\n  if (info.isSymbolicLink() || !info.isFile()) fail('OZON_INTAKE_VERIFY_MARKER_INVALID', '.ozon-intake.json 必须是普通文件');\n  return true;\n});\nif (!markerPath) fail('OZON_INTAKE_VERIFY_MARKER_MISSING', '新 intake 缺少后端签发的 .ozon-intake.json');\nlet marker;\ntry { marker = JSON.parse(fs.readFileSync(markerPath, 'utf8').replace(/^\\uFEFF/, '')); }\ncatch (_) { fail('OZON_INTAKE_VERIFY_MARKER_INVALID', '.ozon-intake.json 不是有效 JSON'); }\nconst markerStoreAlias = String(marker.storeAlias || marker.store_alias || '').trim().toLowerCase();\nconst markerBindingMode = String(marker.credentialBindingMode || marker.credential_binding_mode || '').trim().toUpperCase();\nconst markerWarehouseId = String(marker.warehouseId || marker.warehouse_id || '').trim();\nconst markerContentPolicyVersion = String(marker.contentPolicyVersion || marker.content_policy_version || '').trim();\nconst markerMaterialHashVersion = String(marker.materialHashVersion || marker.material_hash_version || '').trim();\nconst markerPlanHash = canonicalHash(marker.planHash || marker.plan_hash);\nconst markerPresetRowVersion = Number(marker.presetRowVersion || marker.preset_row_version || 0);\nconst markerPublicationMode = String(marker.publicationMode || marker.publication_mode || '').trim().toUpperCase();\nif (markerStoreAlias !== storeAlias || markerBindingMode !== credentialBindingMode || markerWarehouseId !== warehouseId\n  || markerContentPolicyVersion !== contentPolicyVersion\n  || canonicalHash(marker.materialHash || marker.material_hash) !== canonicalMaterialHash\n  || markerMaterialHashVersion !== materialHashVersion || markerPlanHash !== planHash\n  || markerPresetRowVersion !== presetRowVersion || markerPublicationMode !== publicationMode) {\n  fail('OZON_INTAKE_VERIFY_MARKER_SNAPSHOT_MISMATCH', 'marker 必须包含与 claim 相同的店铺、策略、素材、计划、预设版本及发布模式冻结快照');\n}\nconst markerProductPath = path.join(path.dirname(markerPath), 'product.json');\nif (!fs.existsSync(markerProductPath)) fail('OZON_INTAKE_VERIFY_PRODUCT_MISSING', '验票目录缺少 product.json');\nconst productInfo = fs.lstatSync(markerProductPath);\nif (productInfo.isSymbolicLink() || !productInfo.isFile()) fail('OZON_INTAKE_VERIFY_PRODUCT_INVALID', 'product.json 必须是普通文件');\nconst productContentHash = crypto.createHash('sha256').update(fs.readFileSync(markerProductPath)).digest('hex');\nif (normalizeHash(marker.productContentHash || marker.product_content_hash) !== productContentHash) {\n  fail('OZON_INTAKE_PRODUCT_CONTENT_HASH_MISMATCH', 'product.json exact bytes 与 marker.productContentHash 不一致');\n}\nif (normalizeHash(marker.materializationHash || marker.materialization_hash) !== normalizeHash(input.materializationHash)) {\n  fail('OZON_INTAKE_MATERIALIZATION_HASH_MISMATCH', 'marker.materializationHash 与 publication materialization 合同不一致');\n}\nconst ticket = String(marker.ticket || marker.intakeTicket || marker.intake_ticket || marker.verificationTicket || marker.verification_ticket || '').trim();\nif (!/^hmac-sha256:[a-f0-9]{64}$/.test(ticket)) fail('OZON_INTAKE_TICKET_INVALID', '新 intake 缺少后端签发的 hmac-sha256 ticket');\nconst canonicalProductContentHash = canonicalHash(productContentHash);\nconst canonicalMaterializationHash = canonicalHash(input.materializationHash);\nconst canonicalOfferContractHash = canonicalHash(input.offerContractHash);\nif (!canonicalProductContentHash || !canonicalMaterializationHash || !canonicalOfferContractHash) {\n  fail('OZON_INTAKE_VERIFY_HASH_INVALID', '后端 intake verify 的三个 hash 必须可规范化为 sha256:<64hex>');\n}\nreturn [{ json: {\n  requiresBackendVerification: true,\n  verificationRequest: {\n    jobId,\n    taskId,\n    storeId,\n    storeAlias,\n    publicationId,\n    credentialVersionId: credentialVersionId || null,\n    credentialBindingMode,\n    storeConfigVersion,\n    warehouseId,\n    sku,\n    revision,\n    productContentHash: canonicalProductContentHash,\n    materializationHash: canonicalMaterializationHash,\n    contentPolicyVersion,\n    materialHash: canonicalMaterialHash,\n    materialHashVersion,\n    planHash,\n    presetRowVersion,\n    publicationMode,\n    offerContractHash: canonicalOfferContractHash,\n    ticket,\n    rowVersion,\n    leaseToken\n  }\n} }];"
+      }
+    },
+    {
+      "id": "a2543b4c-1f5c-4404-b8ec-70ff38bb81ea",
+      "name": "是否需要后端 intake 验证",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -260,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "ce491f54-d3e4-4ac2-b593-6dab73573299",
+              "leftValue": "={{ $json.requiresBackendVerification }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ac71ee68-4cf0-4b37-81a8-da095faa3e97",
+      "name": "调用 MerchRoute intake 验证",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        0,
+        -140
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ String($env.MERCHROUTE_RUNTIME_BASE_URL || 'http://127.0.0.1:4173').replace(/\\/+$/, '') + '/api/v1/ozon/internal/intake/verify' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-MerchRoute-Runtime-Key",
+              "value": "={{ $env.MERCHROUTE_RUNTIME_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.verificationRequest) }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "retryOnFail": false,
+      "maxTries": 1,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "07e54389-7193-4ce8-a35a-e5a1b6960431",
+      "name": "校验 intake 验证回执",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        -140
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nconst response = $input.first().json || {};\nconst statusCode = Number(response.statusCode || response.status || 0);\nconst body = response.body && typeof response.body === 'object' ? response.body : response;\nif (statusCode < 200 || statusCode >= 300 || body.verified !== true) {\n  const error = new Error('OZON_INTAKE_BACKEND_VERIFY_FAILED: 后端 intake 票据验证未返回 2xx verified');\n  error.code = 'OZON_INTAKE_BACKEND_VERIFY_FAILED';\n  throw error;\n}\nreturn [{ json: { intakeVerified: true, verificationId: String(body.verificationId || body.receiptId || '') } }];"
+      }
+    }
+  ],
+  "connections": {
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "准备后端 intake 验证",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "准备后端 intake 验证": {
+      "main": [
+        [
+          {
+            "node": "是否需要后端 intake 验证",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "是否需要后端 intake 验证": {
+      "main": [
+        [
+          {
+            "node": "调用 MerchRoute intake 验证",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "校验并认领任务目录",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "调用 MerchRoute intake 验证": {
+      "main": [
+        [
+          {
+            "node": "校验 intake 验证回执",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "校验 intake 验证回执",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "校验 intake 验证回执": {
+      "main": [
+        [
+          {
+            "node": "校验并认领任务目录",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "errorWorkflow": "kU8XxFLUign9LiQC"
+  }
+}

@@ -1,0 +1,334 @@
+{
+  "id": "pLoryDijfFiNwKiI",
+  "name": "S007-v02-百炼Qwen-图文对话",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "userPrompt"
+            },
+            {
+              "name": "sysPrompt"
+            },
+            {
+              "name": "imageAdd1"
+            },
+            {
+              "name": "imageAdd2"
+            },
+            {
+              "name": "imageAdd3"
+            },
+            {
+              "name": "temperature"
+            },
+            {
+              "name": "top_p"
+            }
+          ]
+        }
+      },
+      "id": "ccf03d22-b6b9-4430-92ed-7c651d77c7f7",
+      "name": "When Executed by Another Workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -560,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first()?.json || {};\n\nfunction asTrimmedString(value) {\n  if (value === undefined || value === null) return '';\n  return String(value).trim();\n}\n\nfunction readNumber(value, defaultValue, fieldName) {\n  if (value === undefined || value === null || value === '') return defaultValue;\n  const parsed = Number(value);\n  if (!Number.isFinite(parsed)) {\n    throw new Error(`${fieldName} 必须是数字`);\n  }\n  return parsed;\n}\n\nfunction isImageUrl(value) {\n  return /^https?:\\/\\//i.test(value) || /^data:image\\//i.test(value);\n}\n\nfunction normalizeLocalPath(value) {\n  let path = value.trim();\n  if (/^file:\\/\\//i.test(path)) {\n    path = path.replace(/^file:\\/\\//i, '');\n    if (/^\\/[A-Za-z]:\\//.test(path)) {\n      path = path.slice(1);\n    }\n  }\n  return path.replace(/\\\\/g, '/');\n}\n\nconst userPrompt = asTrimmedString(input.userPrompt);\nif (!userPrompt) {\n  throw new Error('userPrompt 为必选参数，不能为空');\n}\n\nconst sysPrompt = asTrimmedString(input.sysPrompt);\nconst temperature = readNumber(input.temperature, 0.7, 'temperature');\nconst topP = readNumber(input.top_p, 0.8, 'top_p');\n\nconst imageFields = ['imageAdd1', 'imageAdd2', 'imageAdd3'];\nconst imageSlots = [];\nconst urlImages = [];\nconst localImages = [];\n\nfor (let index = 0; index < imageFields.length; index++) {\n  const key = imageFields[index];\n  const source = asTrimmedString(input[key]);\n  if (!source) continue;\n\n  if (isImageUrl(source)) {\n    const image = {\n      index,\n      key,\n      type: 'url',\n      source,\n      url: source,\n    };\n    imageSlots.push(image);\n    urlImages.push(image);\n  } else {\n    const path = normalizeLocalPath(source);\n    const image = {\n      index,\n      key,\n      type: 'local',\n      source,\n      path,\n    };\n    imageSlots.push(image);\n    localImages.push(image);\n  }\n}\n\nconst context = {\n  constants: input.constants || {},\n  userPrompt,\n  sysPrompt,\n  temperature,\n  top_p: topP,\n  imageSlots,\n  urlImages,\n  localImages,\n  imageCount: imageSlots.length,\n  hasLocalImages: localImages.length > 0,\n};\n\nif (localImages.length > 0) {\n  context.firstLocalPath = localImages[0].path;\n}\n\nreturn [{ json: context }];"
+      },
+      "id": "f3f55f5c-0ce4-4a0d-9347-8fc0a95eeb80",
+      "name": "Normalize Inputs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -64,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "hasLocalImages",
+              "leftValue": "={{ $json.firstLocalPath }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "0e4cbe9d-c93a-49fd-86e2-19360adb685b",
+      "name": "Has Local Images?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        112,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $input.first()?.json;\nif (!context) {\n  throw new Error('缺少标准化输入上下文');\n}\n\nconst localImages = Array.isArray(context.localImages) ? context.localImages : [];\nif (localImages.length === 0) {\n  return [];\n}\n\nreturn localImages.map((localImage) => ({\n  json: {\n    context,\n    localImage,\n  },\n}));"
+      },
+      "id": "a3c6f02e-fca4-4dbf-8c2d-7a9ee09da401",
+      "name": "Explode Local Images",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        336,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "fileSelector": "={{ $json.localImage.path }}",
+        "options": {
+          "dataPropertyName": "data"
+        }
+      },
+      "id": "a67f041d-e927-42a6-8d1d-7f23d01777a5",
+      "name": "Read Local Image",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        560,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const readItems = $input.all();\nconst explodedItems = $('Explode Local Images').all();\n\nif (readItems.length !== explodedItems.length) {\n  throw new Error(`本地图片读取数量不匹配：期望 ${explodedItems.length}，实际 ${readItems.length}`);\n}\n\nfunction inferMimeType(fileNameOrPath) {\n  const lower = String(fileNameOrPath || '').toLowerCase();\n  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';\n  if (lower.endsWith('.png')) return 'image/png';\n  if (lower.endsWith('.webp')) return 'image/webp';\n  if (lower.endsWith('.gif')) return 'image/gif';\n  if (lower.endsWith('.bmp')) return 'image/bmp';\n  return 'image/png';\n}\n\nconst localDataUrls = [];\nlet context = null;\n\nfor (let i = 0; i < readItems.length; i++) {\n  const exploded = explodedItems[i].json;\n  context = context || exploded.context;\n  const localImage = exploded.localImage;\n  const binary = readItems[i].binary?.data;\n\n  if (!binary) {\n    throw new Error(`未读取到本地图片二进制数据：${localImage.source}`);\n  }\n\n  const buffer = await this.helpers.getBinaryDataBuffer(i, 'data');\n  const fileName = binary.fileName || localImage.path;\n  const mimeType = binary.mimeType || inferMimeType(fileName);\n\n  if (!String(mimeType).startsWith('image/')) {\n    throw new Error(`本地文件不是图片 MIME 类型：${localImage.source} (${mimeType})`);\n  }\n\n  localDataUrls.push({\n    index: localImage.index,\n    key: localImage.key,\n    type: 'local',\n    source: localImage.source,\n    path: localImage.path,\n    mimeType,\n    fileName,\n    url: `data:${mimeType};base64,${buffer.toString('base64')}`,\n  });\n}\n\nlocalDataUrls.sort((a, b) => a.index - b.index);\n\nreturn [{\n  json: {\n    context,\n    localDataUrls,\n  },\n}];"
+      },
+      "id": "b4f3dbf5-3a5b-4b17-94c4-8c654d07e272",
+      "name": "Convert Local Images",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        784,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first()?.json || {};\nconst context = input.context || input;\nconst localDataUrls = Array.isArray(input.localDataUrls) ? input.localDataUrls : [];\nconst shared = context.constants || {};\nconst modelRun = String(shared.model?.Model_Run || '').trim();\nconst baseUrlRun = String(shared.BaseUrl?.BaseUrl_Run || '').trim();\nconst apiKeyRun = String(shared.Authorization?.APIKey_Run || '').trim();\n\nif (!modelRun) {\n  throw new Error('缺少 constants.model.Model_Run，无法构造模型请求');\n}\n\nif (!baseUrlRun) {\n  throw new Error('缺少 constants.BaseUrl.BaseUrl_Run，无法构造模型请求');\n}\n\nif (!apiKeyRun) {\n  throw new Error('缺少 constants.Authorization.APIKey_Run，无法构造模型请求');\n}\n\nif (!context.userPrompt) {\n  throw new Error('缺少 userPrompt，无法构造 Qwen 请求');\n}\n\nconst localByIndex = new Map(localDataUrls.map((image) => [image.index, image]));\nconst imageContents = [];\nconst imageSources = [];\n\nfor (const slot of context.imageSlots || []) {\n  if (slot.type === 'url') {\n    imageContents.push({\n      type: 'image_url',\n      image_url: {\n        url: slot.url,\n      },\n    });\n    imageSources.push({\n      index: slot.index,\n      key: slot.key,\n      type: 'url',\n      source: slot.source,\n    });\n    continue;\n  }\n\n  const converted = localByIndex.get(slot.index);\n  if (!converted) {\n    throw new Error(`本地图片未成功转换为 data URL：${slot.source}`);\n  }\n\n  imageContents.push({\n    type: 'image_url',\n    image_url: {\n      url: converted.url,\n    },\n  });\n  imageSources.push({\n    index: slot.index,\n    key: slot.key,\n    type: 'local',\n    source: slot.source,\n    path: converted.path,\n    mimeType: converted.mimeType,\n    fileName: converted.fileName,\n  });\n}\n\nconst expectedImageCount = Number(context.imageCount || 0);\nif (imageContents.length !== expectedImageCount) {\n  throw new Error(`图片数量不一致：期望 ${expectedImageCount}，实际 ${imageContents.length}`);\n}\n\nconst outputInstruction = '你必须只输出一个合法 JSON 对象，不要输出 Markdown，不要输出代码块。JSON 必须包含字符串字段 messageContent，格式示例：{\"messageContent\":\"你的回答文本\"}。';\nconst systemContent = context.sysPrompt\n  ? `${context.sysPrompt}\\n\\n${outputInstruction}`\n  : outputInstruction;\n\nconst messages = [\n  {\n    role: 'system',\n    content: systemContent,\n  },\n];\n\nif (imageContents.length > 0) {\n  messages.push({\n    role: 'user',\n    content: [\n      {\n        type: 'text',\n        text: context.userPrompt,\n      },\n      ...imageContents,\n    ],\n  });\n} else {\n  messages.push({\n    role: 'user',\n    content: context.userPrompt,\n  });\n}\n\nconst request = {\n  model: modelRun,\n  messages,\n  enable_thinking: false,\n  response_format: {\n    type: 'json_object',\n  },\n  temperature: context.temperature ?? 0.7,\n  top_p: context.top_p ?? 0.8,\n  stream: false,\n};\n\nconst { constants: sourceConstants = {}, ...sourceContext } = context;\nconst source = {\n  ...sourceContext,\n  imageSources,\n  requestMeta: {\n    model: request.model,\n    imageCount: imageContents.length,\n    imageSources,\n    temperature: request.temperature,\n    top_p: request.top_p,\n  },\n};\n\nreturn [{\n  json: {\n    request,\n    constants: sourceConstants,\n    source,\n  },\n}];",
+        "mode": "runOnceForAllItems"
+      },
+      "id": "c178e855-ccbc-4724-9aeb-76f53d4d9b45",
+      "name": "Build Qwen Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        976,
+        432
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.constants.BaseUrl.BaseUrl_Run }}",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ $json.constants.Authorization.APIKey_Run }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.request }}",
+        "options": {}
+      },
+      "id": "43719f1f-1a9c-4bc0-aad6-0ef36cf07bfa",
+      "name": "HTTP Request Form",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1200,
+        432
+      ],
+      "notesInFlow": true,
+      "notes": "运行时模型服务：Model_Run（输出为 model_Run）+ BaseUrl_Run + APIKey_Run"
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first()?.json || {};\nconst meta = $('Build Qwen Request').first()?.json?.source?.requestMeta || {};\nconst choice = Array.isArray(response.choices) ? response.choices[0] : undefined;\n\nif (!choice) {\n  throw new Error('阿里百炼响应中缺少 choices[0]');\n}\n\nconst content = choice.message?.content;\nif (typeof content !== 'string' || !content.trim()) {\n  throw new Error('Qwen3.7-plus 未返回可解析的文本内容');\n}\n\nlet parsed;\ntry {\n  parsed = JSON.parse(content.trim());\n} catch (error) {\n  throw new Error(`Qwen3.7-plus 返回内容不是合法 JSON：${content}`);\n}\n\nlet messageContent;\nif (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {\n  if (typeof parsed.messageContent === 'string') {\n    messageContent = parsed.messageContent;\n  } else {\n    messageContent = JSON.stringify(parsed);\n  }\n} else {\n  throw new Error('Qwen3.7-plus 返回 JSON 不是对象');\n}\n\nreturn [{\n  json: {\n    messageContent,\n    model: response.model || meta.model || 'qwen3.7-plus',\n    usage: response.usage || null,\n    finishReason: choice.finish_reason || choice.finishReason || null,\n    imageCount: meta.imageCount || 0,\n  },\n}];"
+      },
+      "id": "0689a3d1-bee8-47a4-8f9c-2ee8c92d37bc",
+      "name": "Format Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1424,
+        432
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## S007-qwen3.7-sysPrompt-图片路径-v2\n\n### 主要功能\n通用 Qwen3.7-plus 调用子流。接收用户提示词、系统提示词和最多 3 张图片地址，支持 HTTP/Data URL 图片，也支持读取本地图片并转为 Data URL，再调用阿里百炼 DashScope OpenAI 兼容接口返回模型文本结果。\n\n### 输入\n- userPrompt：必填，用户侧提示词。\n- sysPrompt：可选，系统提示词。\n- imageAdd1 / imageAdd2 / imageAdd3：可选图片输入，支持 http(s)、data:image 和本地文件路径。\n- temperature：可选数字，默认 0.7。\n- top_p：可选数字，默认 0.8。\n\n### 核心流程\n- Normalize Inputs：校验 userPrompt，标准化 temperature/top_p 和图片来源。\n- Has Local Images?：判断是否需要读取本地图片。\n- Read Local Image / Convert Local Images：读取本地文件二进制并转成 Data URL。\n- Build Qwen Request：构造包含文本和图片的 chat/completions 请求体。\n- HTTP Request Form：调用 DashScope 兼容接口。\n- Format Output：解析模型返回 JSON 中的 messageContent。\n\n### 输出\n- messageContent：模型返回 JSON 中的 messageContent 字段。\n- model / usage / finishReason / imageCount：模型、用量、结束原因和图片数量。\n\n### 注意\n- 本地路径会统一转换为正斜杠，便于跨 Windows/Mac 迁移。\n- 当前主链路连接到 Format Output；Format Output1 节点未接入主执行链。",
+        "height": 660,
+        "width": 680,
+        "color": 4
+      },
+      "id": "caf44c1c-2827-4102-9788-406a062cd012",
+      "name": "工作流说明便签",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -1280,
+        -64
+      ]
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-globals.globalConstants",
+      "typeVersion": 1,
+      "position": [
+        -304,
+        320
+      ],
+      "id": "1440a757-2d90-4d8d-9c7c-0c3002d3677c",
+      "name": "Global Constants"
+    }
+  ],
+  "connections": {
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Global Constants",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Inputs": {
+      "main": [
+        [
+          {
+            "node": "Has Local Images?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Local Images?": {
+      "main": [
+        [
+          {
+            "node": "Explode Local Images",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Qwen Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Explode Local Images": {
+      "main": [
+        [
+          {
+            "node": "Read Local Image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Local Image": {
+      "main": [
+        [
+          {
+            "node": "Convert Local Images",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Convert Local Images": {
+      "main": [
+        [
+          {
+            "node": "Build Qwen Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Qwen Request": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request Form",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request Form": {
+      "main": [
+        [
+          {
+            "node": "Format Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Global Constants": {
+      "main": [
+        [
+          {
+            "node": "Normalize Inputs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  }
+}

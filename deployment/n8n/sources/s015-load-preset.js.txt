@@ -1,0 +1,146 @@
+const fs = require('fs');
+const path = require('path');
+const job = $input.first().json || {};
+const params = job.params || {};
+
+const presets = {
+  case1: { name: 'zoom_fade_720_square', width: 720, height: 720, fps: 30, targetDuration: 10, transitionDuration: 0.5, motion: { type: 'zoom_in', zoomMax: 1.06, zoomStep: 0.0012 }, transition: { type: 'fade' }, audio: { enabled: true, volume: 0.25, fadeIn: 0.8, fadeOut: 2 } },
+  case2: { name: 'slide_right_wipeleft_720_square', width: 720, height: 720, fps: 30, targetDuration: 10, transitionDuration: 0.5, motion: { type: 'slide_right', overscale: 1.15 }, transition: { type: 'wipeleft' }, audio: { enabled: true, volume: 0.25, fadeIn: 0.8, fadeOut: 2 } },
+  case3: { name: 'zoom_dissolve_720_square', width: 720, height: 720, fps: 30, targetDuration: 10, transitionDuration: 0.5, motion: { type: 'zoom_in', zoomMax: 1.04, zoomStep: 0.001 }, transition: { type: 'dissolve' }, audio: { enabled: true, volume: 0.25, fadeIn: 0.8, fadeOut: 2 } },
+};
+
+function normalizeUserPath(value, options = {}) {
+  const trimTrailingSlash = options.trimTrailingSlash === true;
+  let result = String(value ?? '').trim();
+  if (result.length >= 2) {
+    const first = result[0];
+    const last = result[result.length - 1];
+    if ((first === '"' && last === '"') || (first === "'" && last === "'")) result = result.slice(1, -1).trim();
+  }
+  result = result.replace(/\\+/g, '/').replace(/^([A-Za-z]:)\/+/, '$1/');
+  if (trimTrailingSlash) while (result.length > 1 && result.endsWith('/') && !/^[A-Za-z]:\/$/.test(result)) result = result.slice(0, -1);
+  return result;
+}
+
+function normalizeEffectPreset(value) {
+  const raw = String(value || 'case1').trim();
+  const compact = raw.replace(/\s+/g, '');
+  const lower = compact.toLowerCase();
+  const caseMatch = lower.match(/^case[-_]?(\d+)$/);
+  if (caseMatch) return 'case' + Number(caseMatch[1]);
+  const zhMatch = compact.match(/^(效果|特效)-?(\d+)$/);
+  if (zhMatch) return 'case' + Number(zhMatch[2]);
+  return raw;
+}
+
+function strictNumber(value, label, minimum, maximum, options = {}) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < minimum || number > maximum || (options.integer && !Number.isInteger(number))) {
+    throw new Error(label + ' 必须是 ' + minimum + '–' + maximum + (options.integer ? ' 的整数。' : ' 的有限数值。'));
+  }
+  return number;
+}
+
+function optionalNumber(value, fallback, label, minimum, maximum, options = {}) {
+  if (value === undefined || value === null || value === '') return fallback;
+  return strictNumber(value, label, minimum, maximum, options);
+}
+
+function strictBoolean(value, label) {
+  if (value === true || value === false) return value;
+  const text = String(value ?? '').trim().toLowerCase();
+  if (['true', '1', 'yes', 'y', 'on'].includes(text)) return true;
+  if (['false', '0', 'no', 'n', 'off'].includes(text)) return false;
+  throw new Error(label + ' 必须是明确的布尔值。');
+}
+
+function isInside(root, target) {
+  const relative = path.relative(root, target);
+  return relative === '' || (relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative));
+}
+
+function requireRealDirectory(value, label) {
+  const resolved = path.resolve(value);
+  if (!fs.existsSync(resolved)) throw new Error(label + ' 不存在：' + resolved);
+  const stats = fs.lstatSync(resolved);
+  if (stats.isSymbolicLink() || !stats.isDirectory()) throw new Error(label + ' 必须是真实目录：' + resolved);
+  return { resolved, real: fs.realpathSync(resolved) };
+}
+
+function requireRealFile(value, label, options = {}) {
+  const resolved = path.resolve(value);
+  if (!fs.existsSync(resolved)) throw new Error(label + ' 不存在：' + resolved);
+  const stats = fs.lstatSync(resolved);
+  if (stats.isSymbolicLink() && !options.allowSymlink) throw new Error(label + ' 禁止使用符号链接：' + resolved);
+  const real = fs.realpathSync(resolved);
+  if (!fs.statSync(real).isFile()) throw new Error(label + ' 必须指向普通文件：' + resolved);
+  return { resolved, real };
+}
+
+const rawEffectPreset = job.effectPreset || params.effectPreset || 'case1';
+const key = normalizeEffectPreset(rawEffectPreset);
+const basePreset = presets[key];
+if (!basePreset) throw new Error('Unknown effectPreset: ' + rawEffectPreset + '. Supported presets: ' + Object.keys(presets).join(', '));
+const preset = JSON.parse(JSON.stringify(basePreset));
+
+preset.width = optionalNumber(params.width, preset.width, 'width', 16, 4096, { integer: true });
+preset.height = optionalNumber(params.height, preset.height, 'height', 16, 4096, { integer: true });
+if (preset.width % 2 !== 0 || preset.height % 2 !== 0) throw new Error('width 和 height 必须是偶数，以兼容 yuv420p/libx264。');
+preset.fps = optionalNumber(params.fps, preset.fps, 'fps', 1, 60, { integer: true });
+preset.targetDuration = optionalNumber(params.targetDuration, preset.targetDuration, 'targetDuration', 0.5, 300);
+preset.transitionDuration = optionalNumber(params.transitionDuration, preset.transitionDuration, 'transitionDuration', 0, 5);
+if (preset.transitionDuration >= preset.targetDuration) throw new Error('transitionDuration 必须小于 targetDuration。');
+preset.audio.volume = optionalNumber(params.audioVolume, preset.audio.volume, 'audioVolume', 0, 2);
+preset.audio.fadeIn = optionalNumber(params.audioFadeIn, preset.audio.fadeIn, 'audioFadeIn', 0, preset.targetDuration);
+preset.audio.fadeOut = optionalNumber(params.audioFadeOut, preset.audio.fadeOut, 'audioFadeOut', 0, preset.targetDuration);
+
+preset.effectPreset = key;
+preset.musicPath = normalizeUserPath(params.musicPath || '');
+preset.ffmpegPath = normalizeUserPath(params.ffmpegPath || '');
+preset.enableLogo = strictBoolean(params.enableLogo, 'enableLogo');
+preset.logoPath = normalizeUserPath(params.logoPath || '');
+preset.logoWidth = optionalNumber(params.logoWidth, 90, 'logoWidth', 1, preset.width, { integer: true });
+preset.logoMarginX = optionalNumber(params.logoMarginX, 12, 'logoMarginX', 0, preset.width - 1, { integer: true });
+preset.logoMarginY = optionalNumber(params.logoMarginY, 12, 'logoMarginY', 0, preset.height - 1, { integer: true });
+preset.logoOpacity = optionalNumber(params.logoOpacity, 1, 'logoOpacity', 0, 1);
+
+const rawLogoPosition = String(params.logoPosition || 'top_left').trim().toLowerCase().replace(/-/g, '_');
+const logoAliases = { bottom_let: 'bottom_left', left_top: 'top_left', right_top: 'top_right', left_bottom: 'bottom_left', right_bottom: 'bottom_right' };
+preset.logoPosition = logoAliases[rawLogoPosition] || rawLogoPosition;
+if (!['top_left', 'top_right', 'bottom_left', 'bottom_right'].includes(preset.logoPosition)) throw new Error('logoPosition 无效：' + params.logoPosition);
+if (preset.enableLogo && !preset.logoPath) throw new Error('enableLogo=true 时 logoPath 必填。');
+if (!preset.enableLogo) preset.logoPath = '';
+
+const imagePaths = Array.isArray(job.imagePaths) ? job.imagePaths.map((value) => normalizeUserPath(value || '')).filter(Boolean) : [];
+const maxImageCount = strictNumber(params.maxImageCount, 'maxImageCount', 1, 100, { integer: true });
+if (imagePaths.length < 1 || imagePaths.length > maxImageCount) throw new Error('S015 图片数量必须在 1–' + maxImageCount + ' 之间。');
+if (!job.outputVideoPath || !job.outputSubDir || !job.sourceChildDir || !params.outputParentDir) throw new Error('S015 缺少 outputVideoPath、outputSubDir、sourceChildDir 或 outputParentDir。');
+if (!preset.ffmpegPath) throw new Error('params.ffmpegPath is required.');
+
+const sourceRoot = requireRealDirectory(normalizeUserPath(job.sourceChildDir), 'sourceChildDir');
+for (const [index, imagePath] of imagePaths.entries()) {
+  const image = requireRealFile(imagePath, 'imagePaths[' + index + ']');
+  if (!isInside(sourceRoot.real, image.real)) throw new Error('imagePaths[' + index + '] 超出 sourceChildDir。');
+}
+const outputParent = requireRealDirectory(normalizeUserPath(params.outputParentDir), 'outputParentDir');
+const outputSubDir = requireRealDirectory(normalizeUserPath(job.outputSubDir, { trimTrailingSlash: true }), 'outputSubDir');
+if (!isInside(outputParent.real, outputSubDir.real) || outputParent.real === outputSubDir.real) throw new Error('outputSubDir 超出 outputParentDir。');
+const outputVideoPath = path.resolve(normalizeUserPath(job.outputVideoPath));
+if (!isInside(outputSubDir.resolved, outputVideoPath) || path.dirname(outputVideoPath) !== outputSubDir.resolved || path.extname(outputVideoPath).toLowerCase() !== '.mp4') throw new Error('outputVideoPath 必须是 outputSubDir 内的直接 .mp4 文件。');
+
+const ffmpeg = requireRealFile(preset.ffmpegPath, 'ffmpegPath', { allowSymlink: true });
+if (!/^ffmpeg(?:\.exe)?$/i.test(path.basename(ffmpeg.real))) throw new Error('ffmpegPath 必须指向 ffmpeg 或 ffmpeg.exe。');
+preset.ffmpegPath = normalizeUserPath(ffmpeg.resolved);
+if (preset.logoPath) preset.logoPath = normalizeUserPath(requireRealFile(preset.logoPath, 'logoPath').resolved);
+if (preset.musicPath) preset.musicPath = normalizeUserPath(requireRealFile(preset.musicPath, 'musicPath').resolved);
+preset.audio.enabled = Boolean(preset.musicPath);
+
+return [{ json: {
+  ...job,
+  imagePaths,
+  sourceChildDir: normalizeUserPath(sourceRoot.resolved),
+  outputVideoPath: normalizeUserPath(outputVideoPath),
+  outputSubDir: normalizeUserPath(outputSubDir.resolved, { trimTrailingSlash: true }),
+  effectPreset: key,
+  preset,
+} }];

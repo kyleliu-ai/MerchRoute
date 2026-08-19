@@ -1,0 +1,58 @@
+export const WORKFLOWS = Object.freeze([
+  { id: 'Wxng7hVbjMNhVOaO', category: 'core', label: 'E001-v02-批量抠图-即梦' },
+  { id: 'HpCtxAZJdy9RgWk2', category: 'core', label: 'E002-v03-白底图-生5视图' },
+  { id: 's0lQIcv1ZCgEzGlB', category: 'core', label: 'E003-v09-即梦-5生7-电商套图' },
+  { id: 'noHJuIiHfHryuA2e', category: 'core', label: 'E004-v01-主图生视频-FFmpeg', dependencies: ['x8D4EHfqI2DHcgL7'] },
+  { id: 'aj5sD7nSxxpTuRMh', category: 'core', label: 'E005-v07-图片加logo-Resize' },
+  { id: '6rGNfgghmkkeYhfG', category: 'core', label: 'E006-v02-拼多多商品媒体下载' },
+  { id: 'G8MSbp9u0dudSgba', category: 'core', label: 'E007-v01-1688产品媒体下载' },
+  { id: 'KmZ1AibtVGxzCgzc', category: 'core', label: 'S001-Url文件下载-v02' },
+  { id: 'ieWnRGeC7KdeS1GT', category: 'core', label: 'S003-v8-即梦4.5-5图生7图' },
+  { id: '5fKlIwJWfXJM1y4E', category: 'core', label: 'S005-v05-文件上传-转URL-硅基API' },
+  { id: 'pLoryDijfFiNwKiI', category: 'core', label: 'S007-v02-百炼Qwen-图文对话' },
+  { id: 'TOSzxIPPKZHQPtYT', category: 'core', label: 'S008-产品详情-俄文-生成子流' },
+  { id: 'KtjTu0u08rZJNtyM', category: 'core', label: 'S011-v03-Qwen-提示词-组装' },
+  { id: 'JEl0xCKTgtiIP9UT', category: 'core', label: 'S013-v04-主图场景-编排子流' },
+  { id: 'DSXe7OXHqa1IsQxx', category: 'core', label: 'S014-v03-读取文件夹-输出JSON参数表' },
+  { id: 'x8D4EHfqI2DHcgL7', category: 'core', label: 'S015-v01-Render-主图生视频-加logo' },
+  { id: 'gDMR3Mxnm9dKQJtO', category: 'core', label: 'S016-JSON文件-解析' },
+  { id: 'flPkKc0aNf1uAZ5w', category: 'wb', label: 'WB-A001-多店铺API网关' },
+  { id: 'wzrSZDZ0wOEh8XKy', category: 'wb', label: 'WB-C001-只读预检与类目模板' },
+  { id: 'JcTDgNsprA7rPoMA', category: 'wb', label: 'WB-E001-系统异常记录' },
+  { id: 'WbwJ8ufnL349l9hk', category: 'wb', label: 'WB-P001-任务API' },
+  { id: 'BcWDcR0JIUKr05lo', category: 'wb', label: 'WB-P002-扫描与调度' },
+  { id: 'dEg5v4DY59j0tGPB', category: 'wb', label: 'WB-P003-类目与运行配置API' },
+  { id: 'mTZV8BkPZpzHIJjz', category: 'wb', label: 'WB-S000-声明商品目录' },
+  { id: 'qYxi3PPmRm7tjK0E', category: 'wb', label: 'WB-S001-推进单个任务' },
+  { id: 'W2lSSXE3NUaLW1tD', category: 'wb', label: 'WB-T001-标题翻译工作流' },
+  { id: '3hyAiON1l3fEHBzA', category: 'ozon', label: 'OZON-A001-默认店铺API网关' },
+  { id: 'cuBblkAPnQQbhWEI', category: 'ozon', label: 'OZON-C001-连接与配额检查' },
+  { id: 'kU8XxFLUign9LiQC', category: 'ozon', label: 'OZON-E001-错误处理' },
+  { id: 'o0vFbNtFSg3kAhkC', category: 'ozon', label: 'OZON-P001-任务接口' },
+  { id: 'g3KK68BLXX7eShqa', category: 'ozon', label: 'OZON-P002-任务扫描与调度' },
+  { id: 'EQPxeMrm2cbdmOEz', category: 'ozon', label: 'OZON-P003-类目与系统配置接口' },
+  { id: '0FqozLuQ7vuabT8V', category: 'ozon', label: 'OZON-S000-任务目录认领' },
+  { id: 'stSK51IuxrMZlLjx', category: 'ozon', label: 'OZON-S001-商品上品状态机' },
+  { id: 'uKkH5O0dpfzFuAag', category: 'ozon', label: 'OZON-S002-图片上传转URL适配器' },
+  { id: 'HDh0ZNLK2ps5qasR', category: 'ozon', label: 'OZON-T001-标题翻译工作流' },
+]);
+
+const sharedQwenWorkflowId = 'pLoryDijfFiNwKiI';
+
+export const DEPLOYMENT_PACKAGES = Object.freeze([
+  {
+    id: 'core',
+    name: 'MerchRoute 核心图片处理与投递',
+    workflowIds: WORKFLOWS.filter((item) => item.category === 'core').map((item) => item.id),
+  },
+  {
+    id: 'wb',
+    name: 'Wildberries 上品',
+    workflowIds: [sharedQwenWorkflowId, ...WORKFLOWS.filter((item) => item.category === 'wb').map((item) => item.id)],
+  },
+  {
+    id: 'ozon',
+    name: 'Ozon 上品',
+    workflowIds: [sharedQwenWorkflowId, ...WORKFLOWS.filter((item) => item.category === 'ozon').map((item) => item.id)],
+  },
+]);
