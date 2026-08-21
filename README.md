@@ -192,6 +192,17 @@ npm run check
 - [架构说明](docs/ARCHITECTURE.md)
 - [安全策略](SECURITY.md)
 
+## 联系仓库所有者
+
+如需交流 MerchRoute 的使用、部署或电商自动化实践，可通过以下方式联系仓库所有者：
+
+- 微信号：`kyleliuxie`
+- 抖音号：`FKGolf`
+
+<p align="left">
+  <img src="docs/assets/contact/douyin-fkgolf.png" alt="抖音号 FKGolf 二维码" width="280">
+</p>
+
 ## 许可证
 
 MerchRoute 主程序使用 [MIT License](LICENSE)。`integrations/jimeng-free-api-all/` 是独立的 GPL-3.0-only 组件，使用和再分发时须同时遵守其 [许可证](integrations/jimeng-free-api-all/LICENSE)。
