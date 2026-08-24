@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { OZON_DEFAULT_STORE_ID } from '@n8n-media-review/shared';
 import { evaluateOzonPreflightCurrency, OzonStoreRepository, parseImportedNoBrandFailures } from './ozon-stores.js';
+import { ozonPreparationGatewayBoundaryLockKey } from '../ozon-preparation-gateway-boundary.js';
 
 describe('OZON imported no-brand recovery evidence', () => {
   const failure = [{
@@ -185,6 +186,132 @@ describe('OZON store preflight currency contract', () => {
   });
 });
 
+describe('OZON automatic store required-attribute admission', () => {
+  const storeId = '11111111-1111-4111-8111-111111111111';
+  const presetId = '22222222-2222-4222-8222-222222222222';
+  const pricingTemplateId = '33333333-3333-4333-8333-333333333333';
+  const shippingTemplateId = '44444444-4444-4444-8444-444444444444';
+  const baseStoreRow = {
+    id: storeId,
+    store_alias: 'glauke',
+    display_name: 'Glauke',
+    enabled: true,
+    auto_publish_enabled: true,
+    auto_publish_activated_at: '2026-08-01T00:00:00.000Z',
+    auto_publish_mode: 'CREATE_ONLY',
+    default_preset_id: presetId,
+    warehouse_id: 'warehouse-1',
+    warehouse_name: 'Warehouse',
+    fulfillment_mode: 'FBS',
+    account_currency: 'RUB',
+    max_daily_styles: 100,
+    credential_state: 'ACTIVE',
+    credential_binding_mode: 'VAULT',
+    active_credential_version_id: '55555555-5555-4555-8555-555555555555',
+    active_credential_id: '55555555-5555-4555-8555-555555555555',
+    active_credential_version: 1,
+    seller_id: 'seller-1',
+    permissions: [],
+    limits: {},
+    warehouses: [],
+    preflight_status: 'PASSED',
+    preflight_checked_at: '2026-08-01T00:00:00.000Z',
+    preflight_due_at: '2099-01-01T00:00:00.000Z',
+    preflight_expires_at: '2099-01-02T00:00:00.000Z',
+    preflight_report: { currencyVerification: { status: 'VERIFIED', currency: 'RUB' } },
+    duplicate_seller_count: 0,
+    active_task_count: 0,
+    queued_task_count: 0,
+    config_version: 3,
+    row_version: 7,
+    created_at: '2026-08-01T00:00:00.000Z',
+    updated_at: '2026-08-01T00:00:00.000Z'
+  };
+  const categorySnapshot = {
+    categoryKey: 'sports-shoes',
+    nameRu: 'Спортивная обувь',
+    nameZh: '运动鞋',
+    descriptionCategoryId: 17001,
+    typeId: 97001,
+    attributes: [
+      { id: 31, complexId: 0, name: 'Бренд одежды и обуви', nameRu: 'Бренд одежды и обуви', nameZh: '服装和鞋类品牌', type: 'Dictionary', required: true, dictionaryId: 28732849 },
+      { id: 9163, complexId: 0, name: 'Пол', nameRu: 'Пол', nameZh: '性别', type: 'Dictionary', required: true, dictionaryId: 100 },
+      { id: 8292, complexId: 0, name: 'Объединить на одной карточке', nameRu: 'Объединить на одной карточке', nameZh: '合并至一张卡片', type: 'String', required: true },
+      { id: 4298, complexId: 0, name: 'Российский размер', nameRu: 'Российский размер', nameZh: '俄罗斯尺码', type: 'Dictionary', required: true, dictionaryId: 200 }
+    ],
+    dictionarySnapshot: {},
+    media: { defaultVideoUploadMode: 'COMPRESSED_COPY' },
+    sizing: { sizeMode: 'sized', sizeAttributeKey: '4298:0' },
+    confirmedBy: 'test'
+  };
+  const validPreset = {
+    name: 'OZON-运动鞋预设',
+    description: '',
+    categoryKey: 'sports-shoes',
+    pricingTemplateId,
+    shippingTemplateId,
+    shippingServiceCode: 'CEL',
+    vat: '0.2',
+    defaultStock: 1,
+    dimensions: { length: 30, width: 20, height: 12, dimensionUnit: 'cm', weight: 700, weightUnit: 'g' },
+    sharedAttributes: [{ attributeId: 9163, complexId: 0, values: [{ dictionaryValueId: 22880 }] }],
+    variantAttributes: [],
+    sizeAttributeKey: '4298:0',
+    sizes: Array.from({ length: 11 }, (_, index) => ({ value: String(36 + index), stock: 1 })),
+    mediaPolicy: 'REPLACE_ALL'
+  };
+
+  async function eligibleWith(definition: Record<string, unknown>) {
+    const query = vi.fn(async (text: string) => {
+      if (text.includes('FROM ozon_stores s')) return { rows: [baseStoreRow], rowCount: 1 };
+      if (text.includes('FROM ozon_listing_presets preset')) return {
+        rows: [{
+          definition,
+          row_version: 5,
+          category_version_id: '66666666-6666-4666-8666-666666666666',
+          category_snapshot: categorySnapshot
+        }],
+        rowCount: 1
+      };
+      throw new Error(`unexpected query: ${text}`);
+    });
+    const repository = new OzonStoreRepository();
+    (repository as any).pool = { query };
+    const previous = process.env.MERCHROUTE_OZON_MULTISTORE_FLEET_READY;
+    process.env.MERCHROUTE_OZON_MULTISTORE_FLEET_READY = 'true';
+    try {
+      return { stores: await repository.listEligibleAutoStores('2026-08-24T00:00:00.000Z'), query };
+    } finally {
+      if (previous === undefined) delete process.env.MERCHROUTE_OZON_MULTISTORE_FLEET_READY;
+      else process.env.MERCHROUTE_OZON_MULTISTORE_FLEET_READY = previous;
+    }
+  }
+
+  it('filters a store whose current preset no longer covers published required attributes', async () => {
+    const { stores, query } = await eligibleWith({ ...validPreset, sharedAttributes: [] });
+
+    expect(stores).toEqual([]);
+    expect(query.mock.calls[1]?.[0]).toContain("version.status='PUBLISHED'");
+  });
+
+  it('admits the store only after the same preset covers #9163 and keeps 11 rows at stock 1', async () => {
+    const { stores } = await eligibleWith(validPreset);
+
+    expect(stores).toHaveLength(1);
+    expect(stores[0]?.presetSnapshot).toMatchObject({
+      sharedAttributes: [{ attributeId: 9163, values: [{ dictionaryValueId: 22880 }] }],
+      sizes: Array.from({ length: 11 }, (_, index) => ({ value: String(36 + index), stock: 1 }))
+    });
+    expect(stores[0]?.noBrandDictionaryRequirement).toEqual({
+      descriptionCategoryId: 17001,
+      typeId: 97001,
+      attributeId: 31,
+      dictionaryId: 28732849,
+      categoryVersionId: '66666666-6666-4666-8666-666666666666'
+    });
+  });
+});
+
 describe('OZON exact store readback credential contract', () => {
   const storeId = '11111111-1111-4111-8111-111111111111';
   const credentialId = '22222222-2222-4222-8222-222222222222';
@@ -251,6 +378,7 @@ describe('OZON exact store readback credential contract', () => {
 
 describe('OZON 0000136 variant color repair intent contract', () => {
   const publicationId = '11111111-1111-4111-8111-111111111111';
+  const preparationJobId = '55555555-5555-4555-8555-555555555555';
   const jobId = '22222222-2222-4222-8222-222222222222';
   const storeId = '33333333-3333-4333-8333-333333333333';
   const credentialId = '44444444-4444-4444-8444-444444444444';
@@ -270,6 +398,7 @@ describe('OZON 0000136 variant color repair intent contract', () => {
   };
   const lockedRow = {
     id: publicationId,
+    preparation_job_id: preparationJobId,
     publication_row_version: 7,
     status: 'SUCCEEDED',
     store_id: storeId,
@@ -296,6 +425,9 @@ describe('OZON 0000136 variant color repair intent contract', () => {
     const client = {
       query: vi.fn(async (sql: string, values?: unknown[]) => {
         calls.push({ sql, values });
+        if (sql.includes('FROM ozon_store_publications WHERE id=$1')) {
+          return { rows: [{ id: publicationId, preparation_job_id: preparationJobId }], rowCount: 1 };
+        }
         if (sql.includes('FROM ozon_store_publications p')) return { rows: [lockedRow], rowCount: 1 };
         if (sql.includes('FROM ozon_gateway_requests WHERE request_ref')) return { rows: [], rowCount: 0 };
         if (sql.includes("delivery_state='UNKNOWN'")) return { rows: [{ exists: false }], rowCount: 1 };
@@ -310,6 +442,13 @@ describe('OZON 0000136 variant color repair intent contract', () => {
     const result = await repository.beginVariantColorRepairIntent(input);
 
     expect(result).toMatchObject({ requestRef, leaseToken: expect.any(String) });
+    const sharedBoundaryIndex = calls.findIndex(({ sql, values }) => sql.includes('pg_advisory_xact_lock(hashtext($1))')
+      && values?.[0] === ozonPreparationGatewayBoundaryLockKey(preparationJobId));
+    const variantBoundaryIndex = calls.findIndex(({ sql }) => sql.includes('merchroute-ozon-variant-color-repair'));
+    const lockedPublicationIndex = calls.findIndex(({ sql }) => sql.includes('FOR UPDATE OF p,j,s,c'));
+    expect(sharedBoundaryIndex).toBeGreaterThan(-1);
+    expect(variantBoundaryIndex).toBeGreaterThan(sharedBoundaryIndex);
+    expect(lockedPublicationIndex).toBeGreaterThan(variantBoundaryIndex);
     const slotIndex = calls.findIndex(({ sql }) => sql.includes('INSERT INTO ozon_publish_slots'));
     const ledgerIndex = calls.findIndex(({ sql }) => sql.includes('INSERT INTO ozon_gateway_requests'));
     const eventIndex = calls.findIndex(({ sql }) => sql.includes('OZON_VARIANT_COLOR_REPAIR_INTENT'));
@@ -332,6 +471,9 @@ describe('OZON 0000136 variant color repair intent contract', () => {
     const client = {
       query: vi.fn(async (sql: string) => {
         calls.push(sql);
+        if (sql.includes('FROM ozon_store_publications WHERE id=$1')) {
+          return { rows: [{ id: publicationId, preparation_job_id: preparationJobId }], rowCount: 1 };
+        }
         if (sql.includes('FROM ozon_store_publications p')) return { rows: [lockedRow], rowCount: 1 };
         if (sql.includes('FROM ozon_gateway_requests WHERE request_ref')) return { rows: [existing], rowCount: 1 };
         return { rows: [], rowCount: 1 };
@@ -633,6 +775,68 @@ describe('OZON provisional import product evidence', () => {
     await expect(repository.getProvisionalImportProductIds({ taskId, publicationId, storeId }))
       .resolves.toEqual([]);
   });
+
+  it('accepts imported product evidence when every reported issue is warning-only', async () => {
+    const { repository } = repositoryWithRows([evidence({ response_json: {
+      result: { items: [{
+        offer_id: '0000118-01',
+        product_id: 603,
+        status: 'imported',
+        errors: [
+          { code: 'vat_not_zero_banned_in_country', field: 'vat', level: 'warning', state: 'new' },
+          { code: 'image_quality', severity: 'content_warning' }
+        ]
+      }] }
+    } })]);
+
+    await expect(repository.getProvisionalImportProductIds({ taskId, publicationId, storeId }))
+      .resolves.toEqual(['603']);
+  });
+
+  it('rejects imported evidence containing a warning mixed with a non-warning error', async () => {
+    const { repository } = repositoryWithRows([evidence({ response_json: {
+      result: { items: [{
+        offer_id: '0000118-01',
+        product_id: 604,
+        status: 'imported',
+        errors: [
+          { code: 'description_warning', level: 'warning' },
+          { code: 'required_attribute', severity: 'error' }
+        ]
+      }] }
+    } })]);
+
+    await expect(repository.getProvisionalImportProductIds({ taskId, publicationId, storeId }))
+      .resolves.toEqual([]);
+  });
+
+  it('rejects conflicting level and severity classifications on the same issue', async () => {
+    const { repository } = repositoryWithRows([evidence({ response_json: {
+      result: { items: [{
+        offer_id: '0000118-01',
+        product_id: 606,
+        status: 'imported',
+        errors: [{ code: 'conflicting_issue', level: 'warning', severity: 'error' }]
+      }] }
+    } })]);
+
+    await expect(repository.getProvisionalImportProductIds({ taskId, publicationId, storeId }))
+      .resolves.toEqual([]);
+  });
+
+  it('rejects an error without an explicit warning level or severity', async () => {
+    const { repository } = repositoryWithRows([evidence({ response_json: {
+      result: { items: [{
+        offer_id: '0000118-01',
+        product_id: 605,
+        status: 'imported',
+        errors: [{ code: 'unclassified_issue' }]
+      }] }
+    } })]);
+
+    await expect(repository.getProvisionalImportProductIds({ taskId, publicationId, storeId }))
+      .resolves.toEqual([]);
+  });
 });
 
 describe('OZON media fan-out batch finalization', () => {
@@ -759,5 +963,171 @@ describe('OZON media fan-out batch finalization', () => {
     });
     expect(query).toHaveBeenCalledWith('ROLLBACK');
     expect(query).not.toHaveBeenCalledWith('COMMIT');
+  });
+});
+
+describe('OZON task gateway preparation serialization boundary', () => {
+  const preparationJobId = '10000000-0000-4000-8000-000000000101';
+  const jobId = '20000000-0000-4000-8000-000000000102';
+  const publicationId = '30000000-0000-4000-8000-000000000103';
+  const storeId = '40000000-0000-4000-8000-000000000104';
+  const credentialVersionId = '50000000-0000-4000-8000-000000000105';
+  const leaseToken = '60000000-0000-4000-8000-000000000106';
+  const identity = {
+    storeId,
+    storeAlias: 'serialized-store',
+    taskId: 'serialized-task-r2',
+    publicationId,
+    credentialVersionId,
+    credentialBindingMode: 'VAULT' as const,
+    storeConfigVersion: 4,
+    warehouseId: 'warehouse-1',
+    offerContractHash: `sha256:${'a'.repeat(64)}`,
+    materializationHash: `sha256:${'b'.repeat(64)}`,
+    offerIds: ['0000152-01'],
+    productIds: [],
+    storeEnabled: true,
+    leaseActive: true
+  };
+
+  function lockedIdentityRow(superseded = false) {
+    return {
+      job_id: jobId,
+      sku: '0000152',
+      job_state: 'READY',
+      task_kind: 'STORE_PUBLICATION',
+      job_task_id: identity.taskId,
+      job_publication_id: publicationId,
+      job_store_id: storeId,
+      job_credential_version_id: credentialVersionId,
+      job_credential_binding_mode: 'VAULT',
+      job_store_config_version: 4,
+      job_warehouse_id: 'warehouse-1',
+      job_offer_contract_hash: identity.offerContractHash,
+      job_materialization_hash: identity.materializationHash,
+      lease_owner: 'runtime-worker',
+      lease_token: leaseToken,
+      lease_expires_at: new Date(Date.now() + 60_000).toISOString(),
+      job_payload: superseded ? { replanReplacement: { replacementPreparationJobId: 'replacement-r2' } } : {},
+      publication_id: publicationId,
+      preparation_job_id: preparationJobId,
+      planned_job_id: jobId,
+      publication_status: 'QUEUED',
+      publication_task_id: identity.taskId,
+      publication_store_id: storeId,
+      publication_credential_version_id: credentialVersionId,
+      publication_credential_binding_mode: 'VAULT',
+      publication_store_config_version: 4,
+      publication_warehouse_id: 'warehouse-1',
+      publication_offer_contract_hash: identity.offerContractHash,
+      publication_materialization_hash: identity.materializationHash,
+      publication_result_json: superseded ? { replanReplacement: { replacementPreparationJobId: 'replacement-r2' } } : {},
+      store_enabled: true,
+      store_archived_at: null,
+      current_store_config_version: 4,
+      credential_status: 'ACTIVE'
+    };
+  }
+
+  function harness(options: { supersededAfterBoundary?: boolean; waitAtBoundary?: boolean } = {}) {
+    const calls: Array<{ sql: string; params?: unknown[] }> = [];
+    let releaseBoundary!: () => void;
+    let enterBoundary!: () => void;
+    const boundaryEntered = new Promise<void>((resolve) => { enterBoundary = resolve; });
+    const boundaryReleased = new Promise<void>((resolve) => { releaseBoundary = resolve; });
+    let crossedBoundary = false;
+    const query = vi.fn(async (sqlInput: unknown, params?: unknown[]) => {
+      const sql = String(sqlInput);
+      calls.push({ sql, params });
+      if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') return { rows: [], rowCount: null };
+      if (sql.includes('p.preparation_job_id') && sql.includes('ORDER BY j.id LIMIT 2')) {
+        return { rows: [{ job_id: jobId, sku: '0000152', publication_id: publicationId, preparation_job_id: preparationJobId }], rowCount: 1 };
+      }
+      if (sql.includes('pg_advisory_xact_lock')) {
+        enterBoundary();
+        if (options.waitAtBoundary) await boundaryReleased;
+        crossedBoundary = true;
+        return { rows: [], rowCount: 1 };
+      }
+      if (sql.includes('FOR UPDATE OF j,p,s')) {
+        return { rows: [lockedIdentityRow(Boolean(options.supersededAfterBoundary && crossedBoundary))], rowCount: 1 };
+      }
+      if (sql.includes('INSERT INTO ozon_gateway_requests')) return { rows: [{ request_ref: 'serialized-request' }], rowCount: 1 };
+      if (sql.includes('SELECT * FROM ozon_gateway_requests')) {
+        return { rows: [{ request_ref: 'serialized-request', request_hash: `sha256:${'c'.repeat(64)}` }], rowCount: 1 };
+      }
+      throw new Error(`unexpected gateway serialization query: ${sql}`);
+    });
+    const client = { query, release: vi.fn() };
+    const repository = new OzonStoreRepository();
+    (repository as any).pool = { connect: vi.fn(async () => client) };
+    return { repository, calls, query, client, boundaryEntered, releaseBoundary };
+  }
+
+  function begin(repository: OzonStoreRepository, operation: string, write = false) {
+    return repository.beginGatewayRequest({
+      requestRef: 'serialized-request',
+      requestHash: `sha256:${'c'.repeat(64)}`,
+      payloadHash: `sha256:${'d'.repeat(64)}`,
+      identity,
+      operation,
+      ...(write ? { leaseToken } : {})
+    });
+  }
+
+  it('takes the preparation advisory before child row locks and a write ledger insert', async () => {
+    const { repository, calls } = harness();
+
+    await expect(begin(repository, 'importProduct', true)).resolves.toEqual({});
+
+    const statements = calls.map((entry) => entry.sql);
+    const advisoryIndex = statements.findIndex((sql) => sql.includes('pg_advisory_xact_lock'));
+    const childLockIndex = statements.findIndex((sql) => sql.includes('FOR UPDATE OF j,p,s'));
+    const insertIndex = statements.findIndex((sql) => sql.includes('INSERT INTO ozon_gateway_requests'));
+    expect(advisoryIndex).toBeGreaterThan(0);
+    expect(childLockIndex).toBeGreaterThan(advisoryIndex);
+    expect(insertIndex).toBeGreaterThan(childLockIndex);
+    expect(calls[advisoryIndex]?.params).toEqual([
+      ozonPreparationGatewayBoundaryLockKey(preparationJobId)
+    ]);
+    expect(statements.at(-1)).toBe('COMMIT');
+  });
+
+  it.each([
+    ['task-bound read', 'infoList', false],
+    ['task-bound write', 'importProduct', true]
+  ] as const)('fails %s after recovery wins the advisory without inserting a phantom ledger', async (_label, operation, write) => {
+    const { repository, calls, boundaryEntered, releaseBoundary } = harness({
+      supersededAfterBoundary: true,
+      waitAtBoundary: true
+    });
+    const pending = begin(repository, operation, write);
+    await boundaryEntered;
+    // Deterministically model recovery committing its supersession while this
+    // begin waits on the shared PostgreSQL advisory lock.
+    releaseBoundary();
+
+    await expect(pending).rejects.toMatchObject({
+      code: 'TASK_LOCKED',
+      details: { mismatches: expect.arrayContaining(['jobSuperseded', 'publicationSuperseded']) }
+    });
+    expect(calls.some((entry) => entry.sql.includes('INSERT INTO ozon_gateway_requests'))).toBe(false);
+    expect(calls.at(-1)?.sql).toBe('ROLLBACK');
+  });
+
+  it('keeps a storeId-only read outside the preparation advisory boundary', async () => {
+    const storeOnlyIdentity = { ...identity, taskId: undefined, publicationId: undefined };
+    const { repository, calls } = harness();
+
+    await repository.beginGatewayRequest({
+      requestRef: 'serialized-request',
+      requestHash: `sha256:${'c'.repeat(64)}`,
+      payloadHash: `sha256:${'d'.repeat(64)}`,
+      identity: storeOnlyIdentity,
+      operation: 'attributeValuesSearch'
+    });
+
+    expect(calls.some((entry) => entry.sql.includes('pg_advisory_xact_lock'))).toBe(false);
+    expect(calls.some((entry) => entry.sql.includes('p.preparation_job_id'))).toBe(false);
   });
 });

@@ -180,6 +180,39 @@ async function mockWbApis(page: import('@playwright/test').Page) {
   await page.route(/\/api\/v1\/wb\/listings\?.*/, async (route) => route.fulfill({ json: { items: [baseListing], total: 1, page: 1, pageSize: 100 } }));
 }
 
+async function currentReasonTypography(reason: import('@playwright/test').Locator) {
+  return reason.evaluate((element) => {
+    const layout = getComputedStyle(element);
+    const text = getComputedStyle(element.querySelector('span')!);
+    return {
+      display: layout.display,
+      flexDirection: layout.flexDirection,
+      gap: layout.gap,
+      fontSize: text.fontSize,
+      whiteSpace: text.whiteSpace,
+      textOverflow: text.textOverflow
+    };
+  });
+}
+
+async function currentPresetTypography(preset: import('@playwright/test').Locator) {
+  return preset.evaluate((element) => {
+    const layout = getComputedStyle(element);
+    const name = getComputedStyle(element.querySelector('strong')!);
+    const detail = getComputedStyle(element.querySelector('.ant-typography')!);
+    return {
+      display: layout.display,
+      flexDirection: layout.flexDirection,
+      gap: layout.gap,
+      nameFontSize: name.fontSize,
+      nameFontWeight: name.fontWeight,
+      detailFontSize: detail.fontSize,
+      whiteSpace: detail.whiteSpace,
+      textOverflow: detail.textOverflow
+    };
+  });
+}
+
 test.describe('WB 可视化上品管理', () => {
   test('顶部标题块在桌面端压缩至历史导航高度，并在窄屏自然增高', async ({ page }) => {
     await mockWbApis(page);
@@ -316,6 +349,36 @@ test.describe('WB 可视化上品管理', () => {
     await confirm.getByRole('button', { name: '停止自动推进' }).click();
     await expect(page.getByText('SKU 0000021 的自动推进已取消', { exact: true })).toBeVisible();
     expect(cancelRequests).toBe(1);
+  });
+
+  test('自动上品当前说明和绑定预设复用手动资料的字体排版', async ({ page }) => {
+    await mockWbApis(page);
+    await page.unroute(/\/api\/v1\/wb\/automation\/jobs(?:\?.*)?$/);
+    await page.route(/\/api\/v1\/wb\/automation\/jobs(?:\?.*)?$/, async (route) => route.fulfill({ json: { items: [{
+      sku: '0000021', storeId: 'store-main', state: 'SUCCEEDED', runNo: 1, baseRevision: 0, targetRevision: 1,
+      operationMode: 'CREATE_ONLY', presetId: 'preset-main', presetName: '主店稳定上品预设', presetRowVersion: 3,
+      createdAt: '2026-07-19T02:00:00.000Z', updatedAt: '2026-07-19T02:03:00.000Z',
+      canRecheck: false, canCancel: false, hasListing: true
+    }], total: 1 } }));
+
+    await page.goto('/listing/wb');
+    const autoReason = page.locator('.wb-automation-table .wb-current-reason').first();
+    await expect(autoReason).toBeVisible();
+    await expect(autoReason.locator('span')).toHaveText('该店铺上品已完成');
+    await expect(autoReason.locator('small')).toHaveText('公共媒体已在成功上品后清理');
+    const autoTypography = await currentReasonTypography(autoReason);
+    const autoPresetTypography = await currentPresetTypography(page.locator('.wb-automation-table .wb-current-preset').first());
+
+    await page.getByRole('tab', { name: '手动上品资料' }).click();
+    const manualReason = page.locator('.wb-manual-table .wb-current-reason').first();
+    await expect(manualReason).toBeVisible();
+    const manualTypography = await currentReasonTypography(manualReason);
+    const manualPresetTypography = await currentPresetTypography(page.locator('.wb-manual-table .wb-current-preset').first());
+
+    expect(autoTypography).toEqual(manualTypography);
+    expect(autoTypography).toEqual({ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '11px', whiteSpace: 'nowrap', textOverflow: 'ellipsis' });
+    expect(autoPresetTypography).toEqual(manualPresetTypography);
+    expect(autoPresetTypography).toEqual({ display: 'flex', flexDirection: 'column', gap: '2px', nameFontSize: '14px', nameFontWeight: '700', detailFontSize: '9px', whiteSpace: 'nowrap', textOverflow: 'ellipsis' });
   });
 
   test('双轨导航保存当前视图，自动与手动搜索互不串用', async ({ page }) => {

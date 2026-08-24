@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 import {
   AppError,
   OZON_DEFAULT_STORE_ID,
+  OZON_NO_BRAND_DICTIONARY_VALUE_ID,
+  OZON_NO_BRAND_VALUE_RU,
   ozonGatewayLegacyReceiptSchema,
   ozonGatewayRequestSchema,
   type OzonGatewayResponse
@@ -43,6 +45,29 @@ export type OzonStoreOfferAbsenceProof = {
     errorCode?: '5';
   }>;
   evidenceHash: string;
+};
+
+export type OzonExactNoBrandDictionaryInput = {
+  storeId: string;
+  expectedStoreConfigVersion: number;
+  expectedCredentialVersionId: string;
+  categoryVersionId: string;
+  presetRowVersion: number;
+  descriptionCategoryId: number;
+  typeId: number;
+  attributeId: number;
+  dictionaryId: number;
+};
+
+export type OzonExactNoBrandDictionaryProof = {
+  storeId: string;
+  categoryVersionId: string;
+  presetRowVersion: number;
+  attributeId: number;
+  dictionaryId: number;
+  dictionaryValueId: typeof OZON_NO_BRAND_DICTIONARY_VALUE_ID;
+  value: typeof OZON_NO_BRAND_VALUE_RU;
+  requestRef: string;
 };
 
 const OZON_API = 'https://api-seller.ozon.ru';
@@ -123,7 +148,8 @@ export class OzonStoreGatewayService {
       requestHash,
       payloadHash,
       identity,
-      operation: parsed.data.operation
+      operation: parsed.data.operation,
+      ...(requestedDefinition.write ? { leaseToken: parsed.data.leaseToken } : {})
     });
     if (ledger.existing && !gatewayLedgerMayRetry(ledger.existing)) {
       return responseFromLedger(ledger.existing, parsed.data.operation, parsed.data.requestRef);
@@ -287,6 +313,86 @@ export class OzonStoreGatewayService {
   }
 
   /**
+   * Resolves MerchRoute's system-owned no-brand value against the exact active
+   * store credential before any automatic task is admitted. The gateway input
+   * is deliberately storeId-only: a task/publication identity and lease token
+   * do not exist yet and are forbidden on this read branch.
+   */
+  async proveExactNoBrandDictionaryValue(
+    input: OzonExactNoBrandDictionaryInput
+  ): Promise<OzonExactNoBrandDictionaryProof> {
+    const normalized = normalizeExactNoBrandDictionaryInput(input);
+    const exactIdentity = {
+      storeId: normalized.storeId,
+      expectedStoreConfigVersion: normalized.expectedStoreConfigVersion,
+      expectedCredentialVersionId: normalized.expectedCredentialVersionId
+    };
+    const identity = await this.stores.getExactStoreReadbackIdentity(exactIdentity);
+    if (!identity.credential || identity.credentialVersionId !== normalized.expectedCredentialVersionId) {
+      throw noBrandDictionaryInvalid('OZON 无品牌字典只读验证未取得精确冻结凭据', normalized);
+    }
+    let credential: { clientId: string; apiKey: string };
+    try {
+      credential = this.storeService.decryptGatewayCredential(
+        identity.credential,
+        normalized.storeId,
+        normalized.expectedCredentialVersionId
+      );
+    } catch (error) {
+      throw noBrandDictionaryInvalid('OZON 无品牌字典只读验证无法解密冻结凭据', normalized, {
+        causeCode: error instanceof AppError ? error.code : undefined
+      });
+    }
+    const requestRef = `ozon-no-brand:${sha256({
+      ...normalized,
+      expectedDictionaryValueId: OZON_NO_BRAND_DICTIONARY_VALUE_ID,
+      expectedValue: OZON_NO_BRAND_VALUE_RU
+    }).slice('sha256:'.length)}`;
+    const result = await executeExactNoBrandDictionaryRead({
+      credential,
+      input: normalized
+    });
+    if (!Array.isArray(result.result)
+      || result.result.some((entry) => !entry || typeof entry !== 'object' || Array.isArray(entry))) {
+      throw noBrandDictionaryInvalid('OZON 无品牌字典响应结构无效，禁止创建自动上品任务', normalized, {
+        requestRef,
+        responseShape: 'gateway.result.result must be an object array'
+      });
+    }
+    const exactMatches = result.result.map(asRecord).filter((entry) => (
+      normalizeDictionaryText(entry.value) === normalizeDictionaryText(OZON_NO_BRAND_VALUE_RU)
+    ));
+    if (exactMatches.length !== 1) {
+      throw noBrandDictionaryInvalid('OZON 无品牌字典值缺失或不唯一，禁止创建自动上品任务', normalized, {
+        requestRef,
+        exactMatchCount: exactMatches.length,
+        resultCount: result.result.length
+      });
+    }
+    const dictionaryValueId = Number(exactMatches[0]!.id);
+    if (!Number.isSafeInteger(dictionaryValueId)
+      || dictionaryValueId !== OZON_NO_BRAND_DICTIONARY_VALUE_ID) {
+      throw noBrandDictionaryInvalid('OZON 无品牌字典值 ID 与系统合同不一致，禁止创建自动上品任务', normalized, {
+        requestRef,
+        observedDictionaryValueId: Number.isFinite(dictionaryValueId) ? dictionaryValueId : null,
+        expectedDictionaryValueId: OZON_NO_BRAND_DICTIONARY_VALUE_ID
+      });
+    }
+    // Close the store/config/credential TOCTOU window after the remote read.
+    await this.stores.getExactStoreReadbackIdentity(exactIdentity);
+    return {
+      storeId: normalized.storeId,
+      categoryVersionId: normalized.categoryVersionId,
+      presetRowVersion: normalized.presetRowVersion,
+      attributeId: normalized.attributeId,
+      dictionaryId: normalized.dictionaryId,
+      dictionaryValueId: OZON_NO_BRAND_DICTIONARY_VALUE_ID,
+      value: OZON_NO_BRAND_VALUE_RU,
+      requestRef
+    };
+  }
+
+  /**
    * Proves that an exact set of Offer IDs is absent from one Seller account.
    * This is deliberately outside the gateway ledger: it creates no publication,
    * job, lease or write intent and only calls two allow-listed read endpoints.
@@ -403,6 +509,61 @@ export class OzonStoreGatewayService {
   }
 }
 
+function normalizeExactNoBrandDictionaryInput(
+  input: OzonExactNoBrandDictionaryInput
+): OzonExactNoBrandDictionaryInput {
+  const normalized = {
+    storeId: String(input?.storeId || '').trim(),
+    expectedStoreConfigVersion: Number(input?.expectedStoreConfigVersion),
+    expectedCredentialVersionId: String(input?.expectedCredentialVersionId || '').trim(),
+    categoryVersionId: String(input?.categoryVersionId || '').trim(),
+    presetRowVersion: Number(input?.presetRowVersion),
+    descriptionCategoryId: Number(input?.descriptionCategoryId),
+    typeId: Number(input?.typeId),
+    attributeId: Number(input?.attributeId),
+    dictionaryId: Number(input?.dictionaryId)
+  };
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  if (!uuid.test(normalized.storeId)
+    || !uuid.test(normalized.expectedCredentialVersionId)
+    || !uuid.test(normalized.categoryVersionId)
+    || !Number.isSafeInteger(normalized.expectedStoreConfigVersion) || normalized.expectedStoreConfigVersion < 1
+    || !Number.isSafeInteger(normalized.presetRowVersion) || normalized.presetRowVersion < 1
+    || !Number.isSafeInteger(normalized.descriptionCategoryId) || normalized.descriptionCategoryId < 1
+    || !Number.isSafeInteger(normalized.typeId) || normalized.typeId < 1
+    || ![31, 85].includes(normalized.attributeId)
+    || !Number.isSafeInteger(normalized.dictionaryId) || normalized.dictionaryId < 1) {
+    throw noBrandDictionaryInvalid('OZON 无品牌字典只读验证输入合同无效', normalized);
+  }
+  return normalized;
+}
+
+function normalizeDictionaryText(value: unknown): string {
+  return String(value || '').normalize('NFKC').trim().replace(/\s+/gu, ' ').toLocaleLowerCase('ru-RU');
+}
+
+function noBrandDictionaryInvalid(
+  message: string,
+  input: Pick<OzonExactNoBrandDictionaryInput,
+    'storeId' | 'categoryVersionId' | 'presetRowVersion' | 'descriptionCategoryId' | 'typeId' | 'attributeId' | 'dictionaryId'>,
+  details: JsonRecord = {}
+): AppError {
+  return new AppError('CONFIG_INVALID', message, {
+    storeId: input.storeId,
+    categoryVersionId: input.categoryVersionId,
+    presetRowVersion: input.presetRowVersion,
+    descriptionCategoryId: input.descriptionCategoryId,
+    typeId: input.typeId,
+    attributeId: input.attributeId,
+    dictionaryId: input.dictionaryId,
+    attributeNameZh: input.attributeId === 31 ? '服装和鞋类品牌' : '品牌',
+    attributeNameRu: input.attributeId === 31 ? 'Бренд одежды и обуви' : 'Бренд',
+    expectedValue: OZON_NO_BRAND_VALUE_RU,
+    expectedDictionaryValueId: OZON_NO_BRAND_DICTIONARY_VALUE_ID,
+    ...details
+  }, 409);
+}
+
 function normalizeStoreOfferAbsenceInput(input: OzonStoreOfferAbsenceInput): OzonStoreOfferAbsenceInput {
   const storeId = String(input?.storeId || '').trim();
   const expectedCredentialVersionId = String(input?.expectedCredentialVersionId || '').trim();
@@ -433,6 +594,56 @@ function normalizeStoreOfferAbsenceInput(input: OzonStoreOfferAbsenceInput): Ozo
     expectedCredentialVersionId,
     offerIds: [...offerIds].sort()
   };
+}
+
+async function executeExactNoBrandDictionaryRead(input: {
+  input: OzonExactNoBrandDictionaryInput;
+  credential: { clientId: string; apiKey: string };
+}): Promise<JsonRecord> {
+  const definition = OPERATIONS.attributeValuesSearch;
+  let response: Response;
+  try {
+    response = await fetch(`${OZON_API}${definition.endpoint}`, {
+      method: 'POST',
+      headers: {
+        accept: 'application/json',
+        'content-type': 'application/json',
+        'Client-Id': input.credential.clientId,
+        'Api-Key': input.credential.apiKey
+      },
+      body: JSON.stringify({
+        description_category_id: input.input.descriptionCategoryId,
+        type_id: input.input.typeId,
+        attribute_id: input.input.attributeId,
+        value: OZON_NO_BRAND_VALUE_RU,
+        limit: 100
+      }),
+      signal: AbortSignal.timeout(60_000)
+    });
+  } catch (error) {
+    throw noBrandDictionaryInvalid('OZON 无品牌字典只读验证未取得确定响应', input.input, {
+      endpoint: definition.endpoint,
+      outcome: 'UNKNOWN',
+      causeCode: String(asRecord(error).code || asRecord(error).name || '') || undefined,
+      causeMessage: safeErrorMessage(error)
+    });
+  }
+  if (response.status !== 200 || !response.ok) {
+    throw noBrandDictionaryInvalid('OZON 无品牌字典只读验证未返回严格 HTTP 200', input.input, {
+      endpoint: definition.endpoint,
+      outcome: 'UNKNOWN',
+      statusCode: response.status
+    });
+  }
+  try {
+    return await strictJsonResponse(response, 'attributeValuesSearch');
+  } catch (error) {
+    throw noBrandDictionaryInvalid('OZON 无品牌字典只读响应合同无效', input.input, {
+      endpoint: definition.endpoint,
+      outcome: 'UNKNOWN',
+      causeCode: error instanceof AppError ? error.code : undefined
+    });
+  }
 }
 
 async function executeStoreAbsenceRead(input: {

@@ -85,6 +85,7 @@ export const OZON_PREPARATION_FANOUT_PHASES = [
 export const OZON_PREPARATION_RECOVERY_MODES = [
   'NONE',
   'RECHECK',
+  'REPLAN_WITH_CURRENT_PRESET',
   'MANUAL_TAKEOVER',
   'READBACK_REQUIRED'
 ] as const;
@@ -119,6 +120,7 @@ export const OZON_FULFILLMENT_MODES = ['FBS', 'RFBS'] as const;
 export const OZON_VAT_RATES = ['0', '0.05', '0.07', '0.1', '0.2', '0.22'] as const;
 export const OZON_AUTO_PUBLISH_MODES = ['CREATE_ONLY', 'COMPATIBLE_UPSERT'] as const;
 export const OZON_VIDEO_PUBLISH_MODES = ['INTRO_AND_COVER', 'COVER_ONLY'] as const;
+export const OZON_SIZE_MODES = ['sized', 'sizeless'] as const;
 export const OZON_TITLE_TRANSLATION_WORKFLOW_ID = 'HDh0ZNLK2ps5qasR';
 export const OZON_TITLE_TRANSLATION_WEBHOOK_PATH = '/webhook/ozon/translation-title';
 export const OZON_SYSTEM_MEDIA_ATTRIBUTE_IDS = [21837, 21841, 21845, 22273] as const;
@@ -208,7 +210,7 @@ export const ozonCategoryAttributeSchema = z.object({
   nameRu: z.string().trim().max(256).optional(),
   nameZh: z.string().trim().max(256).optional(),
   description: z.string().trim().max(2_000).default(''),
-  type: z.enum(['String', 'Integer', 'Decimal', 'Boolean', 'Dictionary', 'Image', 'Unknown']).default('Unknown'),
+  type: z.enum(['String', 'Integer', 'Decimal', 'Boolean', 'Dictionary', 'Image', 'URL', 'Unknown']).default('Unknown'),
   required: z.boolean().default(false),
   dictionaryId: z.number().int().nonnegative().default(0),
   maxCount: z.number().int().positive().default(1),
@@ -218,9 +220,50 @@ export const ozonCategoryAttributeSchema = z.object({
   isCollection: z.boolean().default(false)
 });
 
+export const ozonCategorySizingSchema = z.object({
+  sizeMode: z.enum(OZON_SIZE_MODES).default('sizeless'),
+  sizeAttributeKey: z.string().trim().regex(/^\d+:\d+$/, 'OZON 尺码属性唯一键格式无效').nullish()
+}).superRefine((value, context) => {
+  if (value.sizeMode === 'sized' && !value.sizeAttributeKey) {
+    context.addIssue({ code: 'custom', path: ['sizeAttributeKey'], message: '有尺码类目必须选择 OZON 尺码属性' });
+  }
+  if (value.sizeMode === 'sizeless' && value.sizeAttributeKey) {
+    context.addIssue({ code: 'custom', path: ['sizeAttributeKey'], message: '无尺码类目不能保留尺码属性' });
+  }
+});
+
+const OZON_SIZE_NAME_ZH = /(?:尺码|鞋码|号型)/u;
+const OZON_SIZE_NAME_RU = /(?:^|\s)размер(?:\s|$)/iu;
+
+export function isOzonCategorySizeAttribute(attribute: Pick<z.infer<typeof ozonCategoryAttributeSchema>, 'id' | 'complexId' | 'name' | 'nameRu' | 'nameZh' | 'type'>): boolean {
+  if (attribute.complexId !== 0) return false;
+  if (attribute.type === 'Image' || attribute.type === 'URL' || isOzonSystemMediaAttributeId(attribute.id)) return false;
+  const nameZh = String(attribute.nameZh || '');
+  const nameRu = String(attribute.nameRu || attribute.name || '');
+  return OZON_SIZE_NAME_ZH.test(nameZh) || OZON_SIZE_NAME_RU.test(nameRu);
+}
+
+export function ozonCategorySizeAttributeCandidates<T extends Pick<z.infer<typeof ozonCategoryAttributeSchema>, 'id' | 'complexId' | 'name' | 'nameRu' | 'nameZh' | 'type' | 'required' | 'dictionaryId'>>(attributes: readonly T[]): T[] {
+  return attributes.filter(isOzonCategorySizeAttribute).sort((left, right) => {
+    const leftScore = (left.required ? 0 : 2) + (left.dictionaryId ? 0 : 1);
+    const rightScore = (right.required ? 0 : 2) + (right.dictionaryId ? 0 : 1);
+    return leftScore - rightScore;
+  });
+}
+
+export function inferOzonCategorySizing(attributes: readonly z.infer<typeof ozonCategoryAttributeSchema>[]): z.infer<typeof ozonCategorySizingSchema> {
+  const required = ozonCategorySizeAttributeCandidates(attributes).find((attribute) => attribute.required);
+  return required
+    ? { sizeMode: 'sized', sizeAttributeKey: `${required.id}:${required.complexId}` }
+    : { sizeMode: 'sizeless' };
+}
+
 export const ozonCategoryAttributeOrderInputSchema = z.object({
   rowVersion: z.number().int().positive(),
   defaultVideoUploadMode: z.enum(['ORIGINAL', 'COMPRESSED_COPY']).default('COMPRESSED_COPY'),
+  // Optional only for compatibility with an older served bundle. The server
+  // preserves the snapshot's current rule when this field is absent.
+  sizing: ozonCategorySizingSchema.optional(),
   attributeKeys: z.array(
     z.string().trim().regex(/^\d+:\d+$/, 'OZON 属性唯一键格式无效')
   ).max(1_000)
@@ -247,6 +290,7 @@ export const ozonCategoryTemplateInputSchema = z.object({
   media: z.object({
     defaultVideoUploadMode: z.enum(['ORIGINAL', 'COMPRESSED_COPY']).default('COMPRESSED_COPY')
   }).default({ defaultVideoUploadMode: 'COMPRESSED_COPY' }),
+  sizing: ozonCategorySizingSchema.default({ sizeMode: 'sizeless' }),
   sourceSnapshot: z.unknown().optional(),
   confirmedBy: z.string().trim().max(128).default('')
 });
@@ -350,7 +394,36 @@ const ozonPresetDefinitionShape = {
  * live in OZON store settings, so legacy store-level keys are rejected rather
  * than silently stripped from writes.
  */
-export const ozonPresetInputSchema = z.object(ozonPresetDefinitionShape).strict();
+const ozonPresetObjectSchema = z.object(ozonPresetDefinitionShape).strict();
+
+function validateOzonPresetSizes(value: z.infer<typeof ozonPresetObjectSchema>, context: z.RefinementCtx): void {
+  if (!value.sizeAttributeKey) {
+    if (value.sizes.length !== 1 || value.sizes[0]?.value) {
+      context.addIssue({ code: 'custom', path: ['sizes'], message: '无尺码预设只能保留一行空尺码库存' });
+    }
+    return;
+  }
+  const seen = new Set<string>();
+  const seenIds = new Set<string>();
+  value.sizes.forEach((size, index) => {
+    if (!size.value) {
+      context.addIssue({ code: 'custom', path: ['sizes', index, 'value'], message: '有尺码预设的每一行都必须填写尺码值' });
+      return;
+    }
+    if (seen.has(size.value)) {
+      context.addIssue({ code: 'custom', path: ['sizes', index, 'value'], message: `尺码值不能重复：${size.value}` });
+    }
+    seen.add(size.value);
+    if (size.sizeId) {
+      if (seenIds.has(size.sizeId)) {
+        context.addIssue({ code: 'custom', path: ['sizes', index, 'sizeId'], message: `尺码身份不能重复：${size.sizeId}` });
+      }
+      seenIds.add(size.sizeId);
+    }
+  });
+}
+
+export const ozonPresetInputSchema = ozonPresetObjectSchema.superRefine(validateOzonPresetSizes);
 
 /**
  * Read-only parser for immutable historical snapshots created before store
@@ -367,9 +440,136 @@ export const ozonLegacyPresetInputSchema = z.object({
   isDefault: z.boolean().default(false)
 }).passthrough();
 
-export const ozonPresetUpdateSchema = ozonPresetInputSchema.extend({
+export const ozonPresetUpdateSchema = z.object({
+  ...ozonPresetDefinitionShape,
   rowVersion: z.number().int().positive()
-});
+}).strict().superRefine(validateOzonPresetSizes);
+
+export const OZON_REQUIRED_ATTRIBUTE_SOURCES = ['PRESET', 'SIZE', 'COLOR', 'SYSTEM'] as const;
+export const OZON_NO_BRAND_DICTIONARY_VALUE_ID = 126745801;
+export const OZON_NO_BRAND_VALUE_RU = 'Нет бренда';
+
+export type OzonPresetRequiredAttributeCoverage = {
+  attributeId: number;
+  complexId: number;
+  attributeKey: string;
+  name: string;
+  nameRu: string;
+  nameZh: string;
+  required: true;
+  source: (typeof OZON_REQUIRED_ATTRIBUTE_SOURCES)[number];
+  covered: boolean;
+  reason?: string;
+  systemValue?: {
+    kind: 'NO_BRAND' | 'MAIN_SKU' | 'AUTO';
+    labelZh: string;
+    labelRu: string;
+  };
+};
+
+type OzonPresetRequiredAttributeInput = Pick<
+  z.infer<typeof ozonPresetInputSchema>,
+  'sharedAttributes' | 'variantAttributes' | 'sizeAttributeKey' | 'sizes'
+>;
+
+const OZON_PRODUCT_COLOR_ATTRIBUTE_ID = 10096;
+const OZON_SYSTEM_NO_BRAND_ATTRIBUTE_IDS = new Set([31, 85]);
+const OZON_SYSTEM_MAIN_SKU_ATTRIBUTE_ID = 8292;
+const OZON_SYSTEM_AUTO_ATTRIBUTE_IDS = new Set([
+  8229, 9024, 9048, 4180, 4191,
+  ...OZON_MANUAL_PURCHASE_ATTRIBUTE_IDS,
+  ...OZON_SYSTEM_MEDIA_ATTRIBUTE_IDS
+]);
+
+function ozonAttributeHasValue(attribute: z.infer<typeof ozonAttributeValueInputSchema> | undefined): boolean {
+  return Boolean(attribute?.values.some((entry) => (
+    Number(entry.dictionaryValueId || 0) > 0 || Boolean(String(entry.value || '').trim())
+  )));
+}
+
+/**
+ * Projects every required catalog attribute to its authoring/materialization
+ * source. Requiredness always comes from the published category snapshot; the
+ * small system ID set only describes values that MerchRoute itself owns.
+ */
+export function projectOzonPresetRequiredAttributeCoverage(
+  category: Pick<z.infer<typeof ozonCategoryTemplateInputSchema>, 'attributes' | 'sizing'>,
+  preset: OzonPresetRequiredAttributeInput
+): OzonPresetRequiredAttributeCoverage[] {
+  const explicit = new Map<string, z.infer<typeof ozonAttributeValueInputSchema>>(
+    [...preset.sharedAttributes, ...preset.variantAttributes]
+      .map((attribute) => [`${attribute.attributeId}:${attribute.complexId}`, attribute] as const)
+  );
+  const selectedSizeKey = String(preset.sizeAttributeKey || '').trim();
+  const configuredSizesReady = Boolean(selectedSizeKey)
+    && preset.sizes.length > 0
+    && preset.sizes.every((size) => Boolean(String(size.value || '').trim()));
+
+  return category.attributes.filter((attribute) => attribute.required).map((attribute) => {
+    const attributeKey = `${attribute.id}:${attribute.complexId}`;
+    const identity = {
+      attributeId: attribute.id,
+      complexId: attribute.complexId,
+      attributeKey,
+      name: attribute.name,
+      nameRu: String(attribute.nameRu || attribute.name || ''),
+      nameZh: String(attribute.nameZh || ''),
+      required: true as const
+    };
+    if (attributeKey === category.sizing.sizeAttributeKey) {
+      const covered = configuredSizesReady && selectedSizeKey === attributeKey;
+      return {
+        ...identity,
+        source: 'SIZE' as const,
+        covered,
+        ...(!covered ? { reason: '请在“尺码与默认库存”中选择该必填尺码属性并填写尺码' } : {})
+      };
+    }
+    if (attribute.id === OZON_PRODUCT_COLOR_ATTRIBUTE_ID) {
+      return { ...identity, source: 'COLOR' as const, covered: true };
+    }
+    if (attribute.complexId === 0 && OZON_SYSTEM_NO_BRAND_ATTRIBUTE_IDS.has(attribute.id)) {
+      return {
+        ...identity,
+        source: 'SYSTEM' as const,
+        covered: true,
+        systemValue: { kind: 'NO_BRAND' as const, labelZh: '无品牌（系统自动生成）', labelRu: 'Нет бренда' }
+      };
+    }
+    if (attribute.complexId === 0 && attribute.id === OZON_SYSTEM_MAIN_SKU_ATTRIBUTE_ID) {
+      return {
+        ...identity,
+        source: 'SYSTEM' as const,
+        covered: true,
+        systemValue: { kind: 'MAIN_SKU' as const, labelZh: '主 SKU（系统自动生成）', labelRu: 'Основной SKU' }
+      };
+    }
+    if (OZON_SYSTEM_AUTO_ATTRIBUTE_IDS.has(attribute.id)) {
+      return {
+        ...identity,
+        source: 'SYSTEM' as const,
+        covered: true,
+        systemValue: { kind: 'AUTO' as const, labelZh: '系统自动生成', labelRu: 'Формируется системой' }
+      };
+    }
+    const covered = ozonAttributeHasValue(explicit.get(attributeKey));
+    return {
+      ...identity,
+      source: 'PRESET' as const,
+      covered,
+      ...(!covered ? {
+        reason: `必填目录属性 ${identity.nameZh || identity.nameRu || identity.name} / ${identity.nameRu || identity.name} · #${attribute.id} 必须在上品预设中填写`
+      } : {})
+    };
+  });
+}
+
+export function findUncoveredOzonPresetRequiredAttributes(
+  category: Pick<z.infer<typeof ozonCategoryTemplateInputSchema>, 'attributes' | 'sizing'>,
+  preset: OzonPresetRequiredAttributeInput
+): OzonPresetRequiredAttributeCoverage[] {
+  return projectOzonPresetRequiredAttributeCoverage(category, preset).filter((attribute) => !attribute.covered);
+}
 
 export const ozonGrossWeightResolutionSchema = z.object({
   source: z.enum(['PROCUREMENT', 'PRESET_FALLBACK']),
@@ -1051,6 +1251,7 @@ export type OzonCatalogStatusName = (typeof OZON_CATALOG_STATUSES)[number];
 export type OzonCatalogTrigger = (typeof OZON_CATALOG_TRIGGERS)[number];
 export type OzonCatalogDictionaryName = (typeof OZON_CATALOG_DICTIONARIES)[number];
 export type OzonCategoryAttribute = z.infer<typeof ozonCategoryAttributeSchema>;
+export type OzonCategorySizing = z.infer<typeof ozonCategorySizingSchema>;
 export type OzonAttributeValueInput = z.infer<typeof ozonAttributeValueInputSchema>;
 export type OzonCategoryAttributeOrderInput = z.infer<typeof ozonCategoryAttributeOrderInputSchema>;
 export type OzonCategoryTemplateInput = z.infer<typeof ozonCategoryTemplateInputSchema>;
@@ -1295,6 +1496,12 @@ export type OzonPreset = OzonPresetInput & {
   rowVersion: number;
   createdAt: string;
   updatedAt: string;
+  /**
+   * API-only projection from the currently published category snapshot. It is
+   * deliberately not part of OzonPresetInput, so clients can never persist a
+   * stale requiredness/source decision back into the preset definition.
+   */
+  requiredAttributeCoverage?: OzonPresetRequiredAttributeCoverage[];
 };
 
 export type OzonAutoPresetBinding = {

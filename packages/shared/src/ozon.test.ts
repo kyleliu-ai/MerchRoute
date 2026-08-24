@@ -13,7 +13,11 @@ import {
   hasOzonCjk,
   hasOzonInvalidPlatformCharacters,
   isOzonSystemMediaAttributeId,
+  inferOzonCategorySizing,
+  ozonCategoryAttributeSchema,
   ozonCategoryAttributeOrderInputSchema,
+  ozonCategorySizeAttributeCandidates,
+  ozonCategorySizingSchema,
   ozonCompatibleAppendInputSchema,
   ozonCompatibleAppendPlanSchema,
   ozonGrossWeightResolutionSchema,
@@ -35,6 +39,8 @@ import {
   ozonJobHasRemoteProgress,
   ozonProductUrl,
   canonicalOzonSharedMaterialJson,
+  findUncoveredOzonPresetRequiredAttributes,
+  projectOzonPresetRequiredAttributeCoverage,
   projectOzonSharedMaterialDraft,
   stableOzonOfferId
 } from './ozon.js';
@@ -329,6 +335,23 @@ describe('OZON shared contracts', () => {
     expect(ozonCategoryAttributeOrderInputSchema.safeParse({ rowVersion: 2, attributeKeys: ['invalid'] }).success).toBe(false);
   });
 
+  it('identifies only real top-level OZON size attributes and preserves URL attachment types', () => {
+    const attributes = [
+      { id: 4298, name: 'Российский размер', nameRu: 'Российский размер', nameZh: '俄罗斯尺码', type: 'String', required: true, dictionaryId: 361, complexId: 0 },
+      { id: 9533, name: 'Размер производителя', nameRu: 'Размер производителя', nameZh: '制造商尺码', type: 'String', required: false, dictionaryId: 0, complexId: 0 },
+      { id: 8789, name: 'Название файла PDF', nameRu: 'Название файла PDF', nameZh: 'PDF文件名称', type: 'String', required: false, dictionaryId: 0, complexId: 8788 },
+      { id: 8790, name: 'Документ PDF', nameRu: 'Документ PDF', nameZh: 'PDF 文件', type: 'URL', required: false, dictionaryId: 0, complexId: 8788 },
+      { id: 22273, name: 'Размер видео', nameRu: 'Размер видео', nameZh: '视频尺码', type: 'String', required: true, dictionaryId: 0, complexId: 0 }
+    ] as const;
+    expect(ozonCategorySizeAttributeCandidates(attributes).map((attribute) => attribute.id)).toEqual([4298, 9533]);
+    expect(inferOzonCategorySizing(attributes as any)).toEqual({ sizeMode: 'sized', sizeAttributeKey: '4298:0' });
+    expect(ozonCategoryAttributeSchema.parse({
+      id: 8790, name: 'Документ PDF', type: 'URL', complexId: 8788
+    }).type).toBe('URL');
+    expect(ozonCategorySizingSchema.safeParse({ sizeMode: 'sized' }).success).toBe(false);
+    expect(ozonCategorySizingSchema.safeParse({ sizeMode: 'sizeless', sizeAttributeKey: '4298:0' }).success).toBe(false);
+  });
+
   it('accepts FBS and rFBS drafts while enforcing immutable ASCII offer IDs', () => {
     const base = { rowVersion: 1, fulfillmentMode: 'FBS', offers: [offer] };
     expect(ozonListingDraftInputSchema.safeParse(base).success).toBe(true);
@@ -392,6 +415,17 @@ describe('OZON shared contracts', () => {
     }
     expect(ozonPresetInputSchema.safeParse({ ...input, shippingServiceCode: '' }).success).toBe(false);
     expect(ozonPresetInputSchema.safeParse({ ...input, sizeAttributeKey: '20:100', sizes: [{ value: 'dict:40', stock: 8 }] }).success).toBe(true);
+    expect(ozonPresetInputSchema.safeParse({ ...input, sizes: [{ value: '', stock: 1 }, { value: '', stock: 2 }] }).success).toBe(false);
+    expect(ozonPresetInputSchema.safeParse({ ...input, sizeAttributeKey: '4298:0', sizes: [{ value: 'dict:40', stock: 8 }, { value: 'dict:40', stock: 5 }] }).success).toBe(false);
+    const repeatedSizeId = randomUUID();
+    expect(ozonPresetInputSchema.safeParse({
+      ...input,
+      sizeAttributeKey: '4298:0',
+      sizes: [
+        { sizeId: repeatedSizeId, value: 'dict:40', stock: 8 },
+        { sizeId: repeatedSizeId, value: 'dict:41', stock: 5 }
+      ]
+    }).success).toBe(false);
   });
 
   it('accepts only shared material fields before a store publication is materialized', () => {
@@ -787,6 +821,56 @@ describe('OZON shared contracts', () => {
     expect(findMissingOzonRequiredAttributes(attributes, sharedAttributes, offers)).toEqual([
       { offerId: '0000010-WHITE-41', attributeIds: [20] }
     ]);
+  });
+
+  it('projects required preset attributes to PRESET, SIZE, COLOR and SYSTEM sources', () => {
+    const category = {
+      sizing: { sizeMode: 'sized' as const, sizeAttributeKey: '4298:0' },
+      attributes: [
+        { id: 31, complexId: 0, name: 'Бренд в одежде и обуви', nameRu: 'Бренд в одежде и обуви', nameZh: '服装和鞋类品牌', required: true },
+        { id: 9163, complexId: 0, name: 'Пол', nameRu: 'Пол', nameZh: '性别', required: true },
+        { id: 8292, complexId: 0, name: 'Объединить на одной карточке', nameRu: 'Объединить на одной карточке', nameZh: '合并至一张卡片', required: true },
+        { id: 4298, complexId: 0, name: 'Российский размер', nameRu: 'Российский размер', nameZh: '俄罗斯尺码', required: true },
+        { id: 10096, complexId: 0, name: 'Цвет товара', nameRu: 'Цвет товара', nameZh: '商品颜色', required: true },
+        { id: 9999, complexId: 0, name: '可选', required: false }
+      ] as any
+    };
+    const preset = {
+      sharedAttributes: [{ attributeId: 9163, complexId: 0, values: [{ dictionaryValueId: 22880 }] }],
+      variantAttributes: [],
+      sizeAttributeKey: '4298:0',
+      sizes: [{ value: 'dict:23539', stock: 1 }]
+    };
+
+    const coverage = projectOzonPresetRequiredAttributeCoverage(category, preset);
+    expect(coverage.map((attribute) => [attribute.attributeId, attribute.source, attribute.covered])).toEqual([
+      [31, 'SYSTEM', true],
+      [9163, 'PRESET', true],
+      [8292, 'SYSTEM', true],
+      [4298, 'SIZE', true],
+      [10096, 'COLOR', true]
+    ]);
+    expect(coverage.find((attribute) => attribute.attributeId === 31)?.systemValue).toMatchObject({
+      kind: 'NO_BRAND', labelRu: 'Нет бренда'
+    });
+    expect(coverage.find((attribute) => attribute.attributeId === 8292)?.systemValue?.kind).toBe('MAIN_SKU');
+  });
+
+  it('reports an uncovered required preset value with its bilingual name and id', () => {
+    const missing = findUncoveredOzonPresetRequiredAttributes({
+      sizing: { sizeMode: 'sizeless' },
+      attributes: [{ id: 9163, complexId: 0, name: 'Пол', nameRu: 'Пол', nameZh: '性别', required: true }] as any
+    }, {
+      sharedAttributes: [], variantAttributes: [], sizeAttributeKey: null, sizes: [{ value: '', stock: 1 }]
+    });
+    expect(missing).toMatchObject([{
+      attributeId: 9163,
+      source: 'PRESET',
+      covered: false,
+      nameRu: 'Пол',
+      nameZh: '性别'
+    }]);
+    expect(missing[0]?.reason).toContain('性别 / Пол · #9163');
   });
 
   it('reserves OZON video attributes for system-generated complex media payloads', () => {

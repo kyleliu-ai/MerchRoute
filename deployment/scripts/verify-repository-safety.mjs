@@ -34,7 +34,7 @@ for (const relative of candidates) {
 }
 
 const requirements = JSON.parse(await readFile(path.join(projectRoot, 'deployment', 'n8n', 'credential-requirements.json'), 'utf8'));
-if (requirements.requirements?.length !== 6 || requirements.bindings?.length !== 32) errors.push('凭据需求清单必须是 6 组逻辑凭据、32 处绑定');
+if (requirements.requirements?.length !== 6 || requirements.bindings?.length !== 34) errors.push('凭据需求清单必须是 6 组逻辑凭据、34 处绑定');
 const requirementText = JSON.stringify(requirements);
 if (/original(?:Credential)?(?:Id|Name)/i.test(requirementText)) errors.push('凭据需求清单包含原凭据标识');
 

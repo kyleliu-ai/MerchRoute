@@ -220,7 +220,8 @@ export async function buildApp(options: BuildAppOptions = {}) {
       storeRepository: ozonStoreRepository,
       storeService: ozonStores,
       storeGateway: {
-        proveStoreOfferAbsence: (input) => ozonStoreGateway.proveStoreOfferAbsence(input)
+        proveStoreOfferAbsence: (input) => ozonStoreGateway.proveStoreOfferAbsence(input),
+        proveExactNoBrandDictionaryValue: (input) => ozonStoreGateway.proveExactNoBrandDictionaryValue(input)
       }
     }
   );

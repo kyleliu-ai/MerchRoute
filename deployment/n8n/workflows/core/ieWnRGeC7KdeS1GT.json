@@ -5,8 +5,8 @@
   "nodes": [
     {
       "parameters": {
-        "content": "## 即梦4.5 图生图子工作流\n\n### 输入\n- image-1 至 image-5：每个任务必须统一使用本地图片路径，或统一使用 SiliconFlow HTTP(S) 图片 URL。\n- batchItems：批量任务数组；同一批次不能混用 URL 模式和本地路径模式。\n- prompt：图生图提示词（String）。\n- negativePrompt：负面提示词（String）。\n- model：默认 jimeng-4.5。\n- resolution：默认 2k。\n- ratio：默认 1:1。\n\n### 处理模式\n- URL 模式：跳过 Read Image 和 Base64 转换，直接把 URL 数组提交给即梦。\n- 旧本地路径模式：继续通过 5 个 Read Image 分支读取文件并生成 Base64 Data URL，保持旧调用兼容。\n- 即梦失败任务只重试一次；重试沿用该任务原来的 images。\n\n### 输出\n- 按原任务顺序返回即梦生成的图片 URL、成功状态、重试状态和任务元数据。",
-        "height": 432
+        "content": "## 即梦4.5 图生图子工作流（异步幂等、少图成功）\n\n### 输入\n- 支持单任务或 batchItems，单批最多 7 个任务。\n- image-1 至 image-5 必须统一使用 HTTP(S) URL，或统一使用本地图片路径。\n- prompt 必填；negativePrompt 可为空。\n\n### 执行与防重复\n- 通过 /v1/images/tasks/batch 一次提交，批内实际并发最多 5。\n- 每次尝试使用独立 300 秒墙钟预算；起点固定取代理 submittedAt，缺失时取 createdAt，再缺失才取提交前本地时间，轮询不会重新计时。\n- 每 10 秒查询原 taskId/historyId；状态查询异常、submission_unknown 和截止时仍未确认的任务返回 status_unconfirmed_no_retry，绝不因此创建新任务。\n- 期望每轮 4 张，但 1 张及以上即成功并返回全部有效去重 URL；少于 4 张不会重试。\n- 只有代理明确返回 failed 且 0 张的任务才使用 attempt-1 重试一次。\n- 所有结果解析都会排除本轮输入参考图 URL，防止把参考图当成生成图。\n\n### 输出\n- 按 originalIndex/taskIndex 返回原顺序。\n- 保留 success/ok/image_urls/urls/count/completionReason/retryAttempt/retryReason/raw 兼容字段。\n- 唯一重试仍为 0 张时返回失败 item，不抛弃其他成功任务。",
+        "height": 520
       },
       "type": "n8n-nodes-base.stickyNote",
       "position": [
@@ -172,7 +172,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const inputItems = $input.all();\nconst normalizedItems = $('Classify Image Input Mode').all();\nconst outputItems = [];\n\nconst passthroughKeys = [\n  'taskIndex', 'sceneIndex', 'sceneKey', 'sceneTitle', 'title', 'titleDescription',\n  'taskDir', 'promptFileName', 'promptFilePath', 'productDetailFileName',\n  'productDetailFilePath', 'rootOutputDir', 'productName', 'productDescription',\n  'productAppearance', 'targetPlatform', 'targetMarket', 'ratio', 'timestamp',\n  'workflowId', 'batchIndex', 'generationConcurrency', 'originalIndex', 'imageInputMode'\n];\n\nfunction text(value) {\n  return value === undefined || value === null ? '' : String(value);\n}\n\nfunction isHttpUrl(value) {\n  return /^https?:\\/\\//i.test(text(value).trim());\n}\n\nfor (let itemIndex = 0; itemIndex < inputItems.length; itemIndex++) {\n  const item = inputItems[itemIndex];\n  const binary = item.binary || {};\n  const source = normalizedItems[itemIndex]?.json || {};\n  const prompt = text(source.prompt).trim();\n  const negativePrompt = text(source.negativePrompt).trim();\n\n  if (!prompt) {\n    throw new Error(\n      'Prepare Jimeng Image Input: missing prompt for itemIndex=' + itemIndex +\n      ', taskIndex=' + text(source.taskIndex) +\n      ', sceneKey=' + text(source.sceneKey) +\n      ', originalIndex=' + text(source.originalIndex)\n    );\n  }\n\n  const images = [];\n  const images_base64 = [];\n  const image_meta = [];\n\n  if (source.imageInputMode === 'url') {\n    for (let i = 1; i <= 5; i++) {\n      const key = 'image-' + i;\n      const url = text(source[key]).trim();\n      if (!url) continue;\n      if (!isHttpUrl(url)) throw new Error('Invalid HTTP image URL in ' + key + ' for itemIndex=' + itemIndex);\n      images.push(url);\n      image_meta.push({ key: 'image_' + i, source: 'siliconflow-url', url });\n    }\n  } else {\n    for (let i = 1; i <= 5; i++) {\n      const key = 'image_' + i;\n      const bin = binary[key];\n      if (!bin) continue;\n\n      const mimeType = bin.mimeType || 'image/png';\n      let buffer;\n      try {\n        buffer = await this.helpers.getBinaryDataBuffer(itemIndex, key);\n      } catch (error) {\n        if (bin.data && typeof bin.data === 'string') {\n          const rawBase64 = bin.data.replace(/^data:[^;]+;base64,/, '');\n          buffer = Buffer.from(rawBase64, 'base64');\n        } else {\n          throw new Error('Cannot read binary field ' + key + ': ' + error.message);\n        }\n      }\n\n      const base64 = buffer.toString('base64');\n      images.push('data:' + mimeType + ';base64,' + base64);\n      images_base64.push(base64);\n      image_meta.push({\n        key,\n        source: 'local-base64',\n        mimeType,\n        fileName: bin.fileName || (key + '.' + (bin.fileExtension || 'png')),\n        fileExtension: bin.fileExtension || '',\n        fileSize: buffer.length,\n      });\n    }\n  }\n\n  if (!images.length) {\n    throw new Error(\n      'No images were prepared for itemIndex=' + itemIndex +\n      ', taskIndex=' + text(source.taskIndex) +\n      ', sceneKey=' + text(source.sceneKey) +\n      ', imageInputMode=' + text(source.imageInputMode)\n    );\n  }\n\n  const passthrough = {};\n  for (const key of passthroughKeys) {\n    if (source[key] !== undefined) passthrough[key] = source[key];\n  }\n\n  outputItems.push({\n    json: {\n      ...passthrough,\n      prompt,\n      negativePrompt,\n      model: source.model || 'jimeng-4.5',\n      resolution: source.resolution || '2k',\n      ratio: source.ratio || '1:1',\n      images,\n      images_base64,\n      image_count: images.length,\n      image_meta,\n    },\n    pairedItem: { item: itemIndex },\n  });\n}\n\nreturn outputItems;"
+        "jsCode": "const inputItems = $input.all();\nconst normalizedItems = $('Classify Image Input Mode').all();\nconst outputItems = [];\n\nconst passthroughKeys = [\n  'taskIndex', 'sceneIndex', 'sceneKey', 'sceneTitle', 'title', 'titleDescription',\n  'taskDir', 'promptFileName', 'promptFilePath', 'productDetailFileName',\n  'productDetailFilePath', 'rootOutputDir', 'productName', 'productDescription',\n  'productAppearance', 'targetPlatform', 'targetMarket', 'ratio', 'timestamp',\n  'workflowId', 'n8nExecutionId', 'sourceSubmissionId', 'viewImageMeta', 'sourceViewImages',\n  'batchIndex', 'generationConcurrency', 'originalIndex', 'imageInputMode'\n];\n\nfunction text(value) {\n  return value === undefined || value === null ? '' : String(value);\n}\n\nfunction isHttpUrl(value) {\n  return /^https?:\\/\\//i.test(text(value).trim());\n}\n\nfor (let itemIndex = 0; itemIndex < inputItems.length; itemIndex++) {\n  const item = inputItems[itemIndex];\n  const binary = item.binary || {};\n  const source = normalizedItems[itemIndex]?.json || {};\n  const prompt = text(source.prompt).trim();\n  const negativePrompt = text(source.negativePrompt).trim();\n\n  if (!prompt) {\n    throw new Error(\n      'Prepare Jimeng Image Input: missing prompt for itemIndex=' + itemIndex +\n      ', taskIndex=' + text(source.taskIndex) +\n      ', sceneKey=' + text(source.sceneKey) +\n      ', originalIndex=' + text(source.originalIndex)\n    );\n  }\n\n  const images = [];\n  const images_base64 = [];\n  const image_meta = [];\n\n  if (source.imageInputMode === 'url') {\n    for (let i = 1; i <= 5; i++) {\n      const key = 'image-' + i;\n      const url = text(source[key]).trim();\n      if (!url) continue;\n      if (!isHttpUrl(url)) throw new Error('Invalid HTTP image URL in ' + key + ' for itemIndex=' + itemIndex);\n      images.push(url);\n      image_meta.push({ key: 'image_' + i, source: 'siliconflow-url', url });\n    }\n  } else {\n    for (let i = 1; i <= 5; i++) {\n      const key = 'image_' + i;\n      const bin = binary[key];\n      if (!bin) continue;\n\n      const mimeType = bin.mimeType || 'image/png';\n      let buffer;\n      try {\n        buffer = await this.helpers.getBinaryDataBuffer(itemIndex, key);\n      } catch (error) {\n        if (bin.data && typeof bin.data === 'string') {\n          const rawBase64 = bin.data.replace(/^data:[^;]+;base64,/, '');\n          buffer = Buffer.from(rawBase64, 'base64');\n        } else {\n          throw new Error('Cannot read binary field ' + key + ': ' + error.message);\n        }\n      }\n\n      const base64 = buffer.toString('base64');\n      images.push('data:' + mimeType + ';base64,' + base64);\n      images_base64.push(base64);\n      image_meta.push({\n        key,\n        source: 'local-base64',\n        mimeType,\n        fileName: bin.fileName || (key + '.' + (bin.fileExtension || 'png')),\n        fileExtension: bin.fileExtension || '',\n        fileSize: buffer.length,\n      });\n    }\n  }\n\n  if (!images.length) {\n    throw new Error(\n      'No images were prepared for itemIndex=' + itemIndex +\n      ', taskIndex=' + text(source.taskIndex) +\n      ', sceneKey=' + text(source.sceneKey) +\n      ', imageInputMode=' + text(source.imageInputMode)\n    );\n  }\n\n  const passthrough = {};\n  for (const key of passthroughKeys) {\n    if (source[key] !== undefined) passthrough[key] = source[key];\n  }\n\n  outputItems.push({\n    json: {\n      ...passthrough,\n      prompt,\n      negativePrompt,\n      model: source.model || 'jimeng-4.5',\n      resolution: source.resolution || '2k',\n      ratio: source.ratio || '1:1',\n      images,\n      images_base64,\n      image_count: images.length,\n      image_meta,\n    },\n    pairedItem: { item: itemIndex },\n  });\n}\n\nreturn outputItems;"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -182,58 +182,6 @@
       ],
       "id": "f1e3390e-a4c3-4f0e-8f44-6eedb37c3556",
       "name": "Generate Base64 Image"
-    },
-    {
-      "parameters": {
-        "method": "POST",
-        "url": "http://localhost:8000/v1/images/compositions",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpBearerAuth",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "Content-Type",
-              "value": "application/json"
-            }
-          ]
-        },
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{\n  {\n    \"model\": $json.model || \"jimeng-4.5\",\n    \"prompt\": $json.prompt,\n    \"negativePrompt\": $json.negativePrompt || \"\",\n    \"images\": $json.images,\n    \"ratio\": $json.ratio || \"1:1\",\n    \"resolution\": $json.resolution || \"2k\",\n    \"sample_strength\": 0.5,\n    \"response_format\": \"url\"\n  }\n}}",
-        "options": {
-          "response": {
-            "response": {
-              "neverError": true,
-              "responseFormat": "json"
-            }
-          }
-        }
-      },
-      "id": "5e4cc2a8-5b57-4bd3-bb82-0b9a127f7fe4",
-      "name": "HTTP Request Jimeng4.5",
-      "type": "n8n-nodes-base.httpRequest",
-      "position": [
-        1440,
-        544
-      ],
-      "typeVersion": 4.3,
-      "alwaysOutputData": true,
-      "continueOnFail": true,
-      "notes": "即梦4.5调用"
-    },
-    {
-      "parameters": {
-        "jsCode": "const inputItems = $input.all();\nconst plan = $('Build Retry Plan').first().json || {};\nconst finalResults = Array.isArray(plan.finalResults) ? plan.finalResults.slice() : [];\nlet retrySourceItems = [];\ntry {\n  retrySourceItems = $('Expand Retry Items').all();\n} catch (error) {\n  retrySourceItems = [];\n}\n\nfunction extractUrls(body) {\n  const imageUrls = [];\n  const add = (value) => {\n    if (!value) return;\n    if (typeof value === 'string') {\n      if (!value.startsWith('data:image/')) imageUrls.push(value);\n    } else if (typeof value === 'object') {\n      if (value.url) add(value.url);\n      if (value.image_url) add(value.image_url);\n      if (value.imageUrl) add(value.imageUrl);\n      if (value.remoteUrl) add(value.remoteUrl);\n      if (value.b64_json) imageUrls.push('data:image/png;base64,' + value.b64_json);\n    }\n  };\n  const data = Array.isArray(body?.data) ? body.data : [];\n  for (const row of data) add(row);\n  if (Array.isArray(body?.urls)) for (const row of body.urls) add(row);\n  if (Array.isArray(body?.images)) for (const row of body.images) add(row);\n  return [...new Set(imageUrls.filter(Boolean))];\n}\n\nfunction sanitizeRaw(body) {\n  if (!body || typeof body !== 'object') return body || {};\n  const raw = { ...body };\n  if (Array.isArray(raw.images)) raw.images = '[omitted ' + raw.images.length + ' input image(s)]';\n  if (Array.isArray(raw.images_base64)) raw.images_base64 = '[omitted ' + raw.images_base64.length + ' raw Base64 image(s)]';\n  return raw;\n}\n\nconst metaKeys = [\n  'taskIndex', 'sceneIndex', 'sceneKey', 'sceneTitle', 'title', 'titleDescription',\n  'taskDir', 'promptFileName', 'promptFilePath', 'productDetailFileName',\n  'productDetailFilePath', 'rootOutputDir', 'productName', 'productDescription',\n  'productAppearance', 'targetPlatform', 'targetMarket', 'ratio', 'timestamp',\n  'workflowId', 'batchIndex', 'generationConcurrency', 'originalIndex'\n];\n\nfunction buildMeta(source) {\n  const meta = {};\n  for (const key of metaKeys) {\n    if (source[key] !== undefined) meta[key] = source[key];\n  }\n  return meta;\n}\n\nfunction readMessage(body) {\n  return String(\n    body?.message ||\n    body?.errorMessage ||\n    body?.error?.message ||\n    body?.error?.errorMessage ||\n    body?.cause?.message ||\n    ''\n  );\n}\n\nfunction buildRetryResult(body, retrySource) {\n  const urls = extractUrls(body);\n  const hasBusinessError = body?.code !== undefined && body.code !== 0;\n  const success = !hasBusinessError && urls.length > 0;\n  const previous = retrySource.firstRaw || {};\n  const message = readMessage(body);\n  return {\n    ...buildMeta(retrySource),\n    originalIndex: retrySource.originalIndex,\n    success,\n    ok: success,\n    code: body?.code ?? (success ? 0 : previous.code ?? -1),\n    message: message || (success ? '' : readMessage(previous) || 'Retry finished without image URLs'),\n    count: urls.length,\n    image_urls: urls,\n    urls,\n    retryAttempt: 1,\n    retryReason: retrySource.retryReason || '',\n    firstRaw: previous,\n    raw: sanitizeRaw(body),\n  };\n}\n\nfor (let i = 0; i < inputItems.length; i++) {\n  const retrySource = retrySourceItems[i]?.json;\n  if (!retrySource || retrySource.originalIndex === undefined) continue;\n  const retryBody = inputItems[i]?.json || {};\n  finalResults[retrySource.originalIndex] = buildRetryResult(retryBody, retrySource);\n}\n\nreturn finalResults\n  .map((result, index) => ({ result, index }))\n  .filter((row) => row.result)\n  .sort((a, b) => a.index - b.index)\n  .map((row) => ({\n    json: row.result,\n    pairedItem: { item: row.index },\n  }));"
-      },
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        2560,
-        544
-      ],
-      "id": "d30f9cba-9151-4e8c-b056-bb4de7519648",
-      "name": "Return Image URLs"
     },
     {
       "parameters": {
@@ -247,105 +195,6 @@
         96,
         544
       ]
-    },
-    {
-      "parameters": {
-        "jsCode": "const items = $input.all();\nconst sourceItems = $('Generate Base64 Image').all();\n\nfunction extractUrls(body) {\n  const imageUrls = [];\n  const add = (value) => {\n    if (!value) return;\n    if (typeof value === 'string') {\n      if (!value.startsWith('data:image/')) imageUrls.push(value);\n    } else if (typeof value === 'object') {\n      if (value.url) add(value.url);\n      if (value.image_url) add(value.image_url);\n      if (value.imageUrl) add(value.imageUrl);\n      if (value.remoteUrl) add(value.remoteUrl);\n      if (value.b64_json) imageUrls.push('data:image/png;base64,' + value.b64_json);\n    }\n  };\n  const data = Array.isArray(body?.data) ? body.data : [];\n  for (const row of data) add(row);\n  if (Array.isArray(body?.urls)) for (const row of body.urls) add(row);\n  if (Array.isArray(body?.images)) for (const row of body.images) add(row);\n  return [...new Set(imageUrls.filter(Boolean))];\n}\n\nfunction sanitizeRaw(body) {\n  if (!body || typeof body !== 'object') return body || {};\n  const raw = { ...body };\n  if (Array.isArray(raw.images)) raw.images = '[omitted ' + raw.images.length + ' input image(s)]';\n  if (Array.isArray(raw.images_base64)) raw.images_base64 = '[omitted ' + raw.images_base64.length + ' raw Base64 image(s)]';\n  return raw;\n}\n\nconst metaKeys = [\n  'taskIndex', 'sceneIndex', 'sceneKey', 'sceneTitle', 'title', 'titleDescription',\n  'taskDir', 'promptFileName', 'promptFilePath', 'productDetailFileName',\n  'productDetailFilePath', 'rootOutputDir', 'productName', 'productDescription',\n  'productAppearance', 'targetPlatform', 'targetMarket', 'ratio', 'timestamp',\n  'workflowId', 'batchIndex', 'generationConcurrency', 'originalIndex'\n];\nconst finalResults = [];\nconst retryItems = [];\n\nfunction buildMeta(source) {\n  const meta = {};\n  for (const key of metaKeys) {\n    if (source[key] !== undefined) meta[key] = source[key];\n  }\n  return meta;\n}\n\nfunction readMessage(body) {\n  return String(\n    body?.message ||\n    body?.errorMessage ||\n    body?.error?.message ||\n    body?.error?.errorMessage ||\n    body?.cause?.message ||\n    ''\n  );\n}\n\nfunction buildResult(body, source, fallbackIndex, retryInfo) {\n  const urls = extractUrls(body);\n  const originalIndex = Number.isFinite(Number(source.originalIndex)) ? Number(source.originalIndex) : fallbackIndex;\n  const hasBusinessError = body?.code !== undefined && body.code !== 0;\n  const success = !hasBusinessError && urls.length > 0;\n  const message = readMessage(body);\n  return {\n    ...buildMeta(source),\n    originalIndex,\n    success,\n    ok: success,\n    code: body?.code ?? (success ? 0 : -1),\n    message: message || (success ? '' : 'Generation finished without image URLs'),\n    count: urls.length,\n    image_urls: urls,\n    urls,\n    retryAttempt: retryInfo?.retryAttempt || 0,\n    retryReason: retryInfo?.retryReason || '',\n    raw: sanitizeRaw(body),\n  };\n}\n\nfunction getRetryReason(body, urls) {\n  const message = readMessage(body);\n  if (body?.code !== undefined && body.code !== 0) return 'business_error_code_' + body.code;\n  if (body?.data === null) return 'empty_data';\n  if (/upload|上传|bad gateway|gateway|timeout|timed out|ECONN|fetch failed|socket|network|ETIMEDOUT|ECONNRESET|ECONNREFUSED/i.test(message)) return 'request_failed';\n  if (!urls.length) return 'empty_image_urls';\n  return '';\n}\n\nfor (let index = 0; index < items.length; index++) {\n  const body = items[index]?.json || {};\n  const source = sourceItems[index]?.json || {};\n  const originalIndex = Number.isFinite(Number(source.originalIndex)) ? Number(source.originalIndex) : index;\n  const urls = extractUrls(body);\n  const reason = getRetryReason(body, urls);\n\n  if (reason) {\n    finalResults[originalIndex] = buildResult(body, source, originalIndex, { retryAttempt: 0, retryReason: reason });\n    retryItems.push({\n      ...source,\n      originalIndex,\n      retryAttempt: 1,\n      retryReason: reason,\n      firstRaw: sanitizeRaw(body),\n    });\n  } else {\n    finalResults[originalIndex] = buildResult(body, source, originalIndex);\n  }\n}\n\nreturn [{\n  json: {\n    totalCount: items.length,\n    retryCount: retryItems.length,\n    hasRetryItems: retryItems.length > 0,\n    finalResults,\n    retryItems,\n  },\n}];"
-      },
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        1664,
-        544
-      ],
-      "id": "3f300d7e-d77d-4f07-8df1-aa37b06ac0ea",
-      "name": "Build Retry Plan"
-    },
-    {
-      "parameters": {
-        "conditions": {
-          "options": {
-            "caseSensitive": true,
-            "leftValue": "",
-            "typeValidation": "strict",
-            "version": 2
-          },
-          "conditions": [
-            {
-              "id": "retry-items-present",
-              "leftValue": "={{ $json.hasRetryItems }}",
-              "rightValue": true,
-              "operator": {
-                "type": "boolean",
-                "operation": "true",
-                "singleValue": true
-              }
-            }
-          ],
-          "combinator": "and"
-        },
-        "options": {}
-      },
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 2.2,
-      "position": [
-        1888,
-        544
-      ],
-      "id": "883ef27e-9841-479a-a252-bcbab1d5d01b",
-      "name": "Has Retry Items"
-    },
-    {
-      "parameters": {
-        "jsCode": "const root = $input.first()?.json || {};\nconst retryItems = Array.isArray(root.retryItems) ? root.retryItems : [];\nreturn retryItems.map((item, index) => ({\n  json: item,\n  pairedItem: { item: index },\n}));"
-      },
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        2112,
-        480
-      ],
-      "id": "9915ea0e-d28f-4d72-8573-ce7bc2bee2fa",
-      "name": "Expand Retry Items"
-    },
-    {
-      "parameters": {
-        "method": "POST",
-        "url": "http://localhost:8000/v1/images/compositions",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpBearerAuth",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "Content-Type",
-              "value": "application/json"
-            }
-          ]
-        },
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{\n  {\n    \"model\": $json.model || \"jimeng-4.5\",\n    \"prompt\": $json.prompt,\n    \"negativePrompt\": $json.negativePrompt || \"\",\n    \"images\": $json.images,\n    \"ratio\": $json.ratio || \"1:1\",\n    \"resolution\": $json.resolution || \"2k\",\n    \"sample_strength\": 0.5,\n    \"response_format\": \"url\"\n  }\n}}",
-        "options": {
-          "response": {
-            "response": {
-              "neverError": true,
-              "responseFormat": "json"
-            }
-          }
-        }
-      },
-      "id": "ecb49914-616f-4178-982c-3fa76d98cdba",
-      "name": "HTTP Request Jimeng4.5 Retry Once",
-      "type": "n8n-nodes-base.httpRequest",
-      "position": [
-        2336,
-        480
-      ],
-      "typeVersion": 4.3,
-      "alwaysOutputData": true,
-      "continueOnFail": true,
-      "notes": "即梦4.5调用"
     },
     {
       "parameters": {
@@ -391,6 +240,395 @@
       "position": [
         544,
         544
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all().map((item) => item.json || {});\nconst completionPolicy = Object.freeze({ targetImageCount: 4, minimumSuccessImageCount: 1, attemptTimeoutMs: 300000, partialTerminalGraceMs: 30000 });\nconst pollIntervalSeconds = 10;\nconst attemptPreparedAtMs = Date.now();\n\nif (items.length < 1 || items.length > 7) {\n  throw new Error('S003 async submit expects 1-7 tasks, received ' + items.length + '.');\n}\n\nfunction text(value) {\n  return value === undefined || value === null ? '' : String(value).trim();\n}\n\nfunction extensionFor(image, meta) {\n  const explicit = text(meta?.fileExtension).replace(/^\\./, '').toLowerCase();\n  if (/^(png|jpe?g|webp)$/.test(explicit)) return explicit === 'jpeg' ? 'jpg' : explicit;\n  const mime = text(meta?.mimeType).toLowerCase();\n  if (mime.includes('jpeg')) return 'jpg';\n  if (mime.includes('webp')) return 'webp';\n  if (mime.includes('png')) return 'png';\n  if (/^https?:\\/\\//i.test(image)) {\n    try {\n      const match = new URL(image).pathname.match(/\\.([a-z0-9]+)$/i);\n      if (match && /^(png|jpe?g|webp)$/i.test(match[1])) return match[1].toLowerCase() === 'jpeg' ? 'jpg' : match[1].toLowerCase();\n    } catch (error) {}\n  }\n  return 'png';\n}\n\nconst first = items[0];\nconst n8nExecutionId = text(first.n8nExecutionId);\nconst suppliedSubmissionId = text(first.sourceSubmissionId);\nconst sourceSubmissionId = suppliedSubmissionId || (n8nExecutionId\n  ? (items.length === 7 ? 'E003:' : 'S003:') + n8nExecutionId\n  : 'S003:' + String($execution.id || 'unknown'));\n\nconst images = Array.isArray(first.images) ? first.images.map(text).filter(Boolean) : [];\nif (images.length < 1 || images.length > 10) {\n  throw new Error('S003 async submit requires 1-10 prepared images.');\n}\nif (images.some((value) => !/^https?:\\/\\//i.test(value) && !/^data:image\\/(?:png|jpe?g|webp);base64,/i.test(value))) {\n  throw new Error('S003 async submit images must be HTTP(S) URLs or image Data URLs.');\n}\n\nfor (const [index, item] of items.entries()) {\n  const itemImages = Array.isArray(item.images) ? item.images.map(text).filter(Boolean) : [];\n  if (JSON.stringify(itemImages) !== JSON.stringify(images)) {\n    throw new Error('All S003 batch tasks must use the same ordered reference images; mismatch at item ' + (index + 1) + '.');\n  }\n}\n\nconst imageMeta = Array.isArray(first.image_meta) ? first.image_meta : [];\nconst sourceImages = images.map((image, index) => {\n  const meta = imageMeta[index] || {};\n  const extension = extensionFor(image, meta);\n  const providedName = text(meta.sourceFileName || meta.fileName);\n  const sourceFileName = providedName && !/^https?:\\/\\//i.test(providedName)\n    ? providedName.replace(/\\\\/g, '/').split('/').filter(Boolean).pop()\n    : 'reference-image-' + String(index + 1).padStart(2, '0') + '.' + extension;\n  return {\n    sourceFileName,\n    fileExtension: extension,\n    mimeType: text(meta.mimeType) || ('image/' + (extension === 'jpg' ? 'jpeg' : extension)),\n    fileSize: Number(meta.fileSize || 0),\n    originalIndex: index,\n  };\n});\n\nconst requestedConcurrency = Number(first.generationConcurrency ?? 5);\nconst concurrency = Math.max(1, Math.min(5, Number.isFinite(requestedConcurrency) ? Math.floor(requestedConcurrency) : 5));\nconst seenOriginalIndexes = new Set();\nconst tasks = items.map((item, index) => {\n  const prompt = text(item.prompt);\n  if (!prompt) throw new Error('S003 async task ' + (index + 1) + ' is missing prompt.');\n  const originalIndex = Number.isInteger(Number(item.originalIndex)) ? Number(item.originalIndex) : index;\n  if (seenOriginalIndexes.has(originalIndex)) throw new Error('Duplicate S003 originalIndex: ' + originalIndex + '.');\n  seenOriginalIndexes.add(originalIndex);\n  const taskIndex = Number.isInteger(Number(item.taskIndex)) ? Number(item.taskIndex) : originalIndex + 1;\n  const taskBaseId = ['S003', 'v1', sourceSubmissionId, 'task-' + taskIndex].join(':');\n  return {\n    ...item,\n    taskBaseId,\n    taskId: taskBaseId + ':attempt-0',\n    idempotencyKey: taskBaseId + ':attempt-0',\n    sourceSubmissionId,\n    originalIndex,\n    taskIndex,\n    retryAttempt: 0,\n    prompt,\n    negativePrompt: text(item.negativePrompt),\n    completionPolicy: { ...completionPolicy },\n    attemptPreparedAtMs,\n    sourceImages,\n  };\n});\n\nreturn [{\n  json: {\n    batchKey: ['S003', 'v1', sourceSubmissionId, 'batch', 'attempt-0'].join(':'),\n    phase: 'initial',\n    concurrency,\n    common: {\n      sourceSubmissionId,\n      model: text(first.model) || 'jimeng-4.5',\n      ratio: text(first.ratio) || '1:1',\n      resolution: text(first.resolution) || '2k',\n      sampleStrength: 0.5,\n    },\n    images,\n    sourceImages,\n    tasks,\n    completionPolicy,\n    pollIntervalSeconds,\n    originalTaskCount: tasks.length,\n  },\n}];"
+      },
+      "id": "ba8c0f71-7a5a-4e61-9d5f-03f216cb1e01",
+      "name": "Build Async Submit Batch",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        544
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:8000/v1/images/tasks/batch",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ batchKey: $json.batchKey, concurrency: $json.concurrency, common: $json.common, completionPolicy: $json.completionPolicy, images: $json.images, sourceImages: $json.sourceImages, tasks: $json.tasks }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": false,
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 120000
+        }
+      },
+      "id": "ba8c0f71-7a5a-4e61-9d5f-03f216cb1e02",
+      "name": "Submit Image Tasks Async",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        1664,
+        544
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first()?.json || {};\nconst batch = $('Build Async Submit Batch').first().json || {};\nconst expectedCount = Number(batch.originalTaskCount || 0);\nconst pollIntervalSeconds = Math.max(1, Number(batch.pollIntervalSeconds || 10));\nconst fallbackStartedAtMs = Date.now();\nconst sourceByTaskId = new Map((batch.tasks || []).map((task) => [String(task.taskId || ''), task]));\n\nfunction diagnostic(value) {\n  const raw = typeof value === 'string' ? value : JSON.stringify(value || {});\n  return String(raw).replace(/\\b(?:https?|data):[^\\s\"'<>]+/gi, '[redacted-url]').replace(/\\s+/g, ' ').slice(0, 1000);\n}\n\nfunction timestampMs(value) {\n  const numeric = Number(value);\n  if (Number.isFinite(numeric) && numeric > 0) return numeric < 100000000000 ? numeric * 1000 : numeric;\n  const parsed = Date.parse(String(value || ''));\n  return Number.isFinite(parsed) ? parsed : 0;\n}\n\nfunction urlKey(value) {\n  const text = String(value || '').trim();\n  if (!/^https?:\\/\\//i.test(text)) return '';\n  try {\n    const parsed = new URL(text);\n    return parsed.protocol.toLowerCase() + '//' + parsed.host.toLowerCase() + parsed.pathname;\n  } catch (error) {\n    return text.split(/[?#]/, 1)[0];\n  }\n}\n\nconst referenceKeys = new Set((batch.images || []).map(urlKey).filter(Boolean));\nfunction urlsOf(task) {\n  const values = [\n    ...(Array.isArray(task?.imageUrls) ? task.imageUrls : []),\n    ...(Array.isArray(task?.image_urls) ? task.image_urls : []),\n    ...(Array.isArray(task?.urls) ? task.urls : []),\n  ];\n  const output = [];\n  const seen = new Set();\n  for (const value of values) {\n    const url = String(value || '').trim();\n    const key = urlKey(url);\n    if (!key || referenceKeys.has(key) || seen.has(key)) continue;\n    seen.add(key);\n    output.push(url);\n  }\n  return output;\n}\n\nfunction reasonOf(task) {\n  return String(task?.completionReason || task?.context?.completionReason || task?.failCode || '').trim();\n}\n\nfunction normalizeTask(task, nowMs) {\n  const source = sourceByTaskId.get(String(task?.taskId || '')) || {};\n  const context = { ...source, ...(task?.context || {}) };\n  const policy = context.completionPolicy || task?.completionPolicy || batch.completionPolicy || {};\n  const attemptTimeoutMs = Math.max(1000, Number(policy.attemptTimeoutMs || 300000));\n  const attemptStartedAtMs = timestampMs(task?.submittedAt) || timestampMs(task?.createdAt) ||\n    timestampMs(task?.attemptStartedAtMs) || timestampMs(context.attemptStartedAtMs) ||\n    timestampMs(context.attemptPreparedAtMs) || timestampMs(source.attemptPreparedAtMs) || fallbackStartedAtMs;\n  const attemptDeadlineAtMs = attemptStartedAtMs + attemptTimeoutMs;\n  const deadlineReached = nowMs >= attemptDeadlineAtMs;\n  const status = String(task?.status || '');\n  const urls = urlsOf(task);\n  const targetImageCount = Math.max(1, Number(policy.targetImageCount || 4));\n  const existingReason = reasonOf(task);\n  const base = { ...task, context, attemptStartedAtMs, attemptDeadlineAtMs, deadlineReached };\n  if (urls.length > 0 && (status === 'success' || status === 'failed' || deadlineReached)) {\n    const successfulReason = urls.length >= targetImageCount ? 'target_image_count_reached' : 'partial_image_result';\n    const completionReason = /^(?:zero_images|zero_images_timeout|status_unconfirmed_no_retry)$/.test(existingReason) ? successfulReason : (existingReason || successfulReason);\n    return { ...base, status: 'success', count: urls.length, imageUrls: urls, failCode: '', errorMessage: '', completionReason };\n  }\n  if (status === 'failed' && urls.length === 0) {\n    return { ...base, count: 0, imageUrls: [], completionReason: existingReason || String(task?.failCode || 'zero_images') || 'zero_images' };\n  }\n  if (status === 'submission_unknown') {\n    return { ...base, count: 0, imageUrls: [], completionReason: existingReason || 'submission_unknown_no_retry' };\n  }\n  if (status === 'success' && urls.length === 0) {\n    return { ...base, count: 0, imageUrls: [], completionReason: existingReason || 'status_unconfirmed_no_retry' };\n  }\n  if (deadlineReached) {\n    return { ...base, count: urls.length, imageUrls: urls, completionReason: urls.length > 0 ? (existingReason || 'partial_image_result') : 'status_unconfirmed_no_retry' };\n  }\n  return { ...base, count: urls.length, imageUrls: urls, completionReason: existingReason };\n}\n\nlet tasks;\nlet submitTransportWarning = '';\nif (Array.isArray(response.tasks)) {\n  const code = String(response.code ?? '').trim();\n  const accepted = response.ok === true || code === 'submission_unknown';\n  if (!accepted) throw new Error('S003 async submit failed: ' + diagnostic(response));\n  if (response.tasks.length !== expectedCount) throw new Error('S003 async submit returned ' + response.tasks.length + ' tasks; expected ' + expectedCount + '.');\n  tasks = response.tasks;\n} else if (response.ok === false && response.code) {\n  throw new Error('S003 async submit failed before polling: ' + diagnostic(response));\n} else {\n  submitTransportWarning = diagnostic(response.error || response.message || response);\n  tasks = (batch.tasks || []).map((task) => ({ taskId: task.taskId, idempotencyKey: task.idempotencyKey, status: 'reserved', historyId: '', context: task }));\n}\n\nconst allowed = new Set(['reserved', 'processing', 'success', 'failed', 'submission_unknown']);\nconst historyRequired = new Set(['processing', 'success', 'failed']);\nif (tasks.some((task) => !allowed.has(String(task?.status || '')) || (historyRequired.has(String(task?.status || '')) && !String(task?.historyId || '').trim()))) {\n  throw new Error('S003 async submit returned an invalid task state: ' + diagnostic(tasks));\n}\nconst nowMs = Date.now();\ntasks = tasks.map((task) => normalizeTask(task, nowMs));\nconst terminal = new Set(['success', 'failed', 'submission_unknown']);\nconst allTerminal = tasks.every((task) => terminal.has(String(task.status || '')));\nconst terminalOrLimit = tasks.every((task) => terminal.has(String(task.status || '')) || Boolean(task.deadlineReached));\nconst taskStarts = tasks.map((task) => Number(task.attemptStartedAtMs)).filter(Number.isFinite);\nconst taskDeadlines = tasks.map((task) => Number(task.attemptDeadlineAtMs)).filter(Number.isFinite);\n\nreturn [{ json: {\n  ok: true,\n  batchKey: batch.batchKey,\n  phase: 'initial',\n  tasks,\n  taskCount: tasks.length,\n  pollCount: 0,\n  maxPollCount: Math.ceil(300000 / (pollIntervalSeconds * 1000)),\n  pollIntervalSeconds,\n  attemptStartedAtMs: taskStarts.length ? Math.min(...taskStarts) : fallbackStartedAtMs,\n  attemptDeadlineAtMs: taskDeadlines.length ? Math.max(...taskDeadlines) : fallbackStartedAtMs + 300000,\n  completionPolicy: batch.completionPolicy,\n  remainingMs: taskDeadlines.length ? Math.max(0, Math.max(...taskDeadlines) - nowMs) : 300000,\n  allTerminal,\n  deadlineReached: terminalOrLimit && !allTerminal,\n  pollLimitReached: terminalOrLimit && !allTerminal,\n  terminalOrLimit,\n  submitTransportWarning,\n} }];"
+      },
+      "id": "ba8c0f71-7a5a-4e61-9d5f-03f216cb1e03",
+      "name": "Initialize Initial Polling",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1888,
+        544
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "ba8c0f71-7a5a-4e61-9d5f-03f216cb1f04",
+              "leftValue": "={{ $json.terminalOrLimit }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "ba8c0f71-7a5a-4e61-9d5f-03f216cb1e04",
+      "name": "All Initial Tasks Terminal",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2112,
+        544
+      ]
+    },
+    {
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": "={{ Math.max(1, Math.min(10, Math.ceil(Math.max(0, Number($json.attemptDeadlineAtMs || 0) - Date.now()) / 1000))) }}",
+        "unit": "seconds",
+        "options": {}
+      },
+      "id": "ba8c0f71-7a5a-4e61-9d5f-03f216cb1e05",
+      "name": "Wait Initial Tasks",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2112,
+        736
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:8000/v1/images/tasks/status",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ batchKey: $json.batchKey, phase: $json.phase, pollCount: $json.pollCount, maxPollCount: $json.maxPollCount, completionPolicy: $json.completionPolicy, concurrency: 4, tasks: ($json.tasks || []).map((task) => ({ taskId: task.taskId, idempotencyKey: task.idempotencyKey, historyId: task.historyId || \"\" })) }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": false,
+              "responseFormat": "json"
+            }
+          },
+          "timeout": "={{ Math.max(5000, Math.min(15000, Number($json.attemptDeadlineAtMs || 0) - Date.now())) }}"
+        }
+      },
+      "id": "ba8c0f71-7a5a-4e61-9d5f-03f216cb1e06",
+      "name": "Check Initial Tasks Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        2336,
+        736
+      ],
+      "retryOnFail": false,
+      "maxTries": 1,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first()?.json || {};\nconst batch = $('Build Async Submit Batch').first().json || {};\nconst expectedCount = Number(batch.originalTaskCount || 0);\nconst sourceByTaskId = new Map((batch.tasks || []).map((task) => [String(task.taskId || ''), task]));\nconst statusQueryFailed = Boolean(input.error) || input.ok !== true || !Array.isArray(input.tasks);\nlet carriedState = input;\nif (statusQueryFailed && !Array.isArray(carriedState.tasks)) {\n  try { carriedState = $('Wait Initial Tasks').first().json || input; } catch (error) {}\n}\nlet tasks = Array.isArray(carriedState.tasks) ? carriedState.tasks : [];\nif (tasks.length !== expectedCount) throw new Error('S003 initial status query returned an unexpected task count: ' + tasks.length + '.');\n\nfunction diagnostic(value) {\n  const raw = typeof value === 'string' ? value : JSON.stringify(value || {});\n  return String(raw).replace(/\\b(?:https?|data):[^\\s\"'<>]+/gi, '[redacted-url]').replace(/\\s+/g, ' ').slice(0, 1000);\n}\n\nfunction timestampMs(value) {\n  const numeric = Number(value);\n  if (Number.isFinite(numeric) && numeric > 0) return numeric < 100000000000 ? numeric * 1000 : numeric;\n  const parsed = Date.parse(String(value || ''));\n  return Number.isFinite(parsed) ? parsed : 0;\n}\n\nfunction urlKey(value) {\n  const text = String(value || '').trim();\n  if (!/^https?:\\/\\//i.test(text)) return '';\n  try { const parsed = new URL(text); return parsed.protocol.toLowerCase() + '//' + parsed.host.toLowerCase() + parsed.pathname; }\n  catch (error) { return text.split(/[?#]/, 1)[0]; }\n}\n\nconst referenceKeys = new Set((batch.images || []).map(urlKey).filter(Boolean));\nfunction urlsOf(task) {\n  const values = [...(Array.isArray(task?.imageUrls) ? task.imageUrls : []), ...(Array.isArray(task?.image_urls) ? task.image_urls : []), ...(Array.isArray(task?.urls) ? task.urls : [])];\n  const output = [];\n  const seen = new Set();\n  for (const value of values) {\n    const url = String(value || '').trim();\n    const key = urlKey(url);\n    if (!key || referenceKeys.has(key) || seen.has(key)) continue;\n    seen.add(key);\n    output.push(url);\n  }\n  return output;\n}\n\nfunction reasonOf(task) { return String(task?.completionReason || task?.context?.completionReason || task?.failCode || '').trim(); }\n\nfunction normalizeTask(task, nowMs) {\n  const source = sourceByTaskId.get(String(task?.taskId || '')) || {};\n  const context = { ...source, ...(task?.context || {}) };\n  const policy = context.completionPolicy || task?.completionPolicy || batch.completionPolicy || {};\n  const attemptTimeoutMs = Math.max(1000, Number(policy.attemptTimeoutMs || 300000));\n  const attemptStartedAtMs = timestampMs(task?.submittedAt) || timestampMs(task?.createdAt) || timestampMs(task?.attemptStartedAtMs) || timestampMs(context.attemptStartedAtMs) || timestampMs(context.attemptPreparedAtMs) || timestampMs(source.attemptPreparedAtMs);\n  if (!attemptStartedAtMs) throw new Error('S003 initial task is missing a stable submittedAt/createdAt attempt timestamp: ' + String(task?.taskId || 'unknown'));\n  const attemptDeadlineAtMs = attemptStartedAtMs + attemptTimeoutMs;\n  const deadlineReached = nowMs >= attemptDeadlineAtMs;\n  const status = String(task?.status || '');\n  const urls = urlsOf(task);\n  const targetImageCount = Math.max(1, Number(policy.targetImageCount || 4));\n  const existingReason = reasonOf(task);\n  const base = { ...task, context, attemptStartedAtMs, attemptDeadlineAtMs, deadlineReached };\n  if (urls.length > 0 && (status === 'success' || status === 'failed' || deadlineReached || statusQueryFailed)) {\n    const successfulReason = urls.length >= targetImageCount ? 'target_image_count_reached' : 'partial_image_result';\n    const completionReason = /^(?:zero_images|zero_images_timeout|status_unconfirmed_no_retry)$/.test(existingReason) ? successfulReason : (existingReason || successfulReason);\n    return { ...base, status: 'success', count: urls.length, imageUrls: urls, failCode: '', errorMessage: '', completionReason };\n  }\n  if (status === 'failed' && urls.length === 0) return { ...base, count: 0, imageUrls: [], completionReason: existingReason || String(task?.failCode || 'zero_images') || 'zero_images' };\n  if (status === 'submission_unknown') return { ...base, count: 0, imageUrls: [], completionReason: existingReason || 'submission_unknown_no_retry' };\n  if (status === 'success' && urls.length === 0) return { ...base, count: 0, imageUrls: [], completionReason: existingReason || 'status_unconfirmed_no_retry' };\n  if (statusQueryFailed || deadlineReached) return { ...base, count: 0, imageUrls: [], completionReason: 'status_unconfirmed_no_retry' };\n  return { ...base, count: urls.length, imageUrls: urls, completionReason: existingReason };\n}\n\nconst allowed = new Set(['reserved', 'processing', 'success', 'failed', 'submission_unknown']);\nconst historyRequired = new Set(['processing', 'success', 'failed']);\nif (tasks.some((task) => !allowed.has(String(task?.status || '')) || (historyRequired.has(String(task?.status || '')) && !String(task?.historyId || '').trim()))) {\n  throw new Error('S003 initial status query returned an invalid task state; no task will be resubmitted.');\n}\nconst nowMs = Date.now();\ntasks = tasks.map((task) => normalizeTask(task, nowMs));\nconst pollCount = Number(carriedState.pollCount || 0) + 1;\nconst terminal = new Set(['success', 'failed', 'submission_unknown']);\nconst allTerminal = tasks.every((task) => terminal.has(String(task.status || '')));\nconst terminalOrLimit = statusQueryFailed || tasks.every((task) => terminal.has(String(task.status || '')) || Boolean(task.deadlineReached));\nconst taskStarts = tasks.map((task) => Number(task.attemptStartedAtMs)).filter(Number.isFinite);\nconst taskDeadlines = tasks.map((task) => Number(task.attemptDeadlineAtMs)).filter(Number.isFinite);\nreturn [{ json: {\n  ...carriedState,\n  ok: true,\n  phase: 'initial',\n  tasks,\n  pollCount,\n  maxPollCount: Math.ceil(300000 / (Math.max(1, Number(carriedState.pollIntervalSeconds || 10)) * 1000)),\n  attemptStartedAtMs: Math.min(...taskStarts),\n  attemptDeadlineAtMs: Math.max(...taskDeadlines),\n  remainingMs: Math.max(0, Math.max(...taskDeadlines) - nowMs),\n  allTerminal,\n  deadlineReached: terminalOrLimit && !allTerminal,\n  pollLimitReached: terminalOrLimit && !allTerminal,\n  terminalOrLimit,\n  statusQueryUnconfirmed: statusQueryFailed,\n  statusQueryError: statusQueryFailed ? diagnostic(input.error || input.message || input) : '',\n} }];"
+      },
+      "id": "ba8c0f71-7a5a-4e61-9d5f-03f216cb1e07",
+      "name": "Evaluate Initial Tasks",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2560,
+        736
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const initial = $input.first()?.json || {};\nconst firstResults = Array.isArray(initial.tasks) ? initial.tasks : [];\nconst sourceBatch = $('Build Async Submit Batch').first().json || {};\nconst sourceTasks = Array.isArray(sourceBatch.tasks) ? sourceBatch.tasks : [];\nif (firstResults.length !== sourceTasks.length) throw new Error('S003 initial result count does not match the submitted task count.');\n\nfunction urlKey(value) {\n  const text = String(value || '').trim();\n  if (!/^https?:\\/\\//i.test(text)) return '';\n  try { const parsed = new URL(text); return parsed.protocol.toLowerCase() + '//' + parsed.host.toLowerCase() + parsed.pathname; }\n  catch (error) { return text.split(/[?#]/, 1)[0]; }\n}\nconst referenceKeys = new Set((sourceBatch.images || []).map(urlKey).filter(Boolean));\nfunction urlsOf(task) {\n  const values = [...(Array.isArray(task?.imageUrls) ? task.imageUrls : []), ...(Array.isArray(task?.image_urls) ? task.image_urls : []), ...(Array.isArray(task?.urls) ? task.urls : [])];\n  const seen = new Set();\n  return values.map((value) => String(value || '').trim()).filter((url) => {\n    const key = urlKey(url);\n    if (!key || referenceKeys.has(key) || seen.has(key)) return false;\n    seen.add(key);\n    return true;\n  });\n}\n\nconst noRetryReasons = new Set(['status_unconfirmed_no_retry', 'submission_unknown_no_retry', 'reservation_unresolved_no_retry']);\nconst byTaskId = new Map(sourceTasks.map((task) => [String(task.taskId || ''), task]));\nconst explicitFailures = firstResults.filter((task) => {\n  const reason = String(task?.completionReason || task?.context?.completionReason || '').trim();\n  return String(task?.status || '') === 'failed' && urlsOf(task).length === 0 && !noRetryReasons.has(reason);\n});\nconst completionPolicy = sourceBatch.completionPolicy || { targetImageCount: 4, minimumSuccessImageCount: 1, attemptTimeoutMs: 300000, partialTerminalGraceMs: 30000 };\nconst attemptPreparedAtMs = Date.now();\nconst attemptDeadlineAtMs = attemptPreparedAtMs + Math.max(1000, Number(completionPolicy.attemptTimeoutMs || 300000));\nconst retryTasks = explicitFailures.map((failed) => {\n  const source = byTaskId.get(String(failed.taskId || '')) || {};\n  const context = failed.context || {};\n  const taskBaseId = String(source.taskBaseId || context.taskBaseId || '').trim();\n  if (!taskBaseId) throw new Error('Zero-image S003 task is missing taskBaseId.');\n  const retryReason = String(failed.completionReason || failed.failCode || 'zero_images').trim() || 'zero_images';\n  return {\n    ...source,\n    ...context,\n    taskBaseId,\n    originalTaskId: String(source.taskId || failed.taskId || ''),\n    taskId: taskBaseId + ':attempt-1',\n    idempotencyKey: taskBaseId + ':attempt-1',\n    retryAttempt: 1,\n    retryReason,\n    completionReason: '',\n    completionPolicy: { ...completionPolicy },\n    attemptPreparedAtMs,\n    attemptStartedAtMs: attemptPreparedAtMs,\n    attemptDeadlineAtMs,\n    prompt: String(source.prompt || context.prompt || '').trim(),\n  };\n});\nif (retryTasks.some((task) => !task.prompt)) throw new Error('A zero-image S003 task is missing its original prompt.');\n\nreturn [{ json: {\n  firstResults,\n  hasRetryItems: retryTasks.length > 0,\n  retryCount: retryTasks.length,\n  batchKey: ['S003', 'v1', String(sourceBatch.common?.sourceSubmissionId || ''), 'batch', 'attempt-1'].join(':'),\n  phase: 'retry',\n  concurrency: Number(sourceBatch.concurrency || 5),\n  common: sourceBatch.common,\n  images: sourceBatch.images,\n  sourceImages: sourceBatch.sourceImages,\n  completionPolicy,\n  pollIntervalSeconds: 10,\n  tasks: retryTasks,\n  initialPollCount: Number(initial.pollCount || 0),\n  initialPollLimitReached: Boolean(initial.pollLimitReached),\n  initialStatusQueryUnconfirmed: Boolean(initial.statusQueryUnconfirmed),\n} }];"
+      },
+      "id": "ba8c0f71-7a5a-4e61-9d5f-03f216cb1e08",
+      "name": "Build Explicit Retry Batch",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2336,
+        544
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "ba8c0f71-7a5a-4e61-9d5f-03f216cb1f09",
+              "leftValue": "={{ $json.hasRetryItems }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "ba8c0f71-7a5a-4e61-9d5f-03f216cb1e09",
+      "name": "Has Explicit Retry Tasks",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2560,
+        544
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:8000/v1/images/tasks/batch",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ batchKey: $json.batchKey, concurrency: $json.concurrency, common: $json.common, completionPolicy: $json.completionPolicy, images: $json.images, sourceImages: $json.sourceImages, tasks: $json.tasks }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": false,
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 120000
+        }
+      },
+      "id": "ba8c0f71-7a5a-4e61-9d5f-03f216cb1e10",
+      "name": "Submit Explicit Retry Tasks",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        2784,
+        448
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first()?.json || {};\nconst retryBatch = $('Build Explicit Retry Batch').first().json || {};\nconst expectedCount = Number(retryBatch.retryCount || 0);\nconst pollIntervalSeconds = Math.max(1, Number(retryBatch.pollIntervalSeconds || 10));\nconst fallbackStartedAtMs = Date.now();\nconst sourceByTaskId = new Map((retryBatch.tasks || []).map((task) => [String(task.taskId || ''), task]));\n\nfunction diagnostic(value) {\n  const raw = typeof value === 'string' ? value : JSON.stringify(value || {});\n  return String(raw).replace(/\\b(?:https?|data):[^\\s\"'<>]+/gi, '[redacted-url]').replace(/\\s+/g, ' ').slice(0, 1000);\n}\nfunction timestampMs(value) {\n  const numeric = Number(value);\n  if (Number.isFinite(numeric) && numeric > 0) return numeric < 100000000000 ? numeric * 1000 : numeric;\n  const parsed = Date.parse(String(value || ''));\n  return Number.isFinite(parsed) ? parsed : 0;\n}\nfunction urlKey(value) {\n  const text = String(value || '').trim();\n  if (!/^https?:\\/\\//i.test(text)) return '';\n  try { const parsed = new URL(text); return parsed.protocol.toLowerCase() + '//' + parsed.host.toLowerCase() + parsed.pathname; }\n  catch (error) { return text.split(/[?#]/, 1)[0]; }\n}\nconst referenceKeys = new Set((retryBatch.images || []).map(urlKey).filter(Boolean));\nfunction urlsOf(task) {\n  const values = [...(Array.isArray(task?.imageUrls) ? task.imageUrls : []), ...(Array.isArray(task?.image_urls) ? task.image_urls : []), ...(Array.isArray(task?.urls) ? task.urls : [])];\n  const output = [];\n  const seen = new Set();\n  for (const value of values) {\n    const url = String(value || '').trim();\n    const key = urlKey(url);\n    if (!key || referenceKeys.has(key) || seen.has(key)) continue;\n    seen.add(key);\n    output.push(url);\n  }\n  return output;\n}\nfunction reasonOf(task) { return String(task?.completionReason || task?.context?.completionReason || task?.failCode || '').trim(); }\nfunction normalizeTask(task, nowMs) {\n  const source = sourceByTaskId.get(String(task?.taskId || '')) || {};\n  const context = { ...source, ...(task?.context || {}) };\n  const policy = context.completionPolicy || task?.completionPolicy || retryBatch.completionPolicy || {};\n  const attemptTimeoutMs = Math.max(1000, Number(policy.attemptTimeoutMs || 300000));\n  const attemptStartedAtMs = timestampMs(task?.submittedAt) || timestampMs(task?.createdAt) || timestampMs(task?.attemptStartedAtMs) || timestampMs(context.attemptStartedAtMs) || timestampMs(context.attemptPreparedAtMs) || timestampMs(source.attemptPreparedAtMs) || fallbackStartedAtMs;\n  const attemptDeadlineAtMs = attemptStartedAtMs + attemptTimeoutMs;\n  const deadlineReached = nowMs >= attemptDeadlineAtMs;\n  const status = String(task?.status || '');\n  const urls = urlsOf(task);\n  const targetImageCount = Math.max(1, Number(policy.targetImageCount || 4));\n  const existingReason = reasonOf(task);\n  const base = { ...task, context, attemptStartedAtMs, attemptDeadlineAtMs, deadlineReached };\n  if (urls.length > 0 && (status === 'success' || status === 'failed' || deadlineReached)) {\n    const successfulReason = urls.length >= targetImageCount ? 'target_image_count_reached' : 'partial_image_result';\n    const completionReason = /^(?:zero_images|zero_images_timeout|status_unconfirmed_no_retry)$/.test(existingReason) ? successfulReason : (existingReason || successfulReason);\n    return { ...base, status: 'success', count: urls.length, imageUrls: urls, failCode: '', errorMessage: '', completionReason };\n  }\n  if (status === 'failed' && urls.length === 0) return { ...base, count: 0, imageUrls: [], completionReason: existingReason || String(task?.failCode || 'zero_images') || 'zero_images' };\n  if (status === 'submission_unknown') return { ...base, count: 0, imageUrls: [], completionReason: existingReason || 'submission_unknown_no_retry' };\n  if (status === 'success' && urls.length === 0) return { ...base, count: 0, imageUrls: [], completionReason: existingReason || 'status_unconfirmed_no_retry' };\n  if (deadlineReached) return { ...base, count: urls.length, imageUrls: urls, completionReason: urls.length > 0 ? (existingReason || 'partial_image_result') : 'status_unconfirmed_no_retry' };\n  return { ...base, count: urls.length, imageUrls: urls, completionReason: existingReason };\n}\n\nlet tasks;\nlet submitTransportWarning = '';\nif (Array.isArray(response.tasks)) {\n  const code = String(response.code ?? '').trim();\n  const accepted = response.ok === true || code === 'submission_unknown';\n  if (!accepted) throw new Error('S003 zero-image retry submit failed: ' + diagnostic(response));\n  if (response.tasks.length !== expectedCount) throw new Error('S003 zero-image retry submit returned an unexpected task count.');\n  tasks = response.tasks;\n} else if (response.ok === false && response.code) {\n  throw new Error('S003 zero-image retry submit failed before polling: ' + diagnostic(response));\n} else {\n  submitTransportWarning = diagnostic(response.error || response.message || response);\n  tasks = (retryBatch.tasks || []).map((task) => ({ taskId: task.taskId, idempotencyKey: task.idempotencyKey, status: 'reserved', historyId: '', context: task }));\n}\nconst allowed = new Set(['reserved', 'processing', 'success', 'failed', 'submission_unknown']);\nconst historyRequired = new Set(['processing', 'success', 'failed']);\nif (tasks.some((task) => !allowed.has(String(task?.status || '')) || (historyRequired.has(String(task?.status || '')) && !String(task?.historyId || '').trim()))) throw new Error('S003 zero-image retry submit returned an invalid task state.');\nconst nowMs = Date.now();\ntasks = tasks.map((task) => normalizeTask(task, nowMs));\nconst terminal = new Set(['success', 'failed', 'submission_unknown']);\nconst allTerminal = tasks.every((task) => terminal.has(String(task.status || '')));\nconst terminalOrLimit = tasks.every((task) => terminal.has(String(task.status || '')) || Boolean(task.deadlineReached));\nconst taskStarts = tasks.map((task) => Number(task.attemptStartedAtMs)).filter(Number.isFinite);\nconst taskDeadlines = tasks.map((task) => Number(task.attemptDeadlineAtMs)).filter(Number.isFinite);\nreturn [{ json: {\n  ok: true,\n  batchKey: retryBatch.batchKey,\n  phase: 'retry',\n  tasks,\n  taskCount: tasks.length,\n  pollCount: 0,\n  maxPollCount: Math.ceil(300000 / (pollIntervalSeconds * 1000)),\n  pollIntervalSeconds,\n  attemptStartedAtMs: taskStarts.length ? Math.min(...taskStarts) : fallbackStartedAtMs,\n  attemptDeadlineAtMs: taskDeadlines.length ? Math.max(...taskDeadlines) : fallbackStartedAtMs + 300000,\n  completionPolicy: retryBatch.completionPolicy,\n  remainingMs: taskDeadlines.length ? Math.max(0, Math.max(...taskDeadlines) - nowMs) : 300000,\n  allTerminal,\n  deadlineReached: terminalOrLimit && !allTerminal,\n  pollLimitReached: terminalOrLimit && !allTerminal,\n  terminalOrLimit,\n  submitTransportWarning,\n} }];"
+      },
+      "id": "ba8c0f71-7a5a-4e61-9d5f-03f216cb1e11",
+      "name": "Initialize Retry Polling",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3008,
+        448
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "ba8c0f71-7a5a-4e61-9d5f-03f216cb1f12",
+              "leftValue": "={{ $json.terminalOrLimit }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "ba8c0f71-7a5a-4e61-9d5f-03f216cb1e12",
+      "name": "All Retry Tasks Terminal",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3232,
+        448
+      ]
+    },
+    {
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": "={{ Math.max(1, Math.min(10, Math.ceil(Math.max(0, Number($json.attemptDeadlineAtMs || 0) - Date.now()) / 1000))) }}",
+        "unit": "seconds",
+        "options": {}
+      },
+      "id": "ba8c0f71-7a5a-4e61-9d5f-03f216cb1e13",
+      "name": "Wait Retry Tasks",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        3232,
+        640
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:8000/v1/images/tasks/status",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ batchKey: $json.batchKey, phase: $json.phase, pollCount: $json.pollCount, maxPollCount: $json.maxPollCount, completionPolicy: $json.completionPolicy, concurrency: 4, tasks: ($json.tasks || []).map((task) => ({ taskId: task.taskId, idempotencyKey: task.idempotencyKey, historyId: task.historyId || \"\" })) }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": false,
+              "responseFormat": "json"
+            }
+          },
+          "timeout": "={{ Math.max(5000, Math.min(15000, Number($json.attemptDeadlineAtMs || 0) - Date.now())) }}"
+        }
+      },
+      "id": "ba8c0f71-7a5a-4e61-9d5f-03f216cb1e14",
+      "name": "Check Retry Tasks Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        3456,
+        640
+      ],
+      "retryOnFail": false,
+      "maxTries": 1,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first()?.json || {};\nconst retryBatch = $('Build Explicit Retry Batch').first().json || {};\nconst expectedCount = Number(retryBatch.retryCount || 0);\nconst sourceByTaskId = new Map((retryBatch.tasks || []).map((task) => [String(task.taskId || ''), task]));\nconst statusQueryFailed = Boolean(input.error) || input.ok !== true || !Array.isArray(input.tasks);\nlet carriedState = input;\nif (statusQueryFailed && !Array.isArray(carriedState.tasks)) {\n  try { carriedState = $('Wait Retry Tasks').first().json || input; } catch (error) {}\n}\nlet tasks = Array.isArray(carriedState.tasks) ? carriedState.tasks : [];\nif (tasks.length !== expectedCount) throw new Error('S003 retry status query returned an unexpected task count: ' + tasks.length + '.');\n\nfunction diagnostic(value) {\n  const raw = typeof value === 'string' ? value : JSON.stringify(value || {});\n  return String(raw).replace(/\\b(?:https?|data):[^\\s\"'<>]+/gi, '[redacted-url]').replace(/\\s+/g, ' ').slice(0, 1000);\n}\nfunction timestampMs(value) {\n  const numeric = Number(value);\n  if (Number.isFinite(numeric) && numeric > 0) return numeric < 100000000000 ? numeric * 1000 : numeric;\n  const parsed = Date.parse(String(value || ''));\n  return Number.isFinite(parsed) ? parsed : 0;\n}\nfunction urlKey(value) {\n  const text = String(value || '').trim();\n  if (!/^https?:\\/\\//i.test(text)) return '';\n  try { const parsed = new URL(text); return parsed.protocol.toLowerCase() + '//' + parsed.host.toLowerCase() + parsed.pathname; }\n  catch (error) { return text.split(/[?#]/, 1)[0]; }\n}\nconst referenceKeys = new Set((retryBatch.images || []).map(urlKey).filter(Boolean));\nfunction urlsOf(task) {\n  const values = [...(Array.isArray(task?.imageUrls) ? task.imageUrls : []), ...(Array.isArray(task?.image_urls) ? task.image_urls : []), ...(Array.isArray(task?.urls) ? task.urls : [])];\n  const output = [];\n  const seen = new Set();\n  for (const value of values) {\n    const url = String(value || '').trim();\n    const key = urlKey(url);\n    if (!key || referenceKeys.has(key) || seen.has(key)) continue;\n    seen.add(key);\n    output.push(url);\n  }\n  return output;\n}\nfunction reasonOf(task) { return String(task?.completionReason || task?.context?.completionReason || task?.failCode || '').trim(); }\nfunction normalizeTask(task, nowMs) {\n  const source = sourceByTaskId.get(String(task?.taskId || '')) || {};\n  const context = { ...source, ...(task?.context || {}) };\n  const policy = context.completionPolicy || task?.completionPolicy || retryBatch.completionPolicy || {};\n  const attemptTimeoutMs = Math.max(1000, Number(policy.attemptTimeoutMs || 300000));\n  const attemptStartedAtMs = timestampMs(task?.submittedAt) || timestampMs(task?.createdAt) || timestampMs(task?.attemptStartedAtMs) || timestampMs(context.attemptStartedAtMs) || timestampMs(context.attemptPreparedAtMs) || timestampMs(source.attemptPreparedAtMs);\n  if (!attemptStartedAtMs) throw new Error('S003 retry task is missing a stable submittedAt/createdAt attempt timestamp: ' + String(task?.taskId || 'unknown'));\n  const attemptDeadlineAtMs = attemptStartedAtMs + attemptTimeoutMs;\n  const deadlineReached = nowMs >= attemptDeadlineAtMs;\n  const status = String(task?.status || '');\n  const urls = urlsOf(task);\n  const targetImageCount = Math.max(1, Number(policy.targetImageCount || 4));\n  const existingReason = reasonOf(task);\n  const base = { ...task, context, attemptStartedAtMs, attemptDeadlineAtMs, deadlineReached };\n  if (urls.length > 0 && (status === 'success' || status === 'failed' || deadlineReached || statusQueryFailed)) {\n    const successfulReason = urls.length >= targetImageCount ? 'target_image_count_reached' : 'partial_image_result';\n    const completionReason = /^(?:zero_images|zero_images_timeout|status_unconfirmed_no_retry)$/.test(existingReason) ? successfulReason : (existingReason || successfulReason);\n    return { ...base, status: 'success', count: urls.length, imageUrls: urls, failCode: '', errorMessage: '', completionReason };\n  }\n  if (status === 'failed' && urls.length === 0) return { ...base, count: 0, imageUrls: [], completionReason: existingReason || String(task?.failCode || 'zero_images') || 'zero_images' };\n  if (status === 'submission_unknown') return { ...base, count: 0, imageUrls: [], completionReason: existingReason || 'submission_unknown_no_retry' };\n  if (status === 'success' && urls.length === 0) return { ...base, count: 0, imageUrls: [], completionReason: existingReason || 'status_unconfirmed_no_retry' };\n  if (statusQueryFailed || deadlineReached) return { ...base, count: 0, imageUrls: [], completionReason: 'status_unconfirmed_no_retry' };\n  return { ...base, count: urls.length, imageUrls: urls, completionReason: existingReason };\n}\n\nconst allowed = new Set(['reserved', 'processing', 'success', 'failed', 'submission_unknown']);\nconst historyRequired = new Set(['processing', 'success', 'failed']);\nif (tasks.some((task) => !allowed.has(String(task?.status || '')) || (historyRequired.has(String(task?.status || '')) && !String(task?.historyId || '').trim()))) throw new Error('S003 retry status query returned an invalid task state; no task will be submitted again.');\nconst nowMs = Date.now();\ntasks = tasks.map((task) => normalizeTask(task, nowMs));\nconst pollCount = Number(carriedState.pollCount || 0) + 1;\nconst terminal = new Set(['success', 'failed', 'submission_unknown']);\nconst allTerminal = tasks.every((task) => terminal.has(String(task.status || '')));\nconst terminalOrLimit = statusQueryFailed || tasks.every((task) => terminal.has(String(task.status || '')) || Boolean(task.deadlineReached));\nconst taskStarts = tasks.map((task) => Number(task.attemptStartedAtMs)).filter(Number.isFinite);\nconst taskDeadlines = tasks.map((task) => Number(task.attemptDeadlineAtMs)).filter(Number.isFinite);\nreturn [{ json: {\n  ...carriedState,\n  ok: true,\n  phase: 'retry',\n  tasks,\n  pollCount,\n  maxPollCount: Math.ceil(300000 / (Math.max(1, Number(carriedState.pollIntervalSeconds || 10)) * 1000)),\n  attemptStartedAtMs: Math.min(...taskStarts),\n  attemptDeadlineAtMs: Math.max(...taskDeadlines),\n  remainingMs: Math.max(0, Math.max(...taskDeadlines) - nowMs),\n  allTerminal,\n  deadlineReached: terminalOrLimit && !allTerminal,\n  pollLimitReached: terminalOrLimit && !allTerminal,\n  terminalOrLimit,\n  statusQueryUnconfirmed: statusQueryFailed,\n  statusQueryError: statusQueryFailed ? diagnostic(input.error || input.message || input) : '',\n} }];"
+      },
+      "id": "ba8c0f71-7a5a-4e61-9d5f-03f216cb1e15",
+      "name": "Evaluate Retry Tasks",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3680,
+        640
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const retryPlan = $('Build Explicit Retry Batch').first().json || {};\nconst firstResults = Array.isArray(retryPlan.firstResults) ? retryPlan.firstResults : [];\nconst latestInput = $input.first()?.json || {};\nconst retryResults = latestInput.phase === 'retry' && Array.isArray(latestInput.tasks) ? latestInput.tasks : [];\nconst sourceBatch = $('Build Async Submit Batch').first().json || {};\nconst sourceTasks = Array.isArray(sourceBatch.tasks) ? sourceBatch.tasks : [];\n\nfunction originalIndexOf(task) {\n  const value = Number(task?.context?.originalIndex ?? task?.originalIndex);\n  return Number.isInteger(value) ? value : NaN;\n}\nfunction urlKey(value) {\n  const text = String(value || '').trim();\n  if (!/^https?:\\/\\//i.test(text)) return '';\n  try { const parsed = new URL(text); return parsed.protocol.toLowerCase() + '//' + parsed.host.toLowerCase() + parsed.pathname; }\n  catch (error) { return text.split(/[?#]/, 1)[0]; }\n}\nconst referenceKeys = new Set((sourceBatch.images || []).map(urlKey).filter(Boolean));\nfunction urlsOf(task) {\n  const values = [...(Array.isArray(task?.imageUrls) ? task.imageUrls : []), ...(Array.isArray(task?.image_urls) ? task.image_urls : []), ...(Array.isArray(task?.urls) ? task.urls : [])];\n  const output = [];\n  const seen = new Set();\n  for (const value of values) {\n    const url = String(value || '').trim();\n    const key = urlKey(url);\n    if (!key || referenceKeys.has(key) || seen.has(key)) continue;\n    seen.add(key);\n    output.push(url);\n  }\n  return output;\n}\n\nconst expectedIndexes = sourceTasks.map((task) => Number(task.originalIndex));\nif (expectedIndexes.length !== Number(sourceBatch.originalTaskCount || 0) || expectedIndexes.some((value) => !Number.isInteger(value)) || new Set(expectedIndexes).size !== expectedIndexes.length) {\n  throw new Error('S003 source batch has invalid or duplicate originalIndex values.');\n}\nfunction mapUnique(items, label) {\n  const map = new Map();\n  for (const task of items) {\n    const index = originalIndexOf(task);\n    if (!Number.isInteger(index) || !expectedIndexes.includes(index)) throw new Error('S003 ' + label + ' has an invalid originalIndex.');\n    if (map.has(index)) throw new Error('S003 ' + label + ' contains duplicate originalIndex ' + index + '.');\n    map.set(index, task);\n  }\n  return map;\n}\nconst firstByIndex = mapUnique(firstResults, 'initial results');\nif (firstByIndex.size !== expectedIndexes.length) throw new Error('S003 async initial result set is incomplete.');\nconst retryByIndex = mapUnique(retryResults, 'retry results');\nconst resultsByIndex = new Map(firstByIndex);\nfor (const [index, task] of retryByIndex) resultsByIndex.set(index, task);\n\nfunction completionReasonFor(task, urls) {\n  const explicit = String(task?.completionReason || task?.context?.completionReason || '').trim();\n  if (explicit) return explicit;\n  if (urls.length >= 4) return 'target_image_count_reached';\n  if (urls.length > 0) return 'partial_image_result';\n  if (String(task?.status || '') === 'submission_unknown') return 'submission_unknown_no_retry';\n  if (String(task?.status || '') === 'reserved') return 'reservation_unresolved_no_retry';\n  if (String(task?.status || '') === 'processing') return 'status_unconfirmed_no_retry';\n  return String(task?.failCode || 'zero_images').trim() || 'zero_images';\n}\nfunction messageFor(task, urls, completionReason) {\n  if (urls.length > 0) return '';\n  const status = String(task?.status || 'unknown');\n  if (status === 'submission_unknown') return 'Submission result is unknown; automatic resubmission is disabled to prevent duplicate generation.';\n  if (status === 'reserved') return 'The original submission remained unresolved; automatic resubmission is disabled to prevent duplicate generation.';\n  if (status === 'processing') return 'The 300-second polling window ended before the proxy confirmed a terminal zero-image result; no retry was submitted.';\n  return String(task?.errorMessage || task?.failCode || completionReason || 'Jimeng generation returned zero valid image URLs.');\n}\nfunction retryReasonFor(task, completionReason) {\n  const status = String(task?.status || 'unknown');\n  if (status === 'submission_unknown') return 'submission_unknown_no_retry';\n  if (status === 'reserved') return 'reservation_unresolved_no_retry';\n  if (status === 'processing') return 'status_unconfirmed_no_retry';\n  return String(task?.context?.retryReason || task?.retryReason || completionReason || 'zero_images').trim();\n}\n\nreturn [...resultsByIndex.entries()].sort((left, right) => left[0] - right[0]).map(([originalIndex, task]) => {\n  const context = task.context || {};\n  const urls = urlsOf(task);\n  const success = urls.length >= 1;\n  const completionReason = completionReasonFor(task, urls);\n  return {\n    json: {\n      ...context,\n      originalIndex,\n      taskIndex: Number(context.taskIndex ?? task.taskIndex ?? originalIndex + 1),\n      success,\n      ok: success,\n      code: success ? 0 : -1,\n      message: messageFor(task, urls, completionReason),\n      count: urls.length,\n      image_urls: urls,\n      urls,\n      completionReason,\n      retryAttempt: Number(context.retryAttempt ?? task.retryAttempt ?? 0),\n      retryReason: success ? String(context.retryReason || task.retryReason || '') : retryReasonFor(task, completionReason),\n      raw: {\n        taskId: String(task.taskId || ''),\n        idempotencyKey: String(task.idempotencyKey || ''),\n        historyId: String(task.historyId || ''),\n        status: String(task.status || ''),\n        rawStatus: task.rawStatus ?? '',\n        failCode: String(task.failCode || ''),\n        errorMessage: String(task.errorMessage || ''),\n        count: urls.length,\n        completionReason,\n        attemptStartedAtMs: Number(task.attemptStartedAtMs || 0),\n        attemptDeadlineAtMs: Number(task.attemptDeadlineAtMs || 0),\n        reused: Boolean(task.reused),\n      },\n    },\n    pairedItem: { item: originalIndex },\n  };\n});"
+      },
+      "id": "ba8c0f71-7a5a-4e61-9d5f-03f216cb1e16",
+      "name": "Return Image URLs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3456,
+        448
       ]
     }
   ],
@@ -487,69 +725,7 @@
       "main": [
         [
           {
-            "node": "HTTP Request Jimeng4.5",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "HTTP Request Jimeng4.5": {
-      "main": [
-        [
-          {
-            "node": "Build Retry Plan",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Build Retry Plan": {
-      "main": [
-        [
-          {
-            "node": "Has Retry Items",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Has Retry Items": {
-      "main": [
-        [
-          {
-            "node": "Expand Retry Items",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "Return Image URLs",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Expand Retry Items": {
-      "main": [
-        [
-          {
-            "node": "HTTP Request Jimeng4.5 Retry Once",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "HTTP Request Jimeng4.5 Retry Once": {
-      "main": [
-        [
-          {
-            "node": "Return Image URLs",
+            "node": "Build Async Submit Batch",
             "type": "main",
             "index": 0
           }
@@ -599,6 +775,220 @@
           },
           {
             "node": "Read Image 4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Async Submit Batch": {
+      "main": [
+        [
+          {
+            "node": "Submit Image Tasks Async",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Submit Image Tasks Async": {
+      "main": [
+        [
+          {
+            "node": "Initialize Initial Polling",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Initialize Initial Polling",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Initialize Initial Polling": {
+      "main": [
+        [
+          {
+            "node": "All Initial Tasks Terminal",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "All Initial Tasks Terminal": {
+      "main": [
+        [
+          {
+            "node": "Build Explicit Retry Batch",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Wait Initial Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait Initial Tasks": {
+      "main": [
+        [
+          {
+            "node": "Check Initial Tasks Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Initial Tasks Status": {
+      "main": [
+        [
+          {
+            "node": "Evaluate Initial Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Evaluate Initial Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate Initial Tasks": {
+      "main": [
+        [
+          {
+            "node": "All Initial Tasks Terminal",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Explicit Retry Batch": {
+      "main": [
+        [
+          {
+            "node": "Has Explicit Retry Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Explicit Retry Tasks": {
+      "main": [
+        [
+          {
+            "node": "Submit Explicit Retry Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Image URLs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Submit Explicit Retry Tasks": {
+      "main": [
+        [
+          {
+            "node": "Initialize Retry Polling",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Initialize Retry Polling",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Initialize Retry Polling": {
+      "main": [
+        [
+          {
+            "node": "All Retry Tasks Terminal",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "All Retry Tasks Terminal": {
+      "main": [
+        [
+          {
+            "node": "Return Image URLs",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Wait Retry Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait Retry Tasks": {
+      "main": [
+        [
+          {
+            "node": "Check Retry Tasks Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Retry Tasks Status": {
+      "main": [
+        [
+          {
+            "node": "Evaluate Retry Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Evaluate Retry Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate Retry Tasks": {
+      "main": [
+        [
+          {
+            "node": "All Retry Tasks Terminal",
             "type": "main",
             "index": 0
           }

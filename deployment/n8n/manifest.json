@@ -72,8 +72,8 @@
     "portablePathTemplates": true
   },
   "securityTotals": {
-    "removedCredentialBindings": 32,
-    "removedWebhookIds": 28,
+    "removedCredentialBindings": 34,
+    "removedWebhookIds": 30,
     "redactedLiterals": 1
   },
   "workflows": [
@@ -123,7 +123,7 @@
       "category": "core",
       "active": true,
       "file": "workflows/core/s0lQIcv1ZCgEzGlB.json",
-      "sha256": "fba803a0a8c292b775dae7306d279867ae01012403a547e3fbfa75dc612e1621",
+      "sha256": "ba090291a107acf48356b61df44e079421b05b02ea2ce461c802aba43b27c6d6",
       "dependencies": [
         "5fKlIwJWfXJM1y4E",
         "DSXe7OXHqa1IsQxx",
@@ -234,11 +234,11 @@
       "category": "core",
       "active": true,
       "file": "workflows/core/ieWnRGeC7KdeS1GT.json",
-      "sha256": "49ac5a239a7c112f4457a6c3ab97209d58e02bb2670f95d7211f30eb86c42709",
+      "sha256": "f6f6f2ae81f237cab8711439d53d0288fe83d1edb1091b2149b7fa448828c5a4",
       "dependencies": [],
       "security": {
-        "removedCredentialBindings": 2,
-        "removedWebhookIds": 0,
+        "removedCredentialBindings": 4,
+        "removedWebhookIds": 2,
         "redactedLiterals": 0,
         "redactionKinds": {},
         "redactionPathCount": 0
@@ -728,5 +728,5 @@
       }
     }
   ],
-  "generatedAt": "2026-08-18T06:09:58.137Z"
+  "generatedAt": "2026-08-24T15:15:07.213Z"
 }

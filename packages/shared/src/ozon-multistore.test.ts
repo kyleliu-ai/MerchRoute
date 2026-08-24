@@ -132,6 +132,10 @@ describe('OZON frozen content and preparation summary contracts', () => {
       phase: 'NEEDS_ATTENTION', targetStoreCount: 2, publicationCount: 1, failureCount: 1,
       canRecheck: true, canManualTakeover: false, recoveryMode: 'READBACK_REQUIRED'
     }).success).toBe(false);
+    expect(ozonPreparationFanoutSummarySchema.safeParse({
+      phase: 'NEEDS_ATTENTION', targetStoreCount: 2, publicationCount: 2, failureCount: 2,
+      canRecheck: true, canManualTakeover: false, recoveryMode: 'REPLAN_WITH_CURRENT_PRESET'
+    }).success).toBe(true);
   });
 });
 

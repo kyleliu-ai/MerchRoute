@@ -14,18 +14,62 @@ if (!databaseUrl) throw new Error('缺少 DATABASE_URL，无法备份 OZON 上�
 
 const pool = new Pool({ connectionString: databaseUrl, max: 1 });
 try {
-  const [listingResult, jobsResult, mappingsResult, settingsResult] = await Promise.all([
+  const [listingResult, jobsResult, mappingsResult, publicationsResult, mediaDeliveriesResult, settingsResult] = await Promise.all([
     pool.query('SELECT * FROM ozon_listing_drafts WHERE sku=$1', [sku]),
     pool.query('SELECT * FROM ozon_publish_jobs WHERE sku=$1 ORDER BY created_at,id', [sku]),
     pool.query('SELECT * FROM ozon_product_mappings WHERE sku=$1 ORDER BY store_alias,offer_id', [sku]),
+    pool.query('SELECT * FROM ozon_store_publications WHERE sku=$1 ORDER BY created_at,id', [sku]),
+    pool.query('SELECT * FROM ozon_media_deliveries WHERE sku=$1 ORDER BY received_at,source_stage_id,submission_id,variant_id', [sku]),
     pool.query("SELECT root_directory FROM ozon_system_settings WHERE id='default'")
   ]);
   const listing = listingResult.rows[0];
   if (!listing) throw new Error(`OZON 上品草稿不存在：${sku}`);
   const jobIds = jobsResult.rows.map((job) => job.id);
+  const taskIds = jobsResult.rows.map((job) => String(job.task_id || '')).filter(Boolean);
+  const publicationIds = publicationsResult.rows.map((publication) => publication.id);
+  const storeIds = [...new Set([
+    ...jobsResult.rows.map((job) => String(job.store_id || '')),
+    ...publicationsResult.rows.map((publication) => String(publication.store_id || ''))
+  ].filter(Boolean))];
   const eventsResult = jobIds.length
     ? await pool.query('SELECT * FROM ozon_publish_events WHERE job_id=ANY($1::uuid[]) ORDER BY created_at,id', [jobIds])
     : { rows: [] };
+  const [storesResult, runtimeStatesResult, gatewaysResult, slotsResult, statusRefreshResult] = await Promise.all([
+    storeIds.length
+      ? pool.query('SELECT * FROM ozon_stores WHERE id=ANY($1::uuid[]) ORDER BY id', [storeIds])
+      : { rows: [] },
+    storeIds.length
+      ? pool.query('SELECT * FROM ozon_store_runtime_state WHERE store_id=ANY($1::uuid[]) ORDER BY store_id', [storeIds])
+      : { rows: [] },
+    taskIds.length || publicationIds.length
+      ? pool.query(`SELECT * FROM ozon_gateway_requests
+          WHERE ($1::text[] <> '{}'::text[] AND task_id=ANY($1::text[]))
+             OR ($2::uuid[] <> '{}'::uuid[] AND publication_id=ANY($2::uuid[]))
+          ORDER BY created_at,request_ref`, [taskIds, publicationIds])
+      : { rows: [] },
+    jobIds.length
+      ? pool.query('SELECT * FROM ozon_publish_slots WHERE job_id=ANY($1::uuid[]) ORDER BY created_at,slot_key', [jobIds])
+      : { rows: [] },
+    storeIds.length
+      ? pool.query('SELECT * FROM ozon_platform_status_refresh_leases WHERE store_id=ANY($1::uuid[]) AND sku=$2 ORDER BY store_id', [storeIds, sku])
+      : { rows: [] }
+  ]);
+  const presetIds = [...new Set([
+    ...storesResult.rows.map((store) => String(store.default_preset_id || '')),
+    ...publicationsResult.rows.map((publication) => String(publication.preset_id || ''))
+  ].filter(Boolean))];
+  const presetsResult = presetIds.length
+    ? await pool.query('SELECT * FROM ozon_listing_presets WHERE id=ANY($1::uuid[]) ORDER BY id', [presetIds])
+    : { rows: [] };
+  const categoryKeys = [...new Set(presetsResult.rows
+    .map((preset) => String(preset.definition?.categoryKey || ''))
+    .filter(Boolean))];
+  const [categoriesResult, categoryVersionsResult] = categoryKeys.length
+    ? await Promise.all([
+      pool.query('SELECT * FROM ozon_category_templates WHERE category_key=ANY($1::text[]) ORDER BY category_key', [categoryKeys]),
+      pool.query('SELECT * FROM ozon_category_template_versions WHERE category_key=ANY($1::text[]) ORDER BY category_key,version_no', [categoryKeys])
+    ])
+    : [{ rows: [] }, { rows: [] }];
   const rootDirectory = String(settingsResult.rows[0]?.root_directory || '').trim();
   if (!path.isAbsolute(rootDirectory)) throw new Error('OZON 任务根目录不是绝对路径');
 
@@ -49,6 +93,16 @@ try {
     jobs: jobsResult.rows,
     events: eventsResult.rows,
     mappings: mappingsResult.rows,
+    publications: publicationsResult.rows,
+    mediaDeliveries: mediaDeliveriesResult.rows,
+    stores: storesResult.rows,
+    storeRuntimeStates: runtimeStatesResult.rows,
+    presets: presetsResult.rows,
+    categories: categoriesResult.rows,
+    categoryVersions: categoryVersionsResult.rows,
+    gatewayRequests: gatewaysResult.rows,
+    publishSlots: slotsResult.rows,
+    platformStatusRefreshLeases: statusRefreshResult.rows,
     disk: {
       productDirectory,
       productJsonSha256: productJson ? sha256(productJson) : null,
@@ -61,6 +115,9 @@ try {
     listingRevision: Number(listing.revision),
     listingRowVersion: Number(listing.row_version),
     jobCount: jobsResult.rows.length,
+    publicationCount: publicationsResult.rows.length,
+    storeCount: storesResult.rows.length,
+    presetCount: presetsResult.rows.length,
     intakePresent: Boolean(intake),
     productJsonPresent: Boolean(productJson),
     readyPresent: Boolean(ready),

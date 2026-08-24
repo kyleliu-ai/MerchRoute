@@ -8,8 +8,10 @@ import {
   OZON_PREFLIGHT_DUE_HOURS,
   OZON_PREFLIGHT_TTL_HOURS,
   OZON_SHARED_MATERIAL_HASH_VERSION,
+  ozonCategoryTemplateInputSchema,
   ozonProductUrl,
   ozonPresetInputSchema,
+  projectOzonPresetRequiredAttributeCoverage,
   ozonRuntimeClaimJobSchema,
   type OzonCredentialBindingMode,
   type OzonGatewayDeliveryState,
@@ -34,6 +36,7 @@ import {
   type OzonStoreUpdate
 } from '@n8n-media-review/shared';
 import type { OzonEncryptedCredentialPair } from '../services/ozon-stores/token-vault.js';
+import { ozonPreparationGatewayBoundaryLockKey } from '../ozon-preparation-gateway-boundary.js';
 
 type SqlRow = Record<string, any>;
 type JsonRecord = Record<string, unknown>;
@@ -138,6 +141,13 @@ export type OzonAutomaticListingSnapshotContext = {
 export type OzonEligibleAutoStore = OzonStore & {
   presetSnapshot?: JsonRecord;
   presetRowVersion?: number;
+  noBrandDictionaryRequirement?: {
+    descriptionCategoryId: number;
+    typeId: number;
+    attributeId: number;
+    dictionaryId: number;
+    categoryVersionId: string;
+  };
 };
 
 export type OzonPublicationInsert = {
@@ -805,7 +815,12 @@ export class OzonStoreRepository {
     });
   }
 
-  async getPlanningContext(skuInput: string, draftVersion: number, storeIds: string[]): Promise<OzonPublicationPlanningContext> {
+  async getPlanningContext(
+    skuInput: string,
+    draftVersion: number,
+    storeIds: string[],
+    options: { readOnly?: boolean } = {}
+  ): Promise<OzonPublicationPlanningContext> {
     const sku = normalizeSku(skuInput);
     return this.transaction(async (client) => {
       const listingResult = await client.query<SqlRow>('SELECT * FROM ozon_listing_drafts WHERE sku=$1 FOR SHARE', [sku]);
@@ -861,7 +876,7 @@ export class OzonStoreRepository {
             'SELECT EXISTS(SELECT 1 FROM ozon_listing_presets WHERE id=$1) exists', [basePresetId]
           )).rows[0]?.exists)
         : false;
-      if ((!version.base_preset_id && basePresetExists) || !Object.keys(storedOverrides).length) {
+      if (!options.readOnly && ((!version.base_preset_id && basePresetExists) || !Object.keys(storedOverrides).length)) {
         await client.query(`UPDATE ozon_listing_versions SET
           base_preset_id=COALESCE(base_preset_id,$2::uuid),material_overrides=$3::jsonb WHERE id=$1`, [
           version.id, basePresetExists ? basePresetId : null, JSON.stringify(materialOverrides)
@@ -1333,12 +1348,46 @@ export class OzonStoreRepository {
     for (const row of result.rows) {
       const store = toStore(row);
       if (!store.readiness.ready || !store.defaultPresetId) continue;
-      const preset = await this.query<SqlRow>('SELECT definition,row_version FROM ozon_listing_presets WHERE id=$1', [store.defaultPresetId]);
-      if (!preset.rows[0]) continue;
+      const preset = await this.query<SqlRow>(`
+        SELECT preset.definition,preset.row_version,version.id category_version_id,version.snapshot category_snapshot
+        FROM ozon_listing_presets preset
+        JOIN ozon_category_templates category
+          ON category.category_key=preset.definition->>'categoryKey'
+        JOIN ozon_category_template_versions version
+          ON version.id=category.published_version_id AND version.status='PUBLISHED'
+        WHERE preset.id=$1`, [store.defaultPresetId]);
+      const presetRow = preset.rows[0];
+      if (!presetRow) continue;
+      const rawDefinition = jsonObject(presetRow.definition);
+      const definition = ozonPresetInputSchema.safeParse({
+        ...rawDefinition,
+        sizes: Array.isArray(rawDefinition.sizes) && rawDefinition.sizes.length
+          ? rawDefinition.sizes
+          : [{ value: '', stock: Number(rawDefinition.defaultStock || 0) }]
+      });
+      const category = ozonCategoryTemplateInputSchema.safeParse(presetRow.category_snapshot);
+      if (!definition.success || !category.success || definition.data.categoryKey !== category.data.categoryKey) continue;
+      const coverage = projectOzonPresetRequiredAttributeCoverage(category.data, definition.data);
+      if (coverage.some((attribute) => !attribute.covered)) continue;
+      const noBrandCoverage = coverage.find((attribute) => attribute.systemValue?.kind === 'NO_BRAND');
+      const noBrandAttribute = noBrandCoverage
+        ? category.data.attributes.find((attribute) => (
+            attribute.id === noBrandCoverage.attributeId && attribute.complexId === noBrandCoverage.complexId
+          ))
+        : undefined;
       stores.push({
         ...store,
-        presetSnapshot: jsonObject(preset.rows[0].definition),
-        presetRowVersion: Number(preset.rows[0].row_version)
+        presetSnapshot: definition.data as unknown as JsonRecord,
+        presetRowVersion: Number(presetRow.row_version),
+        ...(noBrandAttribute ? {
+          noBrandDictionaryRequirement: {
+            descriptionCategoryId: category.data.descriptionCategoryId,
+            typeId: category.data.typeId,
+            attributeId: noBrandAttribute.id,
+            dictionaryId: noBrandAttribute.dictionaryId,
+            categoryVersionId: String(presetRow.category_version_id)
+          }
+        } : {})
       });
     }
     return stores;
@@ -3178,8 +3227,13 @@ export class OzonStoreRepository {
     payloadHash: string;
     identity: OzonGatewayIdentity;
     operation: string;
+    leaseToken?: string;
   }): Promise<{ existing?: SqlRow }> {
     return this.transaction(async (client) => {
+      if (LEGACY_WRITE_OPERATIONS.has(input.operation)
+        || (input.identity.taskId && input.identity.publicationId)) {
+        await lockAndAssertTaskGatewayIntent(client, input);
+      }
       // SELECT ... FOR UPDATE cannot lock a missing key. Let the unique index
       // serialize concurrent creators, then lock and compare the authoritative
       // row so same-hash requests are idempotent instead of leaking 23505.
@@ -3221,10 +3275,28 @@ export class OzonStoreRepository {
       throw new AppError('CONFIG_INVALID', 'OZON 变体颜色维修 intent 合同无效', undefined, 400);
     }
     return this.transaction(async (client) => {
+      const boundary = await client.query<SqlRow>(`SELECT id,preparation_job_id
+        FROM ozon_store_publications WHERE id=$1`, [input.publicationId]);
+      const boundaryRow = boundary.rows[0];
+      if (!boundaryRow) {
+        throw new AppError('NOT_FOUND', 'OZON 变体颜色维修目标 publication 不存在', {
+          publicationId: input.publicationId
+        }, 404);
+      }
+      const preparationBoundaryId = String(boundaryRow.preparation_job_id || boundaryRow.id || '');
+      if (!UUID_PATTERN.test(preparationBoundaryId)) {
+        throw new AppError('VERSION_CONFLICT', 'OZON 变体颜色维修缺少可序列化的 preparation 身份', {
+          publicationId: input.publicationId
+        }, 409);
+      }
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
+        ozonPreparationGatewayBoundaryLockKey(preparationBoundaryId)
+      ]);
       await client.query("SELECT pg_advisory_xact_lock(hashtext('merchroute-ozon-variant-color-repair'),hashtext($1))", [input.publicationId]);
       const selected = await client.query<SqlRow>(`SELECT
           p.*,p.row_version publication_row_version,p.store_config_version frozen_store_config_version,
           j.id job_id,j.state job_state,j.task_id job_task_id,j.lease_owner,j.lease_token,j.lease_expires_at,
+          j.payload job_payload,
           s.store_alias,s.enabled store_enabled,s.archived_at store_archived_at,s.config_version current_store_config_version,
           c.id credential_id,c.version_no,c.status credential_status,c.ciphertext,c.nonce,c.auth_tag,c.fingerprint,c.key_version,
           c.validated_at credential_validated_at,p.product_ids publication_product_ids,'[]'::jsonb mapped_product_ids
@@ -3239,6 +3311,9 @@ export class OzonStoreRepository {
       const actualOfferIds = normalizeStringArray(row.offer_ids).sort();
       const expectedOfferIds = [...input.offerIds].sort();
       const mismatch = [
+        String(row.preparation_job_id || row.id || '') !== preparationBoundaryId ? 'preparationBoundary' : '',
+        Object.keys(jsonObject(jsonObject(row.job_payload).replanReplacement)).length ? 'jobSuperseded' : '',
+        Object.keys(jsonObject(jsonObject(row.result_json).replanReplacement)).length ? 'publicationSuperseded' : '',
         String(row.status) !== 'SUCCEEDED' ? 'publicationStatus' : '',
         String(row.job_state) !== 'SUCCEEDED' ? 'jobState' : '',
         Number(row.publication_row_version) !== input.publicationRowVersion ? 'publicationRowVersion' : '',
@@ -4284,11 +4359,21 @@ function provisionalImportProductIds(
       const errors = normalizeArray(item.errors);
       if (!offerId || !jobOfferIds.has(offerId) || !publicationOfferIds.has(offerId)
         || String(item.status || '').toLowerCase() !== 'imported'
-        || errors.length || !/^\d+$/.test(productId) || BigInt(productId) <= 0n) continue;
+        || errors.some((error) => !isOzonImportWarning(error))
+        || !/^\d+$/.test(productId) || BigInt(productId) <= 0n) continue;
       productIds.add(productId);
     }
   }
   return [...productIds];
+}
+
+function isOzonImportWarning(value: unknown): boolean {
+  const issue = jsonObject(value);
+  const levels = ['level', 'severity']
+    .filter((field) => Object.prototype.hasOwnProperty.call(issue, field))
+    .map((field) => String(issue[field] ?? '').trim().toLowerCase());
+  return levels.length > 0
+    && levels.every((level) => level === 'warning' || level.endsWith('_warning'));
 }
 
 function toRuntimeJob(row: SqlRow): OzonRuntimeClaimJob {
@@ -4453,6 +4538,129 @@ function isExactPrePlatformMultistorePreparation(job: SqlRow): boolean {
     && !job.publication_id
     && ['NEEDS_ATTENTION', 'FAILED'].includes(String(job.state || '').trim().toUpperCase())
     && !remoteEvidence;
+}
+
+async function lockAndAssertTaskGatewayIntent(
+  client: PoolClient,
+  input: {
+    requestRef: string;
+    requestHash: string;
+    payloadHash: string;
+    identity: OzonGatewayIdentity;
+    operation: string;
+    leaseToken?: string;
+  }
+): Promise<void> {
+  const write = LEGACY_WRITE_OPERATIONS.has(input.operation);
+  if (!input.identity.taskId || !input.identity.publicationId || (write && !input.leaseToken)) {
+    throw new AppError('TASK_LOCKED', 'OZON 任务网关 intent 缺少任务、publication 或写租约身份', {
+      requestRef: input.requestRef,
+      operation: input.operation
+    }, 409);
+  }
+  const located = await client.query<SqlRow>(`SELECT
+      j.id job_id,j.sku,p.id publication_id,p.preparation_job_id
+    FROM ozon_publish_jobs j
+    JOIN ozon_store_publications p ON p.id=j.publication_id AND p.id=$2::uuid
+    WHERE j.task_id=$1 AND j.store_id=$3::uuid
+    ORDER BY j.id LIMIT 2`, [input.identity.taskId, input.identity.publicationId, input.identity.storeId]);
+  if (located.rows.length !== 1) {
+    throw new AppError('TASK_LOCKED', 'OZON 写网关 intent 无法唯一定位冻结 publication 任务', {
+      requestRef: input.requestRef,
+      operation: input.operation
+    }, 409);
+  }
+  const locatedRow = located.rows[0]!;
+  const preparationBoundaryId = String(locatedRow.preparation_job_id || locatedRow.publication_id || '');
+  if (!UUID_PATTERN.test(preparationBoundaryId)) {
+    throw new AppError('VERSION_CONFLICT', 'OZON 写网关 intent 缺少可序列化的 preparation 身份', {
+      requestRef: input.requestRef,
+      publicationId: input.identity.publicationId
+    }, 409);
+  }
+  await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
+    ozonPreparationGatewayBoundaryLockKey(preparationBoundaryId)
+  ]);
+  const locked = await client.query<SqlRow>(`SELECT
+      j.id job_id,j.sku,j.state job_state,j.task_kind,j.task_id job_task_id,
+      j.publication_id job_publication_id,j.store_id job_store_id,
+      j.credential_version_id job_credential_version_id,
+      j.credential_binding_mode job_credential_binding_mode,
+      j.store_config_version job_store_config_version,j.warehouse_id job_warehouse_id,
+      j.offer_contract_hash job_offer_contract_hash,j.materialization_hash job_materialization_hash,
+      j.lease_owner,j.lease_token,j.lease_expires_at,j.payload job_payload,
+      p.id publication_id,p.preparation_job_id,p.planned_job_id,p.status publication_status,
+      p.task_id publication_task_id,p.store_id publication_store_id,
+      p.credential_version_id publication_credential_version_id,
+      p.credential_binding_mode publication_credential_binding_mode,
+      p.store_config_version publication_store_config_version,p.warehouse_id publication_warehouse_id,
+      p.offer_contract_hash publication_offer_contract_hash,
+      p.materialization_hash publication_materialization_hash,p.result_json publication_result_json,
+      s.enabled store_enabled,s.archived_at store_archived_at,s.config_version current_store_config_version,
+      c.status credential_status
+    FROM ozon_publish_jobs j
+    JOIN ozon_store_publications p ON p.id=j.publication_id
+    JOIN ozon_stores s ON s.id=j.store_id
+    LEFT JOIN ozon_store_credential_versions c
+      ON c.id=j.credential_version_id AND c.store_id=j.store_id
+    WHERE j.id=$1::uuid AND p.id=$2::uuid
+    FOR UPDATE OF j,p,s`, [locatedRow.job_id, input.identity.publicationId]);
+  const row = locked.rows[0];
+  if (!row || String(row.preparation_job_id || row.publication_id || '') !== preparationBoundaryId) {
+    throw new AppError('VERSION_CONFLICT', 'OZON 写网关 intent 的 preparation 序列化身份已变化', {
+      requestRef: input.requestRef,
+      publicationId: input.identity.publicationId
+    }, 409);
+  }
+  const jobPayload = jsonObject(row.job_payload);
+  const publicationResult = jsonObject(row.publication_result_json);
+  const mismatches = [
+    String(row.task_kind || '') !== 'STORE_PUBLICATION' ? 'taskKind' : '',
+    String(row.job_task_id || '') !== input.identity.taskId
+      || String(row.publication_task_id || '') !== input.identity.taskId ? 'taskId' : '',
+    String(row.job_publication_id || '') !== input.identity.publicationId
+      || String(row.publication_id || '') !== input.identity.publicationId ? 'publicationId' : '',
+    String(row.planned_job_id || '') !== String(row.job_id || '') ? 'plannedJobId' : '',
+    String(row.job_store_id || '') !== input.identity.storeId
+      || String(row.publication_store_id || '') !== input.identity.storeId ? 'storeId' : '',
+    String(row.job_credential_version_id || '') !== String(input.identity.credentialVersionId || '')
+      || String(row.publication_credential_version_id || '') !== String(input.identity.credentialVersionId || '')
+      ? 'credentialVersionId' : '',
+    String(row.job_credential_binding_mode || '') !== input.identity.credentialBindingMode
+      || String(row.publication_credential_binding_mode || '') !== input.identity.credentialBindingMode
+      ? 'credentialBindingMode' : '',
+    Number(row.job_store_config_version) !== input.identity.storeConfigVersion
+      || Number(row.publication_store_config_version) !== input.identity.storeConfigVersion ? 'storeConfigVersion' : '',
+    String(row.job_warehouse_id || '') !== input.identity.warehouseId
+      || String(row.publication_warehouse_id || '') !== input.identity.warehouseId ? 'warehouseId' : '',
+    String(row.job_offer_contract_hash || '') !== String(input.identity.offerContractHash || '')
+      || String(row.publication_offer_contract_hash || '') !== String(input.identity.offerContractHash || '')
+      ? 'offerContractHash' : '',
+    String(row.job_materialization_hash || '') !== String(input.identity.materializationHash || '')
+      || String(row.publication_materialization_hash || '') !== String(input.identity.materializationHash || '')
+      ? 'materializationHash' : '',
+    Object.keys(jsonObject(jobPayload.replanReplacement)).length ? 'jobSuperseded' : '',
+    Object.keys(jsonObject(publicationResult.replanReplacement)).length ? 'publicationSuperseded' : '',
+    ...(write ? [
+      !CLAIMABLE_JOB_STATES.includes(String(row.job_state) as typeof CLAIMABLE_JOB_STATES[number]) ? 'jobState' : '',
+      !['PLANNED', 'MATERIALIZED', 'QUEUED', 'RUNNING'].includes(String(row.publication_status)) ? 'publicationStatus' : '',
+      Number(row.current_store_config_version) !== input.identity.storeConfigVersion ? 'currentStoreConfigVersion' : '',
+      String(row.lease_token || '') !== input.leaseToken
+        || !row.lease_owner || !row.lease_expires_at
+        || new Date(row.lease_expires_at).getTime() <= Date.now() ? 'lease' : '',
+      row.store_enabled !== true || row.store_archived_at ? 'storeEnabled' : '',
+      input.identity.credentialBindingMode === 'VAULT'
+        && !['ACTIVE', 'RETIRED'].includes(String(row.credential_status || '')) ? 'credentialStatus' : ''
+    ] : [])
+  ].filter(Boolean);
+  if (mismatches.length) {
+    throw new AppError('TASK_LOCKED', 'OZON 任务网关 intent 在序列化边界内已失去授权', {
+      requestRef: input.requestRef,
+      operation: input.operation,
+      preparationJobId: preparationBoundaryId,
+      mismatches
+    }, 409);
+  }
 }
 
 function fleetCapabilityReady(): boolean {

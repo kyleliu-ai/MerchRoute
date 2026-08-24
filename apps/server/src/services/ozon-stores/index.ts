@@ -38,7 +38,10 @@ import type {
   OzonPublicationPlanningContext,
   OzonStoreRepository
 } from '../../repositories/ozon-stores.js';
-import type { OzonRepository } from '../../repositories/ozon.js';
+import {
+  assertOzonPresetDefinitionMatchesCategory,
+  type OzonRepository
+} from '../../repositories/ozon.js';
 import {
   assertOzonVariantColorAuthority,
   createOzonVariantColorAuthority,
@@ -143,15 +146,60 @@ export class OzonStoreService {
   async createStore(input: unknown) {
     const parsed = ozonStoreCreateSchema.safeParse(input);
     if (!parsed.success) throw validationError('无效的 OZON 店铺配置', parsed.error.issues);
-    if (parsed.data.defaultPresetId) await this.ozon.getPreset(parsed.data.defaultPresetId);
+    await this.assertStorePresetConfiguration(
+      parsed.data.autoPublishEnabled,
+      parsed.data.defaultPresetId,
+      Boolean(parsed.data.defaultPresetId)
+    );
     return this.repository.createStore(parsed.data);
   }
 
   async updateStore(storeId: string, input: unknown) {
     const parsed = ozonStoreUpdateSchema.safeParse(input);
     if (!parsed.success) throw validationError('无效的 OZON 店铺配置', parsed.error.issues);
-    if (parsed.data.defaultPresetId) await this.ozon.getPreset(parsed.data.defaultPresetId);
+    if (parsed.data.autoPublishEnabled !== undefined || parsed.data.defaultPresetId !== undefined) {
+      const current = await this.repository.getStore(storeId);
+      const effectiveAutoPublishEnabled = parsed.data.autoPublishEnabled ?? current.autoPublishEnabled;
+      const effectiveDefaultPresetId = parsed.data.defaultPresetId === undefined
+        ? current.defaultPresetId
+        : parsed.data.defaultPresetId;
+      await this.assertStorePresetConfiguration(
+        effectiveAutoPublishEnabled,
+        effectiveDefaultPresetId,
+        Boolean(parsed.data.defaultPresetId)
+      );
+    }
     return this.repository.updateStore(storeId, parsed.data);
+  }
+
+  private async assertStorePresetConfiguration(
+    autoPublishEnabled: boolean,
+    defaultPresetId: string | null | undefined,
+    validateBoundPreset: boolean
+  ): Promise<void> {
+    if (autoPublishEnabled && !defaultPresetId) {
+      throw new AppError(
+        'CONFIG_INVALID',
+        '启用 OZON 自动上品前必须配置默认上品预设',
+        { autoPublishEnabled: true, defaultPresetId: null },
+        409
+      );
+    }
+    if (defaultPresetId && (autoPublishEnabled || validateBoundPreset)) {
+      await this.assertDefaultPresetCompatible(defaultPresetId);
+    }
+  }
+
+  private async assertDefaultPresetCompatible(presetId: string): Promise<void> {
+    const preset = await this.ozon.getPreset(presetId);
+    const category = await this.ozon.getCategory(preset.categoryKey);
+    if (!category.publishedVersion) {
+      throw new AppError('CONFIG_INVALID', '店铺默认 OZON 预设引用的类目尚未发布', {
+        presetId,
+        categoryKey: preset.categoryKey
+      }, 409);
+    }
+    assertOzonPresetDefinitionMatchesCategory(preset, category.publishedVersion.snapshot);
   }
 
   async saveCredential(storeId: string, input: unknown) {
@@ -219,6 +267,12 @@ export class OzonStoreService {
   async enable(storeId: string, input: unknown) {
     const parsed = ozonStoreMutationSchema.safeParse(input);
     if (!parsed.success) throw validationError('缺少有效的 rowVersion', parsed.error.issues);
+    const store = await this.repository.getStore(storeId);
+    await this.assertStorePresetConfiguration(
+      store.autoPublishEnabled,
+      store.defaultPresetId,
+      Boolean(store.defaultPresetId)
+    );
     return this.repository.setStoreEnabled(storeId, true, parsed.data.rowVersion);
   }
 
@@ -321,10 +375,11 @@ export class OzonStoreService {
   async automaticPublicationPlan(
     sku: string,
     draftVersion: number,
-    storeIds: string[]
+    storeIds: string[],
+    options: { prepareSharedSource?: boolean; readOnly?: boolean } = {}
   ): Promise<OzonFrozenAutomaticPublicationPlan> {
     const parsed = ozonPublicationPlanInputSchema.parse({ draftVersion, storeIds });
-    const built = await this.buildPlan(sku, parsed);
+    const built = await this.buildPlan(sku, parsed, options);
     const settings = await this.repository.getSettings();
     assertBuiltPlanSettingsContract(settings, built.settingsContract);
     const stores = built.plan.items.map((item) => {
@@ -1227,9 +1282,13 @@ export class OzonStoreService {
     };
   }
 
-  private async buildPlan(sku: string, input: OzonPublicationPlanInput): Promise<BuiltPlan> {
+  private async buildPlan(
+    sku: string,
+    input: OzonPublicationPlanInput,
+    options: { prepareSharedSource?: boolean; readOnly?: boolean } = {}
+  ): Promise<BuiltPlan> {
     const [context, settings] = await Promise.all([
-      this.repository.getPlanningContext(sku, input.draftVersion, input.storeIds),
+      this.repository.getPlanningContext(sku, input.draftVersion, input.storeIds, { readOnly: options.readOnly === true }),
       this.repository.getSettings()
     ]);
     if (!settings.rootDirectory) throw new AppError('CONFIG_INVALID', '尚未配置 OZON 根目录', undefined, 409);
@@ -1370,7 +1429,7 @@ export class OzonStoreService {
         taskId: `${store.storeAlias}__${context.sku}__r${context.revision}`
       };
     }));
-    if (sharedSourceCandidate) {
+    if (sharedSourceCandidate && options.prepareSharedSource !== false) {
       await prepareSharedSource(settings.rootDirectory, context, async () => sharedSourceCandidate!);
     }
     const built: BuiltPlan = {

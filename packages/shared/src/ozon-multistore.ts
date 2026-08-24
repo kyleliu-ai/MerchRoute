@@ -885,7 +885,7 @@ export type OzonPublicationTaskDetail = {
 export type OzonPreparationRecoveryCapability = {
   canRecheck: boolean;
   canManualTakeover: boolean;
-  recoveryMode: 'NONE' | 'RECHECK' | 'MANUAL_TAKEOVER' | 'READBACK_REQUIRED';
+  recoveryMode: 'NONE' | 'RECHECK' | 'REPLAN_WITH_CURRENT_PRESET' | 'MANUAL_TAKEOVER' | 'READBACK_REQUIRED';
   blockedReason?: string;
 };
 

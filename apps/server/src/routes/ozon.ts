@@ -6,11 +6,13 @@ import sharp from 'sharp';
 import {
   AppError,
   OZON_PUBLISH_JOB_STATES,
+  projectOzonPresetRequiredAttributeCoverage,
   ozonRuntimeTransitionBindingSchema,
   ozonCategoryFromCatalogInputSchema,
   ozonPresetInputSchema,
   ozonPresetUpdateSchema,
   type OzonPresetInput,
+  type OzonPreset,
   type OzonNetworkRecovery,
   type OzonProductMappingInput,
   type OzonPublishJob,
@@ -263,23 +265,35 @@ export async function registerOzonRoutes(
     deleted: await ozon.deleteCategory((request.params as { categoryKey: string }).categoryKey)
   }));
 
-  app.get('/api/v1/ozon/presets', async () => ({ items: await ozon.listPresets() }));
+  app.get('/api/v1/ozon/presets', async () => ({
+    items: await Promise.all((await ozon.listPresets()).map((preset) => ozonPresetApiView(ozon, preset)))
+  }));
   app.post('/api/v1/ozon/presets', async (request) => {
     const definition = parseOzonPreset(request.body, false);
     await assertOzonPresetPricingChain(pricing, shipping, definition);
-    return { preset: await ozon.createPreset(definition) };
+    return { preset: await ozonPresetApiView(ozon, await ozon.createPreset(definition)) };
   });
   app.get('/api/v1/ozon/presets/:id', async (request) => ({
-    preset: await ozon.getPreset((request.params as { id: string }).id)
+    preset: await ozonPresetApiView(ozon, await ozon.getPreset((request.params as { id: string }).id))
   }));
   app.put('/api/v1/ozon/presets/:id', async (request) => {
     const definition = parseOzonPreset(request.body, true);
     await assertOzonPresetPricingChain(pricing, shipping, definition);
-    return { preset: await ozon.updatePreset((request.params as { id: string }).id, definition) };
+    return {
+      preset: await ozonPresetApiView(
+        ozon,
+        await ozon.updatePreset((request.params as { id: string }).id, definition)
+      )
+    };
   });
   app.post('/api/v1/ozon/presets/:id/clone', async (request) => {
     const body = request.body as { name?: string };
-    return { preset: await ozon.clonePreset((request.params as { id: string }).id, body?.name) };
+    return {
+      preset: await ozonPresetApiView(
+        ozon,
+        await ozon.clonePreset((request.params as { id: string }).id, body?.name)
+      )
+    };
   });
   app.delete('/api/v1/ozon/presets/:id', async (request) => {
     const query = request.query as { rowVersion?: string };
@@ -712,6 +726,16 @@ function publicationWorkflowRequired(sku: string, action: string): AppError {
 function stringRecord(value: unknown): Record<string, string> | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, entry]) => [key, String(entry)]));
+}
+
+export async function ozonPresetApiView(repository: OzonRepository, preset: OzonPreset): Promise<OzonPreset> {
+  const category = await repository.getCategory(preset.categoryKey);
+  return {
+    ...preset,
+    requiredAttributeCoverage: category.publishedVersion
+      ? projectOzonPresetRequiredAttributeCoverage(category.publishedVersion.snapshot, preset)
+      : []
+  };
 }
 
 function parseOzonPreset(input: unknown, update: false): OzonPresetInput;
