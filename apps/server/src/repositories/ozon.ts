@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { validOzonPrePlanAbsenceOperations } from '../ozon-preplan-absence.js';
+import { ozonPreparationGatewayBoundaryLockKey } from '../ozon-preparation-gateway-boundary.js';
 import { Pool, type PoolClient, type QueryResult, type QueryResultRow } from 'pg';
 import {
   AppError,
@@ -11,7 +12,10 @@ import {
   ozonAutoJobCanCancel,
   ozonJobHasLocalGenerationClaim,
   validateOzonDescription,
+  findUncoveredOzonPresetRequiredAttributes,
+  projectOzonPresetRequiredAttributeCoverage,
   ozonCategoryAttributeOrderInputSchema,
+  ozonCategorySizeAttributeCandidates,
   ozonCategoryKeySchema,
   type OzonCatalogEntry,
   type OzonCatalogDictionaryName,
@@ -41,6 +45,7 @@ import {
   type OzonListingManagementSource,
   type OzonNetworkRecovery,
   type OzonPreset,
+  type OzonPresetInput,
   type OzonPlatformBusinessState,
   type OzonPlatformOfferStatus,
   type OzonProductLink,
@@ -157,6 +162,92 @@ export type OzonAutomaticPreparationRecoveryEvidence = {
   activeLease: boolean;
   activeSlot: boolean;
   activeStatusRefresh: boolean;
+};
+
+export const OZON_AUTOMATIC_REPLAN_MEDIA_REBIND_SQL = `UPDATE ozon_media_deliveries SET
+  job_id=$2::uuid,
+  payload=payload || jsonb_build_object(
+    'replanOwnershipHistory',
+    (CASE WHEN jsonb_typeof(payload->'replanOwnershipHistory')='array'
+      THEN payload->'replanOwnershipHistory' ELSE '[]'::jsonb END)
+    || jsonb_build_array(jsonb_build_object(
+      'schemaVersion',1,
+      'fromPreparationJobId',$1::uuid::text,
+      'toPreparationJobId',$2::uuid::text,
+      'requestId',$4::text,
+      'planHash',$5::text,
+      'evidenceHash',$6::text,
+      'reboundAt',$7::text
+    ))
+  ),
+  updated_at=NOW()
+  WHERE job_id=$1::uuid AND sku=$3::text
+    AND COALESCE(payload->>'autoPublishDecision','') IN ('ACCEPTED','DEFERRED')`;
+
+export type OzonAutomaticPreparationReplanEvidence = {
+  safe: boolean;
+  blockers: string[];
+  evidenceHash: string;
+  originalJobId: string;
+  originalJobRowVersion: number;
+  originalFanoutPlanHash: string;
+  publicationIds: string[];
+  publicationJobIds: string[];
+  storeIds: string[];
+  publicationCount: number;
+  publicationJobCount: number;
+  gatewayRequestCount: number;
+  mappingCount: number;
+  productLinkCount: number;
+  mediaDeliveryCount: number;
+  activeLeaseCount: number;
+  activeSlotCount: number;
+  activeStatusRefreshCount: number;
+};
+
+export type OzonAutomaticPreparationReplanTarget = {
+  id: string;
+  rowVersion: number;
+  configVersion: number;
+  credentialVersionId: string;
+  presetId: string;
+  presetRowVersion: number;
+  presetDefinitionHash: string;
+  presetSnapshotHash: string;
+  publicationMode: 'CREATE_ONLY' | 'COMPATIBLE_UPSERT';
+  warehouseId: string;
+  fulfillmentMode: 'FBS' | 'RFBS';
+  accountCurrency: 'RUB' | 'CNY';
+  expectedOfferIds: string[];
+  categoryKey: string;
+  expectedPublishedCategoryVersionId: string;
+  /** Dry-run raw snapshot audit; r2 identity fields intentionally make the worker raw hash differ. */
+  expectedProductSnapshotHash: string;
+  /** Replacement-identity-neutral product contract enforced by the worker. */
+  expectedProductContractHash: string;
+  expectedModeEvidenceHash: string;
+};
+
+export type OzonAutomaticPreparationReplanApplyInput = {
+  jobId: string;
+  expectedJobRowVersion: number;
+  requestId: string;
+  planHash: string;
+  expectedEvidenceHash: string;
+  expectedFanoutPlanHash: string;
+  expectedListingRowVersion: number;
+  expectedListingRevision: number;
+  expectedGeneratedVersionId: string;
+  expectedMaterialHash: string;
+  expectedDataSignature: string;
+  /** Audit source only: r2 intentionally changes generatedVersionId/revision and therefore the raw plan hash. */
+  expectedCurrentPlanHash: string;
+  /** Identity-neutral semantic CAS enforced again by the r2 worker before freeze. */
+  expectedPlanContractHash: string;
+  expectedSettingsRowVersion: number;
+  expectedRootDirectoryHash: string;
+  expectedVariantColorAuthorityHash: string;
+  targetStores: OzonAutomaticPreparationReplanTarget[];
 };
 
 export type OzonPrePlanRecoveryRearmInput = {
@@ -1678,6 +1769,286 @@ export class OzonRepository {
   }
 
   /**
+   * Read-only admission evidence for replacing a frozen fan-out that stopped in
+   * LOCAL_VALIDATION. Unlike PRE_PLAN recovery, linked publication rows are
+   * expected here; they are admissible only when every row is a local-only
+   * failed attempt and no platform, gateway, mapping, package or lease evidence
+   * exists.
+   */
+  async getAutomaticPreparationReplanEvidence(jobId: string): Promise<OzonAutomaticPreparationReplanEvidence> {
+    return getAutomaticPreparationReplanEvidenceWithClient(this.requirePool(), jobId);
+  }
+
+  /**
+   * Atomically supersedes an immutable, locally failed fan-out with a new shared
+   * material revision. The old preparation/publications remain as audit rows;
+   * no old frozen snapshot or task identity is reused.
+   */
+  async replaceAutomaticPreparationWithCurrentPreset(
+    input: OzonAutomaticPreparationReplanApplyInput
+  ): Promise<{ job: OzonPublishJob; supersededJob: OzonPublishJob; idempotent: boolean }> {
+    if (!/^sha256:[a-f0-9]{64}$/.test(input.planHash)
+      || !/^sha256:[a-f0-9]{64}$/.test(input.expectedEvidenceHash)
+      || !/^sha256:[a-f0-9]{64}$/.test(input.expectedFanoutPlanHash)
+      || !/^sha256:[a-f0-9]{64}$/.test(input.expectedMaterialHash)
+      || !/^sha256:[a-f0-9]{64}$/.test(input.expectedDataSignature)
+      || !/^sha256:[a-f0-9]{64}$/.test(input.expectedCurrentPlanHash)
+      || !/^sha256:[a-f0-9]{64}$/.test(input.expectedPlanContractHash)
+      || !/^sha256:[a-f0-9]{64}$/.test(input.expectedRootDirectoryHash)
+      || !/^sha256:[a-f0-9]{64}$/.test(input.expectedVariantColorAuthorityHash)
+      || !Number.isSafeInteger(input.expectedSettingsRowVersion) || input.expectedSettingsRowVersion < 1
+      || !/^[0-9a-f-]{36}$/i.test(input.requestId)
+      || !input.targetStores.length) {
+      throw new AppError('CONFIG_INVALID', 'OZON 当前预设重建合同不完整', { jobId: input.jobId }, 409);
+    }
+    const sku = normalizeSku((await this.getJob(input.jobId, 'AUTO')).sku);
+    return this.transaction(async (client) => {
+      await lockSkuJob(client, sku);
+      const originalResult = await client.query<SqlRow>('SELECT * FROM ozon_publish_jobs WHERE id=$1 FOR UPDATE', [input.jobId]);
+      const original = originalResult.rows[0];
+      if (!original || String(original.sku) !== sku || String(original.source) !== 'AUTO'
+        || String(original.task_kind) !== 'SHARED_PREPARATION') {
+        throw new AppError('VERSION_CONFLICT', 'OZON 原共享准备任务身份已变化', { jobId: input.jobId }, 409);
+      }
+      const originalPayload = jsonObject(original.payload);
+      const priorReplacement = jsonObject(originalPayload.replanReplacement);
+      if (String(priorReplacement.requestId || '') === input.requestId
+        && String(priorReplacement.planHash || '') === input.planHash
+        && String(priorReplacement.replacementPreparationJobId || '')) {
+        const replacement = await client.query<SqlRow>(
+          'SELECT * FROM ozon_publish_jobs WHERE id=$1 AND task_kind=\'SHARED_PREPARATION\'',
+          [String(priorReplacement.replacementPreparationJobId)]
+        );
+        if (!replacement.rows[0]) {
+          throw new AppError('VERSION_CONFLICT', 'OZON 重建幂等记录缺少替代任务', {
+            jobId: input.jobId,
+            replacementPreparationJobId: priorReplacement.replacementPreparationJobId
+          }, 409);
+        }
+        return { job: toJob(replacement.rows[0]), supersededJob: toJob(original), idempotent: true };
+      }
+      if (Object.keys(priorReplacement).length) {
+        throw new AppError('VERSION_CONFLICT', 'OZON 原任务已由其他重建请求替代', {
+          jobId: input.jobId,
+          replacementPreparationJobId: priorReplacement.replacementPreparationJobId
+        }, 409);
+      }
+      const frozen = jsonObject(originalPayload.fanoutPlan);
+      if (Number(original.row_version) !== input.expectedJobRowVersion
+        || !['NEEDS_ATTENTION', 'FAILED'].includes(String(original.state))
+        || originalPayload.multistorePreparation !== true
+        || String(frozen.planHash || '') !== input.expectedFanoutPlanHash) {
+        throw new AppError('VERSION_CONFLICT', 'OZON 原冻结准备任务在提交前已变化', { jobId: input.jobId }, 409);
+      }
+
+      // Task/publication-bound gateway intents take this same advisory before
+      // locking their child rows. Recovery already owns the parent row and
+      // never asks a gateway transaction to lock it, so the order is acyclic:
+      // recovery parent -> advisory -> children; gateway advisory -> children.
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
+        ozonPreparationGatewayBoundaryLockKey(input.jobId)
+      ]);
+
+      const evidence = await getAutomaticPreparationReplanEvidenceWithClient(client, input.jobId, { lock: true });
+      if (!evidence.safe || evidence.evidenceHash !== input.expectedEvidenceHash) {
+        throw new AppError('OZON_READBACK_REQUIRED', 'OZON 重建提交前发现远端、租约或本地身份漂移', {
+          jobId: input.jobId,
+          blockers: evidence.blockers,
+          expectedEvidenceHash: input.expectedEvidenceHash,
+          actualEvidenceHash: evidence.evidenceHash
+        }, 409);
+      }
+
+      const listingResult = await client.query<SqlRow>('SELECT * FROM ozon_listing_drafts WHERE sku=$1 FOR UPDATE', [sku]);
+      const listingRow = listingResult.rows[0];
+      const versionResult = await client.query<SqlRow>(`SELECT * FROM ozon_listing_versions
+        WHERE id=$1 AND sku=$2 AND revision=$3 FOR SHARE`, [
+        input.expectedGeneratedVersionId, sku, input.expectedListingRevision
+      ]);
+      const version = versionResult.rows[0];
+      const versionMetadata = jsonObject(jsonObject(version?.snapshot).sharedMaterialMetadata);
+      if (!listingRow || String(listingRow.management_source) !== 'AUTO'
+        || Number(listingRow.row_version) !== input.expectedListingRowVersion
+        || Number(listingRow.revision) !== input.expectedListingRevision
+        || !version
+        || String(version.material_hash || '') !== input.expectedMaterialHash
+        || String(versionMetadata.dataSignature || '') !== input.expectedDataSignature) {
+        throw new AppError('VERSION_CONFLICT', 'OZON 当前公共素材版本在重建提交前已变化', { sku }, 409);
+      }
+
+      await assertAutomaticPreparationReplanTargets(client, input);
+      const activeShared = await client.query<SqlRow>(`SELECT id,state FROM ozon_publish_jobs
+        WHERE sku=$1 AND task_kind='SHARED_PREPARATION' AND id<>$2
+          AND state=ANY($3::text[]) FOR UPDATE`, [sku, input.jobId, ACTIVE_JOB_STATES]);
+      if (activeShared.rows[0]) {
+        throw new AppError('TASK_LOCKED', 'OZON 当前 SKU 已有其他活动共享准备任务', {
+          sku, jobId: activeShared.rows[0].id, state: activeShared.rows[0].state
+        }, 409);
+      }
+
+      const supersededPublications = evidence.publicationIds.length
+        ? (await client.query<SqlRow>(`SELECT id,store_id,status,row_version,error_code,error_message
+            FROM ozon_store_publications WHERE id=ANY($1::uuid[]) ORDER BY id`, [evidence.publicationIds])).rows
+        : [];
+      const supersededPublicationJobs = evidence.publicationJobIds.length
+        ? (await client.query<SqlRow>(`SELECT id,publication_id,state,row_version,last_error_code,last_error_message
+            FROM ozon_publish_jobs WHERE id=ANY($1::uuid[]) ORDER BY id`, [evidence.publicationJobIds])).rows
+        : [];
+      const originalFailureAudit = {
+        parent: {
+          id: String(original.id),
+          state: String(original.state),
+          rowVersion: Number(original.row_version),
+          errorCode: String(original.last_error_code || ''),
+          errorMessage: String(original.last_error_message || '')
+        },
+        publications: supersededPublications.map((row) => ({
+          id: String(row.id),
+          storeId: String(row.store_id || ''),
+          status: String(row.status),
+          rowVersion: Number(row.row_version),
+          errorCode: String(row.error_code || ''),
+          errorMessage: String(row.error_message || '')
+        })),
+        publicationJobs: supersededPublicationJobs.map((row) => ({
+          id: String(row.id),
+          publicationId: String(row.publication_id || ''),
+          state: String(row.state),
+          rowVersion: Number(row.row_version),
+          errorCode: String(row.last_error_code || ''),
+          errorMessage: String(row.last_error_message || '')
+        }))
+      };
+
+      const replacementJobId = deterministicOzonPreparationReplacementJobId(input.jobId, input.requestId);
+      const replacementAt = new Date().toISOString();
+      const replacementMarker = {
+        schemaVersion: 1,
+        recoveryMode: 'REPLAN_WITH_CURRENT_PRESET',
+        requestId: input.requestId,
+        planHash: input.planHash,
+        evidenceHash: input.expectedEvidenceHash,
+        expectedCurrentPlanHash: input.expectedCurrentPlanHash,
+        expectedPlanContractHash: input.expectedPlanContractHash,
+        expectedSettingsRowVersion: input.expectedSettingsRowVersion,
+        expectedRootDirectoryHash: input.expectedRootDirectoryHash,
+        expectedVariantColorAuthorityHash: input.expectedVariantColorAuthorityHash,
+        supersededPreparationJobId: input.jobId,
+        replacementPreparationJobId: replacementJobId,
+        supersededPublicationIds: evidence.publicationIds,
+        supersededPublicationJobIds: evidence.publicationJobIds,
+        originalFailureAudit,
+        replacedAt: replacementAt
+      };
+
+      await client.query(`UPDATE ozon_publish_jobs SET
+        payload=payload || jsonb_build_object('replanReplacement',$2::jsonb),
+        row_version=row_version+1,updated_at=NOW()
+        WHERE id=$1`, [input.jobId, JSON.stringify(replacementMarker)]);
+
+      const supersededChildPayload = {
+        ...replacementMarker,
+        originalErrorPreserved: true
+      };
+      if (evidence.publicationJobIds.length) {
+        await client.query(`UPDATE ozon_publish_jobs SET
+          payload=payload || jsonb_build_object('replanReplacement',$2::jsonb),
+          row_version=row_version+1,updated_at=NOW()
+          WHERE id=ANY($1::uuid[])`, [evidence.publicationJobIds, JSON.stringify(supersededChildPayload)]);
+      }
+      if (evidence.publicationIds.length) {
+        await client.query(`UPDATE ozon_store_publications SET
+          result_json=result_json || jsonb_build_object('replanReplacement',$2::jsonb),
+          row_version=row_version+1,updated_at=NOW()
+          WHERE id=ANY($1::uuid[])`, [evidence.publicationIds, JSON.stringify(supersededChildPayload)]);
+      }
+
+      const updatedListingResult = await client.query<SqlRow>(`UPDATE ozon_listing_drafts SET
+        status='READY',revision=revision+1,row_version=row_version+1,last_task_id=NULL,
+        last_error_code=NULL,last_error_message=NULL,updated_at=NOW()
+        WHERE sku=$1 AND row_version=$2 RETURNING *`, [sku, input.expectedListingRowVersion]);
+      const updatedListingRow = updatedListingResult.rows[0];
+      if (!updatedListingRow) throw new AppError('TASK_LOCKED', 'OZON 公共素材重建 CAS 未命中', { sku }, 409);
+      const replacementVersionRow = await insertSharedMaterialVersion(client, updatedListingRow);
+      const replacementListing = withSharedMaterialVersion(updatedListingRow, replacementVersionRow);
+      const replacementDataSignature = String((replacementListing as OzonListingDraft & { dataSignature?: string }).dataSignature || '');
+      if (!replacementListing.generatedVersionId || !replacementListing.materialHash || !replacementDataSignature) {
+        throw new AppError('VERSION_CONFLICT', 'OZON 重建后的稳定公共素材合同不完整', { sku }, 409);
+      }
+
+      const replacementPayload = sanitizePersistentJobPayload({ ...originalPayload });
+      for (const key of [
+        'fanoutPlan', 'fanoutSummary', 'multistoreFanout', 'networkRecovery', 'prePlanRecovery',
+        'recoveryHold', 'platformWriteAttempted', 'importIntent', 'importTaskId', 'gatewayRequestRef',
+        'gatewayUnknown', 'priceStockWriteProgress', 'productJsonGenerated', 'productJsonPath',
+        'packageSignature', 'directorySignature'
+      ]) delete replacementPayload[key];
+      Object.assign(replacementPayload, {
+        generatedVersionId: replacementListing.generatedVersionId,
+        materialHash: replacementListing.materialHash,
+        materialHashVersion: replacementListing.materialHashVersion,
+        contentPolicyVersion: replacementListing.contentPolicyVersion,
+        sharedMaterialPreparation: {
+          schemaVersion: 1,
+          preparedByJobId: replacementJobId,
+          listingRowVersion: replacementListing.rowVersion,
+          listingRevision: replacementListing.revision,
+          dataSignature: replacementDataSignature,
+          mediaSignature: String(jsonObject(originalPayload.sharedMaterialPreparation).mediaSignature || originalPayload.mediaSignature || ''),
+          reusedFromPreparationJobId: input.jobId
+        },
+        replanRecovery: {
+          ...replacementMarker,
+          generatedVersionId: replacementListing.generatedVersionId,
+          revision: replacementListing.revision,
+          targetStores: input.targetStores
+        }
+      });
+      const offerIds = normalizeOfferIds((Array.isArray(updatedListingRow.data?.offers) ? updatedListingRow.data.offers : [])
+        .map((offer: unknown) => jsonObject(offer).offerId));
+      const stageStates = {
+        import: 'PENDING', moderation: 'PENDING', images: 'LOCAL_READY', video: 'LOCAL_READY', price: 'PENDING', stock: 'PENDING'
+      };
+      const replacementJobResult = await client.query<SqlRow>(`INSERT INTO ozon_publish_jobs(
+          id,sku,state,source,payload,stage_states,row_version,store_alias,offer_ids,product_links,
+          directory_stage,work_rel_path,listing_revision,store_id,task_kind
+        ) VALUES($1,$2,'READY','AUTO',$3::jsonb,$4::jsonb,1,$5,$6::jsonb,'[]'::jsonb,
+          'INBOX',$7,$8,$9,'SHARED_PREPARATION') RETURNING *`, [
+        replacementJobId, sku, JSON.stringify(replacementPayload), JSON.stringify(stageStates),
+        String(original.store_alias), JSON.stringify(offerIds), portableRelPath('inbox', sku),
+        replacementListing.revision, original.store_id
+      ]);
+      const replacementJobRow = replacementJobResult.rows[0];
+      if (!replacementJobRow) throw new AppError('VERSION_CONFLICT', 'OZON 替代共享准备任务创建失败', { sku }, 409);
+
+      const reboundMedia = await client.query(OZON_AUTOMATIC_REPLAN_MEDIA_REBIND_SQL, [
+        input.jobId, replacementJobId, sku, input.requestId, input.planHash, input.expectedEvidenceHash, replacementAt
+      ]);
+      if (Number(reboundMedia.rowCount || 0) !== evidence.mediaDeliveryCount) {
+        throw new AppError('OZON_MEDIA_DELIVERY_IDENTITY_DRIFT', 'OZON 重建时媒体投递账本数量已变化', {
+          expected: evidence.mediaDeliveryCount,
+          actual: Number(reboundMedia.rowCount || 0)
+        }, 409);
+      }
+      await addEvent(client, input.jobId, 'AUTO_PREPARATION_SUPERSEDED_BY_REPLAN', String(original.state), String(original.state),
+        '原冻结 fan-out 已保留，并由当前预设创建新的共享准备 revision', replacementMarker);
+      for (const childJobId of evidence.publicationJobIds) {
+        await addEvent(client, childJobId, 'MULTISTORE_PUBLICATION_SUPERSEDED_BY_REPLAN', undefined, undefined,
+          '本地校验失败的旧 publication 已由当前预设重建任务替代', replacementMarker);
+      }
+      await addEvent(client, replacementJobId, 'AUTO_PREPARATION_REPLAN_CREATED', undefined, 'READY',
+        '已使用当前店铺预设创建新的共享准备 revision，旧任务与冻结快照保持可追溯', replacementMarker);
+
+      const supersededResult = await client.query<SqlRow>('SELECT * FROM ozon_publish_jobs WHERE id=$1', [input.jobId]);
+      return {
+        job: toJob(replacementJobRow),
+        supersededJob: toJob(supersededResult.rows[0]!),
+        idempotent: false
+      };
+    });
+  }
+
+  /**
    * Final PRE_PLAN commit gate. Every mutable local authority used by the
    * read-only remote proof is locked and compared in one transaction before the
    * original preparation job is re-armed. No publication or sibling job is
@@ -2017,6 +2388,7 @@ export class OzonRepository {
     const parsed = ozonCategoryTemplateInputSchema.safeParse(input);
     if (!parsed.success) throw validationError(parsed.error.issues);
     const value = parsed.data;
+    assertOzonCategorySizingSnapshot(value);
     return this.transaction(async (client) => {
       const versionId = randomUUID();
       try {
@@ -2041,6 +2413,7 @@ export class OzonRepository {
     const parsed = ozonCategoryTemplateInputSchema.safeParse({ ...(input as Record<string, unknown>), categoryKey });
     if (!parsed.success) throw validationError(parsed.error.issues);
     const value = parsed.data;
+    assertOzonCategorySizingSnapshot(value);
     return this.transaction(async (client) => {
       const category = await client.query<SqlRow>('SELECT * FROM ozon_category_templates WHERE category_key=$1 FOR UPDATE', [categoryKey]);
       if (!category.rows[0]) throw new AppError('NOT_FOUND', 'OZON 类目模板不存在', { categoryKey }, 404);
@@ -2101,12 +2474,26 @@ export class OzonRepository {
           actualCount: order.attributeKeys.length
         }, 409);
       }
+      const sizing = order.sizing || snapshot.sizing;
+      if (sizing.sizeMode === 'sized') {
+        const sizeCandidateKeys = new Set(ozonCategorySizeAttributeCandidates(snapshot.attributes)
+          .map((attribute) => `${attribute.id}:${attribute.complexId}`));
+        if (!sizing.sizeAttributeKey || !sizeCandidateKeys.has(sizing.sizeAttributeKey)) {
+          throw new AppError('CONFIG_INVALID', '所选 OZON 尺码属性不是当前类目的有效尺码字段', {
+            categoryKey,
+            sizeAttributeKey: sizing.sizeAttributeKey,
+            candidates: [...sizeCandidateKeys]
+          }, 409);
+        }
+      }
       const value: OzonCategoryTemplateInput = {
         ...snapshot,
         categoryKey,
         media: { defaultVideoUploadMode: order.defaultVideoUploadMode },
+        sizing,
         attributes: order.attributeKeys.map((key) => attributesByKey.get(key)!)
       };
+      assertOzonCategorySizingSnapshot(value);
 
       if (!draftId) {
         const max = await client.query<{ version_no: string }>('SELECT COALESCE(MAX(version_no),0) version_no FROM ozon_category_template_versions WHERE category_key=$1', [categoryKey]);
@@ -2139,6 +2526,10 @@ export class OzonRepository {
       if (!category.rows[0]) throw new AppError('NOT_FOUND', 'OZON 类目模板不存在', { categoryKey }, 404);
       const draftId = category.rows[0].draft_version_id as string | null;
       if (!draftId) throw new AppError('CONFIG_INVALID', '没有可发布的 OZON 类目草稿', { categoryKey }, 409);
+      const draft = await client.query<{ snapshot: unknown }>('SELECT snapshot FROM ozon_category_template_versions WHERE id=$1 AND status=\'DRAFT\'', [draftId]);
+      const snapshot = ozonCategoryTemplateInputSchema.safeParse(draft.rows[0]?.snapshot);
+      if (!snapshot.success) throw new AppError('CONFIG_INVALID', 'OZON 类目草稿快照无效，请先刷新模板', { categoryKey }, 409);
+      assertOzonCategorySizingSnapshot(snapshot.data);
       await client.query(`UPDATE ozon_category_template_versions SET status='ARCHIVED',updated_at=NOW() WHERE category_key=$1 AND status='PUBLISHED'`, [categoryKey]);
       await client.query(`
         UPDATE ozon_category_template_versions
@@ -2401,11 +2792,14 @@ export class OzonRepository {
     if (!parsed.success) throw validationError(parsed.error.issues);
     const definition = parsed.data;
     const id = randomUUID();
-    const result = await this.query<SqlRow>(`
-      INSERT INTO ozon_listing_presets(id,name,description,row_version,definition)
-      VALUES($1,$2,$3,1,$4::jsonb) RETURNING *`,
-    [id, definition.name, definition.description, JSON.stringify(definition)]);
-    return toPreset(result.rows[0]!);
+    return this.transaction(async (client) => {
+      await assertOzonPresetMatchesPublishedCategory(client, definition);
+      const result = await client.query<SqlRow>(`
+        INSERT INTO ozon_listing_presets(id,name,description,row_version,definition)
+        VALUES($1,$2,$3,1,$4::jsonb) RETURNING *`,
+      [id, definition.name, definition.description, JSON.stringify(definition)]);
+      return toPreset(result.rows[0]!);
+    });
   }
 
   async updatePreset(id: string, input: unknown): Promise<OzonPreset> {
@@ -2418,6 +2812,7 @@ export class OzonRepository {
       if (Number(current.rows[0].row_version) !== rowVersion) {
         throw new AppError('TASK_LOCKED', 'OZON 预设已被其他操作更新，请刷新后重试', { id, expected: rowVersion, actual: Number(current.rows[0].row_version) }, 409);
       }
+      await assertOzonPresetMatchesPublishedCategory(client, definition);
       const result = await client.query<SqlRow>(`
         UPDATE ozon_listing_presets
         SET name=$2,description=$3,definition=$4::jsonb,row_version=row_version+1,updated_at=NOW()
@@ -6661,6 +7056,13 @@ export class OzonRepository {
 
   async recheck(id: string, source?: 'MANUAL' | 'AUTO', expectedRowVersion?: number): Promise<OzonPublishJob> {
     const job = await this.getJob(id, source);
+    const replanReplacement = jsonObject(jsonObject(job.payload).replanReplacement);
+    if (String(replanReplacement.replacementPreparationJobId || '')) {
+      throw new AppError('TASK_LOCKED', 'OZON 旧任务已由当前预设重建任务替代，禁止再次重检', {
+        id,
+        replacementPreparationJobId: replanReplacement.replacementPreparationJobId
+      }, 409);
+    }
     if (jsonObject(jsonObject(job.payload).recoveryHold).active === true) {
       throw new AppError('TASK_LOCKED', 'OZON 定向恢复任务仍处于安全 hold，必须使用专用 release 流程', {
         id,
@@ -7242,6 +7644,138 @@ export class OzonRepository {
       client.release();
     }
   }
+}
+
+function assertOzonCategorySizingSnapshot(snapshot: OzonCategoryTemplateInput): void {
+  if (snapshot.sizing.sizeMode !== 'sized') return;
+  const sizeAttributeKey = snapshot.sizing.sizeAttributeKey;
+  const candidate = ozonCategorySizeAttributeCandidates(snapshot.attributes)
+    .find((attribute) => `${attribute.id}:${attribute.complexId}` === sizeAttributeKey);
+  if (!candidate) {
+    throw new AppError('CONFIG_INVALID', '所选 OZON 尺码属性不是当前类目的有效顶层尺码字段', {
+      categoryKey: snapshot.categoryKey,
+      sizeAttributeKey,
+      candidates: ozonCategorySizeAttributeCandidates(snapshot.attributes)
+        .map((attribute) => `${attribute.id}:${attribute.complexId}`)
+    }, 409);
+  }
+  if (!candidate.dictionaryId) return;
+  const values = snapshot.dictionarySnapshot[String(candidate.id)] || [];
+  const valueIds = values.map((value) => value.id);
+  const lacksBilingualValue = values.some((value) => !value.valueRu?.trim() || !value.valueZh?.trim());
+  if (!values.length || lacksBilingualValue
+    || valueIds.some((id) => !Number.isSafeInteger(id) || id < 1)
+    || new Set(valueIds).size !== valueIds.length) {
+    throw new AppError('CONFIG_INVALID', '字典型 OZON 尺码属性缺少完整、唯一的值快照，请刷新类目后重试', {
+      categoryKey: snapshot.categoryKey,
+      attributeId: candidate.id,
+      dictionaryId: candidate.dictionaryId,
+      valueCount: values.length
+    }, 409);
+  }
+}
+
+async function assertOzonPresetMatchesPublishedCategory(client: PoolClient, definition: OzonPresetInput): Promise<void> {
+  const result = await client.query<{ snapshot: unknown }>(`
+    SELECT version.snapshot
+    FROM ozon_category_templates category
+    JOIN ozon_category_template_versions version ON version.id=category.published_version_id
+    WHERE category.category_key=$1 AND version.status='PUBLISHED'
+    LIMIT 1
+    FOR SHARE OF category, version`, [definition.categoryKey]);
+  if (!result.rows[0]) {
+    throw new AppError('CONFIG_INVALID', '所选 OZON 类目模板不存在或尚未发布', { categoryKey: definition.categoryKey }, 409);
+  }
+  const parsed = ozonCategoryTemplateInputSchema.safeParse(result.rows[0].snapshot);
+  if (!parsed.success) {
+    throw new AppError('CONFIG_INVALID', '所选 OZON 类目的已发布快照无效，请刷新并重新发布类目', {
+      categoryKey: definition.categoryKey
+    }, 409);
+  }
+  assertOzonPresetDefinitionMatchesCategory(definition, parsed.data);
+}
+
+export function assertOzonPresetDefinitionMatchesCategory(
+  definition: OzonPresetInput,
+  snapshot: OzonCategoryTemplateInput
+): void {
+  if (definition.categoryKey !== snapshot.categoryKey) {
+    throw new AppError('CONFIG_INVALID', 'OZON 预设与已发布类目快照的身份不一致', {
+      expected: definition.categoryKey,
+      actual: snapshot.categoryKey
+    }, 409);
+  }
+  assertOzonCategorySizingSnapshot(snapshot);
+  if (snapshot.sizing.sizeMode === 'sizeless') {
+    if (definition.sizeAttributeKey) {
+      throw new AppError('CONFIG_INVALID', '当前 OZON 类目按无尺码商品发布，预设不能保留尺码属性', {
+        categoryKey: definition.categoryKey,
+        sizeAttributeKey: definition.sizeAttributeKey
+      }, 409);
+    }
+    assertOzonPresetRequiredAttributeCoverage(definition, snapshot);
+    return;
+  }
+  const sizeAttributeKey = snapshot.sizing.sizeAttributeKey!;
+  if (definition.sizeAttributeKey !== sizeAttributeKey) {
+    throw new AppError('CONFIG_INVALID', 'OZON 预设的尺码属性必须与已发布类目规则一致', {
+      categoryKey: definition.categoryKey,
+      expected: sizeAttributeKey,
+      actual: definition.sizeAttributeKey
+    }, 409);
+  }
+  const sizeAttribute = snapshot.attributes.find((attribute) => `${attribute.id}:${attribute.complexId}` === sizeAttributeKey)!;
+  const duplicated = [...definition.sharedAttributes, ...definition.variantAttributes]
+    .some((attribute) => `${attribute.attributeId}:${attribute.complexId}` === sizeAttributeKey);
+  if (duplicated) {
+    throw new AppError('CONFIG_INVALID', 'OZON 尺码属性只能由“尺码与默认库存”管理，不能在普通目录属性中重复提交', {
+      categoryKey: definition.categoryKey,
+      sizeAttributeKey
+    }, 409);
+  }
+  assertOzonPresetRequiredAttributeCoverage(definition, snapshot);
+  if (!sizeAttribute.dictionaryId) {
+    if (definition.sizes.some((size) => /^dict:\d+$/.test(size.value))) {
+      throw new AppError('CONFIG_INVALID', '当前 OZON 尺码属性不是字典类型，请填写文本尺码值', {
+        categoryKey: definition.categoryKey,
+        sizeAttributeKey
+      }, 409);
+    }
+    return;
+  }
+  const allowedIds = new Set((snapshot.dictionarySnapshot[String(sizeAttribute.id)] || []).map((value) => value.id));
+  for (const [index, size] of definition.sizes.entries()) {
+    const match = /^dict:([1-9]\d*)$/.exec(size.value);
+    const valueId = match ? Number(match[1]) : 0;
+    if (!valueId || !allowedIds.has(valueId)) {
+      throw new AppError('CONFIG_INVALID', `OZON 尺码第 ${index + 1} 行不是当前类目快照中的有效字典值`, {
+        categoryKey: definition.categoryKey,
+        sizeAttributeKey,
+        value: size.value
+      }, 409);
+    }
+  }
+}
+
+function assertOzonPresetRequiredAttributeCoverage(
+  definition: OzonPresetInput,
+  snapshot: OzonCategoryTemplateInput
+): void {
+  const requiredAttributeCoverage = projectOzonPresetRequiredAttributeCoverage(snapshot, definition);
+  const missingRequiredAttributes = findUncoveredOzonPresetRequiredAttributes(snapshot, definition);
+  if (!missingRequiredAttributes.length) return;
+  throw new AppError(
+    'CONFIG_INVALID',
+    `OZON 上品预设缺少必填目录属性：${missingRequiredAttributes.map((attribute) => (
+      `${attribute.nameZh || attribute.nameRu || attribute.name} / ${attribute.nameRu || attribute.name} · #${attribute.attributeId}`
+    )).join('；')}`,
+    {
+      categoryKey: definition.categoryKey,
+      missingRequiredAttributes,
+      requiredAttributeCoverage
+    },
+    409
+  );
 }
 
 export function markChangedOzonDescriptionsManual<T extends Omit<OzonListingDraft['data'], never>>(
@@ -7945,6 +8479,236 @@ async function getAutomaticPreparationRecoveryEvidenceWithClient(
     activeSlot: Boolean(row.active_slot),
     activeStatusRefresh: Boolean(row.active_status_refresh)
   };
+}
+
+async function getAutomaticPreparationReplanEvidenceWithClient(
+  client: Pick<PoolClient, 'query'> | Pool,
+  jobId: string,
+  options: { lock?: boolean } = {}
+): Promise<OzonAutomaticPreparationReplanEvidence> {
+  const lock = options.lock ? ' FOR UPDATE' : '';
+  const parentResult = await client.query<SqlRow>(`SELECT * FROM ozon_publish_jobs WHERE id=$1${lock}`, [jobId]);
+  const parent = parentResult.rows[0];
+  if (!parent) throw new AppError('NOT_FOUND', 'OZON 自动准备任务不存在', { jobId }, 404);
+  const payload = jsonObject(parent.payload);
+  const fanoutPlan = jsonObject(payload.fanoutPlan);
+  const publications = (await client.query<SqlRow>(`SELECT * FROM ozon_store_publications
+    WHERE preparation_job_id=$1 ORDER BY store_id,id${lock}`, [jobId])).rows;
+  const publicationIds = publications.map((row) => String(row.id));
+  const publicationJobs = publicationIds.length
+    ? (await client.query<SqlRow>(`SELECT * FROM ozon_publish_jobs
+        WHERE publication_id=ANY($1::uuid[]) ORDER BY publication_id,id${lock}`, [publicationIds])).rows
+    : [];
+  const publicationJobIds = publicationJobs.map((row) => String(row.id));
+  const allJobIds = [jobId, ...publicationJobIds];
+  const mediaRows = (await client.query<SqlRow>(`SELECT * FROM ozon_media_deliveries
+    WHERE job_id=$1 AND sku=$2 ORDER BY source_stage_id,submission_id,variant_id${lock}`, [jobId, parent.sku])).rows;
+  const gatewayRequestCount = Number((await client.query<{ count: string }>(`SELECT COUNT(*) count FROM ozon_gateway_requests
+      WHERE publication_id=ANY($1::uuid[]) OR task_id=ANY($2::text[])`, [
+    publicationIds,
+    [String(parent.task_id || ''), ...publicationJobs.map((row) => String(row.task_id || ''))].filter(Boolean)
+  ])).rows[0]?.count || 0);
+  const mappingCount = Number((await client.query<{ count: string }>(`SELECT COUNT(*) count FROM ozon_product_mappings
+    WHERE sku=$1 AND (NULLIF(ozon_product_id,'') IS NOT NULL OR NULLIF(ozon_sku,'') IS NOT NULL
+      OR last_verified_at IS NOT NULL)`, [parent.sku])).rows[0]?.count || 0);
+  const activeSlotCount = Number((await client.query<{ count: string }>(`SELECT COUNT(*) count FROM ozon_publish_slots
+    WHERE job_id=ANY($1::uuid[]) AND lease_expires_at>NOW()`, [allJobIds])).rows[0]?.count || 0);
+  const activeStatusRefreshCount = Number((await client.query<{ count: string }>(`SELECT COUNT(*) count
+    FROM ozon_platform_status_refresh_leases WHERE sku=$1 AND lease_expires_at>NOW()`, [parent.sku])).rows[0]?.count || 0);
+
+  const blockers: string[] = [];
+  if (String(parent.source) !== 'AUTO' || String(parent.task_kind) !== 'SHARED_PREPARATION'
+    || payload.multistorePreparation !== true) blockers.push('TASK_NOT_SHARED_AUTOMATIC_PREPARATION');
+  if (!['NEEDS_ATTENTION', 'FAILED'].includes(String(parent.state))) blockers.push('PREPARATION_STATE_NOT_REPLANABLE');
+  if (!/^sha256:[a-f0-9]{64}$/.test(String(fanoutPlan.planHash || ''))) blockers.push('FROZEN_FANOUT_PLAN_MISSING');
+  if (parent.import_task_id || parent.ozon_product_id || parent.directory_signature
+    || ['PROCESSING', 'SUCCESS'].includes(String(parent.directory_stage || '').toUpperCase())
+    || payload.platformWriteAttempted === true || Object.keys(jsonObject(payload.networkRecovery)).length
+    || ozonPrePlanPayloadHasWriteCheckpoint(payload)) blockers.push('PREPARATION_REMOTE_OR_PACKAGE_EVIDENCE_PRESENT');
+  if (!publications.length) blockers.push('LOCAL_VALIDATION_PUBLICATION_MISSING');
+  if (publicationJobs.length !== publications.length) blockers.push('PUBLICATION_JOB_SET_INCOMPLETE');
+
+  for (const publication of publications) {
+    if (String(publication.source) !== 'AUTOMATION'
+      || String(publication.status) !== 'NEEDS_ATTENTION'
+      || publication.package_rel_path || publication.package_signature
+      || (Array.isArray(publication.product_ids) ? publication.product_ids.length : 0)
+      || (Array.isArray(publication.ozon_skus) ? publication.ozon_skus.length : 0)
+      || (Array.isArray(publication.product_links) ? publication.product_links.length : 0)
+      || Object.keys(jsonObject(publication.materialized_product_snapshot)).length) {
+      blockers.push(`PUBLICATION_NOT_LOCAL_VALIDATION_ONLY:${String(publication.id)}`);
+    }
+  }
+  for (const job of publicationJobs) {
+    const childPayload = jsonObject(job.payload);
+    if (!['NEEDS_ATTENTION', 'FAILED'].includes(String(job.state))
+      || String(job.task_kind) !== 'STORE_PUBLICATION'
+      || String(childPayload.attemptPhase || '') !== 'LOCAL_VALIDATION'
+      || job.import_task_id || job.ozon_product_id || job.directory_signature
+      || ['PROCESSING', 'SUCCESS'].includes(String(job.directory_stage || '').toUpperCase())
+      || (Array.isArray(job.product_links) ? job.product_links.length : 0)
+      || childPayload.platformWriteAttempted === true
+      || Object.keys(jsonObject(childPayload.networkRecovery)).length
+      || ozonPrePlanPayloadHasWriteCheckpoint(childPayload)) {
+      blockers.push(`PUBLICATION_JOB_NOT_LOCAL_VALIDATION_ONLY:${String(job.id)}`);
+    }
+  }
+  for (const media of mediaRows) {
+    const mediaPayload = jsonObject(media.payload);
+    if (!['ACCEPTED', 'DEFERRED'].includes(String(mediaPayload.autoPublishDecision || '').toUpperCase())
+      || normalizeOfferIds(mediaPayload.fanoutPublicationIds).length
+      || normalizeOfferIds(mediaPayload.fanoutStoreIds).length) {
+      blockers.push(`MEDIA_LEDGER_NOT_REPLANABLE:${String(media.source_stage_id)}:${String(media.submission_id)}:${String(media.variant_id || '')}`);
+    }
+  }
+  if (!mediaRows.length) blockers.push('MEDIA_LEDGER_MISSING');
+  if (gatewayRequestCount) blockers.push('GATEWAY_EVIDENCE_PRESENT');
+  if (mappingCount) blockers.push('PRODUCT_MAPPING_EVIDENCE_PRESENT');
+  if (activeSlotCount) blockers.push('ACTIVE_RUNTIME_SLOT_PRESENT');
+  if (activeStatusRefreshCount) blockers.push('ACTIVE_STATUS_REFRESH_PRESENT');
+  const jobsWithActiveLease = [parent, ...publicationJobs].filter((row) => (
+    Boolean(row.lease_owner || row.lease_token)
+      || (row.lease_expires_at && new Date(row.lease_expires_at).getTime() > Date.now())
+  ));
+  if (jobsWithActiveLease.length) blockers.push('ACTIVE_JOB_LEASE_PRESENT');
+
+  const productLinkCount = (Array.isArray(parent.product_links) ? parent.product_links.length : 0)
+    + publications.reduce((sum, row) => sum + (Array.isArray(row.product_links) ? row.product_links.length : 0), 0)
+    + publicationJobs.reduce((sum, row) => sum + (Array.isArray(row.product_links) ? row.product_links.length : 0), 0);
+  if (productLinkCount) blockers.push('PRODUCT_LINK_EVIDENCE_PRESENT');
+  const storeIds = [...new Set(publications.map((row) => String(row.store_id || '')).filter(Boolean))].sort();
+  const canonical = {
+    schemaVersion: 1,
+    recoveryMode: 'REPLAN_WITH_CURRENT_PRESET',
+    parent: {
+      id: String(parent.id),
+      sku: String(parent.sku),
+      rowVersion: Number(parent.row_version),
+      state: String(parent.state),
+      fanoutPlanHash: String(fanoutPlan.planHash || '')
+    },
+    publications: publications.map((row) => ({
+      id: String(row.id), storeId: String(row.store_id), rowVersion: Number(row.row_version),
+      status: String(row.status), planHash: String(row.plan_hash || ''),
+      plannedJobId: String(row.planned_job_id || ''), errorCode: String(row.error_code || '')
+    })),
+    publicationJobs: publicationJobs.map((row) => ({
+      id: String(row.id), publicationId: String(row.publication_id), rowVersion: Number(row.row_version),
+      state: String(row.state), taskId: String(row.task_id || ''),
+      attemptPhase: String(jsonObject(row.payload).attemptPhase || ''), errorCode: String(row.last_error_code || '')
+    })),
+    media: mediaRows.map((row) => ({
+      sourceStageId: String(row.source_stage_id), submissionId: String(row.submission_id),
+      variantId: String(row.variant_id || ''), decision: String(jsonObject(row.payload).autoPublishDecision || ''),
+      payloadHash: automaticMediaPayloadHash(row.payload)
+    })),
+    gatewayRequestCount,
+    mappingCount,
+    productLinkCount,
+    activeLeaseCount: jobsWithActiveLease.length,
+    activeSlotCount,
+    activeStatusRefreshCount,
+    blockers: [...new Set(blockers)].sort()
+  };
+  return {
+    safe: blockers.length === 0,
+    blockers: [...new Set(blockers)],
+    evidenceHash: `sha256:${createHash('sha256').update(stableJson(canonical)).digest('hex')}`,
+    originalJobId: String(parent.id),
+    originalJobRowVersion: Number(parent.row_version),
+    originalFanoutPlanHash: String(fanoutPlan.planHash || ''),
+    publicationIds,
+    publicationJobIds,
+    storeIds,
+    publicationCount: publications.length,
+    publicationJobCount: publicationJobs.length,
+    gatewayRequestCount,
+    mappingCount,
+    productLinkCount,
+    mediaDeliveryCount: mediaRows.length,
+    activeLeaseCount: jobsWithActiveLease.length,
+    activeSlotCount,
+    activeStatusRefreshCount
+  };
+}
+
+async function assertAutomaticPreparationReplanTargets(
+  client: PoolClient,
+  input: OzonAutomaticPreparationReplanApplyInput
+): Promise<void> {
+  const targets = input.targetStores;
+  const storeIds = targets.map((target) => target.id);
+  if (new Set(storeIds).size !== storeIds.length
+    || targets.some((target) => !target.expectedOfferIds.length
+      || new Set(target.expectedOfferIds).size !== target.expectedOfferIds.length
+      || !target.credentialVersionId || !target.presetId || !target.presetDefinitionHash || !target.presetSnapshotHash
+      || !target.categoryKey
+      || !/^[0-9a-f-]{36}$/i.test(target.expectedPublishedCategoryVersionId)
+      || !/^sha256:[a-f0-9]{64}$/.test(target.expectedProductSnapshotHash)
+      || !/^sha256:[a-f0-9]{64}$/.test(target.expectedProductContractHash)
+      || !/^sha256:[a-f0-9]{64}$/.test(target.expectedModeEvidenceHash))) {
+    throw new AppError('CONFIG_INVALID', 'OZON 当前预设重建目标合同不完整', { storeIds }, 409);
+  }
+  const stores = await client.query<SqlRow>(`SELECT * FROM ozon_stores
+    WHERE id=ANY($1::uuid[]) ORDER BY id FOR UPDATE`, [storeIds]);
+  const presetIds = targets.map((target) => target.presetId);
+  const presets = await client.query<SqlRow>(`SELECT id,row_version,definition FROM ozon_listing_presets
+    WHERE id=ANY($1::uuid[]) ORDER BY id FOR UPDATE`, [presetIds]);
+  const credentialIds = targets.map((target) => target.credentialVersionId);
+  const credentials = await client.query<SqlRow>(`SELECT id,store_id,status FROM ozon_store_credential_versions
+    WHERE id=ANY($1::uuid[]) ORDER BY id FOR UPDATE`, [credentialIds]);
+  const categoryKeys = [...new Set(targets.map((target) => target.categoryKey))];
+  const categories = await client.query<SqlRow>(`SELECT category_key,published_version_id FROM ozon_category_templates
+    WHERE category_key=ANY($1::text[]) ORDER BY category_key FOR SHARE`, [categoryKeys]);
+  const settings = (await client.query<SqlRow>(`SELECT row_version,root_directory FROM ozon_system_settings
+    WHERE id='default' FOR SHARE`)).rows[0];
+  if (stores.rows.length !== targets.length || presets.rows.length !== new Set(presetIds).size
+    || credentials.rows.length !== targets.length || categories.rows.length !== categoryKeys.length || !settings) {
+    throw new AppError('VERSION_CONFLICT', 'OZON 当前预设重建目标集合已变化', { storeIds }, 409);
+  }
+  const rootDirectoryHash = `sha256:${createHash('sha256').update(stableJson(String(settings.root_directory || ''))).digest('hex')}`;
+  if (Number(settings.row_version) !== input.expectedSettingsRowVersion
+    || rootDirectoryHash !== input.expectedRootDirectoryHash) {
+    throw new AppError('VERSION_CONFLICT', 'OZON 全局设置或发布根目录在重建提交前已变化', {
+      expectedSettingsRowVersion: input.expectedSettingsRowVersion,
+      actualSettingsRowVersion: Number(settings.row_version)
+    }, 409);
+  }
+  for (const expected of targets) {
+    const store = stores.rows.find((row) => String(row.id) === expected.id);
+    const preset = presets.rows.find((row) => String(row.id) === expected.presetId);
+    const credential = credentials.rows.find((row) => String(row.id) === expected.credentialVersionId);
+    const category = categories.rows.find((row) => String(row.category_key) === expected.categoryKey);
+    const presetSnapshotHash = preset
+      ? `sha256:${createHash('sha256').update(stableJson(jsonObject(preset.definition))).digest('hex')}`
+      : '';
+    if (!store || Number(store.row_version) !== expected.rowVersion
+      || Number(store.config_version) !== expected.configVersion
+      || String(store.active_credential_version_id || '') !== expected.credentialVersionId
+      || String(store.credential_binding_mode || '') !== 'VAULT'
+      || String(store.default_preset_id || '') !== expected.presetId
+      || !preset || Number(preset.row_version) !== expected.presetRowVersion
+      || presetSnapshotHash !== expected.presetSnapshotHash
+      || !credential || String(credential.store_id) !== expected.id || String(credential.status) !== 'ACTIVE'
+      || !category || String(category.published_version_id || '') !== expected.expectedPublishedCategoryVersionId
+      || String(store.auto_publish_mode || '') !== expected.publicationMode
+      || String(store.warehouse_id || '') !== expected.warehouseId
+      || String(store.fulfillment_mode || '') !== expected.fulfillmentMode
+      || String(store.account_currency || '') !== expected.accountCurrency
+      || store.enabled !== true || store.auto_publish_enabled !== true || store.archived_at) {
+      throw new AppError('VERSION_CONFLICT', 'OZON 店铺、凭据或当前预设在重建提交前已变化', {
+        storeId: expected.id
+      }, 409);
+    }
+  }
+}
+
+function deterministicOzonPreparationReplacementJobId(jobId: string, requestId: string): string {
+  const hex = createHash('sha256').update(`ozon-preparation-replacement\u0000${jobId}\u0000${requestId}`).digest('hex').slice(0, 32).split('');
+  hex[12] = '5';
+  hex[16] = ((Number.parseInt(hex[16]!, 16) & 0x3) | 0x8).toString(16);
+  const value = hex.join('');
+  return `${value.slice(0, 8)}-${value.slice(8, 12)}-${value.slice(12, 16)}-${value.slice(16, 20)}-${value.slice(20)}`;
 }
 
 function ozonPrePlanPayloadHasWriteCheckpoint(payloadInput: unknown): boolean {
@@ -9367,7 +10131,7 @@ function toJob(row: SqlRow): OzonPublishJob {
   const fanoutRaw = jsonObject(payload.fanoutSummary);
   const fanoutSummary: OzonPublishJob['fanoutSummary'] | undefined =
     ['NOT_STARTED', 'PLANNED', 'MATERIALIZING', 'PARTIAL', 'COMPLETED', 'NEEDS_ATTENTION', 'CANCELLED'].includes(String(fanoutRaw.phase))
-    && ['NONE', 'RECHECK', 'READBACK_REQUIRED', 'MANUAL_TAKEOVER'].includes(String(fanoutRaw.recoveryMode))
+    && ['NONE', 'RECHECK', 'REPLAN_WITH_CURRENT_PRESET', 'READBACK_REQUIRED', 'MANUAL_TAKEOVER'].includes(String(fanoutRaw.recoveryMode))
       ? {
           phase: fanoutRaw.phase as NonNullable<OzonPublishJob['fanoutSummary']>['phase'],
           targetStoreCount: Number(fanoutRaw.targetStoreCount || 0),

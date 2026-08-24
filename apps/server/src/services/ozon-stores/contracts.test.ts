@@ -59,6 +59,154 @@ describe('OZON staged store onboarding contract', () => {
       warehouseId: '', warehouseName: '', fulfillmentMode: 'FBS', accountCurrency: 'RUB', maxDailyStyles: 100
     });
   });
+
+  it('requires a default preset when a store is created with automatic publishing enabled', async () => {
+    const repository = { createStore: vi.fn() };
+    const ozon = { getPreset: vi.fn(), getCategory: vi.fn() };
+    const service = new OzonStoreService(repository as any, ozon as any, {} as any, {} as any);
+
+    await expect(service.createStore({
+      storeAlias: 'auto-without-preset',
+      displayName: 'Auto without preset',
+      autoPublishEnabled: true
+    })).rejects.toMatchObject({
+      code: 'CONFIG_INVALID',
+      message: '启用 OZON 自动上品前必须配置默认上品预设'
+    });
+    expect(ozon.getPreset).not.toHaveBeenCalled();
+    expect(repository.createStore).not.toHaveBeenCalled();
+  });
+
+  it('validates the effective preset state for partial automatic publishing updates', async () => {
+    const presetId = '10000000-0000-4000-8000-000000000092';
+    const currentStores = new Map<string, Record<string, unknown>>([
+      ['enable-missing', { autoPublishEnabled: false, defaultPresetId: null }],
+      ['clear-enabled', { autoPublishEnabled: true, defaultPresetId: presetId }],
+      ['enable-bound', { autoPublishEnabled: false, defaultPresetId: presetId }],
+      ['disable-clear', { autoPublishEnabled: true, defaultPresetId: presetId }],
+      ['bind-disabled', { autoPublishEnabled: false, defaultPresetId: null }]
+    ]);
+    const repository = {
+      getStore: vi.fn(async (storeId: string) => ({ id: storeId, ...currentStores.get(storeId) })),
+      updateStore: vi.fn(async (storeId: string, input: unknown) => ({ id: storeId, ...(input as object) }))
+    };
+    const preset = {
+      id: presetId,
+      categoryKey: 'ozon_15621048_91249',
+      sharedAttributes: [],
+      variantAttributes: [],
+      sizeAttributeKey: null,
+      sizes: [{ value: '', stock: 1 }]
+    };
+    const ozon = {
+      getPreset: vi.fn(async () => preset),
+      getCategory: vi.fn(async () => ({
+        publishedVersion: {
+          snapshot: {
+            categoryKey: preset.categoryKey,
+            sizing: { sizeMode: 'sizeless' },
+            attributes: []
+          }
+        }
+      }))
+    };
+    const service = new OzonStoreService(repository as any, ozon as any, {} as any, {} as any);
+
+    await expect(service.updateStore('enable-missing', {
+      rowVersion: 1,
+      autoPublishEnabled: true
+    })).rejects.toMatchObject({ code: 'CONFIG_INVALID' });
+    await expect(service.updateStore('clear-enabled', {
+      rowVersion: 1,
+      defaultPresetId: null
+    })).rejects.toMatchObject({ code: 'CONFIG_INVALID' });
+    await expect(service.updateStore('enable-bound', {
+      rowVersion: 1,
+      autoPublishEnabled: true
+    })).resolves.toMatchObject({ id: 'enable-bound' });
+    await expect(service.updateStore('disable-clear', {
+      rowVersion: 1,
+      autoPublishEnabled: false,
+      defaultPresetId: null
+    })).resolves.toMatchObject({ id: 'disable-clear' });
+    await expect(service.updateStore('bind-disabled', {
+      rowVersion: 1,
+      defaultPresetId: presetId
+    })).resolves.toMatchObject({ id: 'bind-disabled' });
+
+    expect(ozon.getPreset).toHaveBeenCalledTimes(2);
+    expect(repository.updateStore).toHaveBeenCalledTimes(3);
+    expect(repository.updateStore).not.toHaveBeenCalledWith('enable-missing', expect.anything());
+    expect(repository.updateStore).not.toHaveBeenCalledWith('clear-enabled', expect.anything());
+  });
+
+  it('blocks enabling a store whose automatic publishing state has no default preset', async () => {
+    const repository = {
+      getStore: vi.fn(async () => ({
+        id: 'store-auto-without-preset',
+        autoPublishEnabled: true,
+        defaultPresetId: null
+      })),
+      setStoreEnabled: vi.fn()
+    };
+    const ozon = { getPreset: vi.fn(), getCategory: vi.fn() };
+    const service = new OzonStoreService(repository as any, ozon as any, {} as any, {} as any);
+
+    await expect(service.enable('store-auto-without-preset', { rowVersion: 1 })).rejects.toMatchObject({
+      code: 'CONFIG_INVALID',
+      message: '启用 OZON 自动上品前必须配置默认上品预设'
+    });
+    expect(repository.setStoreEnabled).not.toHaveBeenCalled();
+  });
+
+  it('blocks preset binding and store enablement when a published required preset value is missing', async () => {
+    const presetId = '10000000-0000-4000-8000-000000000091';
+    const preset = {
+      id: presetId,
+      categoryKey: 'ozon_15621048_91248',
+      sharedAttributes: [],
+      variantAttributes: [],
+      sizeAttributeKey: null,
+      sizes: [{ value: '', stock: 1 }]
+    };
+    const category = {
+      publishedVersion: {
+        snapshot: {
+          categoryKey: preset.categoryKey,
+          sizing: { sizeMode: 'sizeless' },
+          attributes: [{
+            id: 9163, complexId: 0, name: 'Пол', nameRu: 'Пол', nameZh: '性别',
+            type: 'String', required: true, dictionaryId: 320
+          }]
+        }
+      }
+    };
+    const repository = {
+      createStore: vi.fn(),
+      getStore: vi.fn(async () => ({ id: 'store-1', defaultPresetId: presetId })),
+      setStoreEnabled: vi.fn()
+    };
+    const ozon = {
+      getPreset: vi.fn(async () => preset),
+      getCategory: vi.fn(async () => category)
+    };
+    const service = new OzonStoreService(repository as any, ozon as any, {} as any, {} as any);
+
+    await expect(service.createStore({
+      storeAlias: 'required-guard',
+      displayName: 'Required guard',
+      defaultPresetId: presetId
+    })).rejects.toMatchObject({
+      code: 'CONFIG_INVALID',
+      message: expect.stringContaining('性别 / Пол · #9163')
+    });
+    await expect(service.enable('store-1', { rowVersion: 1 })).rejects.toMatchObject({
+      code: 'CONFIG_INVALID',
+      message: expect.stringContaining('性别 / Пол · #9163')
+    });
+    expect(repository.createStore).not.toHaveBeenCalled();
+    expect(repository.setStoreEnabled).not.toHaveBeenCalled();
+  });
 });
 
 describe('OZON runtime claim service contract', () => {
@@ -592,6 +740,21 @@ describe('OZON multistore material contracts', () => {
 
     expect(product.sharedAttributes).toEqual([
       { attributeId: 85, complexId: 0, values: [{ dictionaryValueId: 126745801 }] }
+    ]);
+  });
+
+  it('canonicalizes footwear no-brand #31 after store materialization', () => {
+    const source = importPriceFloorProductFixture();
+    source.sharedAttributes = [{ attributeId: 31, complexId: 0, values: [{ value: '无品牌' }] }];
+    const product = materializeProduct(source as any, {
+      storeAlias: '2466679', warehouseId: '1020002357565000', fulfillmentMode: 'FBS', accountCurrency: 'CNY',
+      presetSnapshot: {}
+    } as any, {
+      imageUploadConcurrency: 4, videoUploadConcurrency: 1, videoPrewarmEnabled: false
+    } as any, ['0000119-01'], {}, { currency: 'CNY', price: 388.3, oldPrice: 776.6, minPrice: 194.15 });
+
+    expect(product.sharedAttributes).toEqual([
+      { attributeId: 31, complexId: 0, values: [{ dictionaryValueId: 126745801 }] }
     ]);
   });
 

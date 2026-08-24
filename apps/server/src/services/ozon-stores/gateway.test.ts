@@ -11,6 +11,77 @@ afterEach(() => {
 });
 
 describe('OzonStoreGatewayService strict gateway', () => {
+  const noBrandInput = {
+    storeId: OZON_DEFAULT_STORE_ID,
+    expectedStoreConfigVersion: 1,
+    expectedCredentialVersionId: '20000000-0000-4000-8000-000000000001',
+    categoryVersionId: '30000000-0000-4000-8000-000000000001',
+    presetRowVersion: 5,
+    descriptionCategoryId: 15621048,
+    typeId: 91248,
+    attributeId: 31,
+    dictionaryId: 28732849
+  };
+
+  it('proves the unique exact #31 no-brand value through a storeId-only request without leaseToken', async () => {
+    const identity = vaultIdentity({ task: false });
+    const stores = repositoryMock(identity);
+    stores.getExactStoreReadbackIdentity.mockResolvedValue(identity);
+    globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({
+      result: [{ id: 126745801, value: 'Нет бренда', info: 'Товар не имеет бренда', picture: '' }]
+    }), { status: 200 })) as typeof fetch;
+    const service = gateway(stores);
+
+    await expect(service.proveExactNoBrandDictionaryValue(noBrandInput)).resolves.toMatchObject({
+      storeId: OZON_DEFAULT_STORE_ID,
+      attributeId: 31,
+      dictionaryId: 28732849,
+      dictionaryValueId: 126745801,
+      value: 'Нет бренда',
+      requestRef: expect.stringMatching(/^ozon-no-brand:[a-f0-9]{64}$/)
+    });
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      'https://api-seller.ozon.ru/v1/description-category/attribute/values/search',
+      expect.objectContaining({ method: 'POST' })
+    );
+    expect(JSON.parse(String((globalThis.fetch as any).mock.calls[0]?.[1]?.body))).toEqual({
+      description_category_id: 15621048,
+      type_id: 91248,
+      attribute_id: 31,
+      value: 'Нет бренда',
+      limit: 100
+    });
+    expect(stores.beginGatewayRequest).not.toHaveBeenCalled();
+    expect(stores.completeGatewayRequest).not.toHaveBeenCalled();
+    expect(stores.getExactStoreReadbackIdentity).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ['zero exact matches', []],
+    ['two normalized exact matches', [
+      { id: 126745801, value: 'Нет бренда' },
+      { id: 126745801, value: '  НЕТ   БРЕНДА ' }
+    ]],
+    ['the wrong dictionary value ID', [{ id: 999, value: 'Нет бренда' }]]
+  ])('blocks automatic admission for %s', async (_label, result) => {
+    const identity = vaultIdentity({ task: false });
+    const stores = repositoryMock(identity);
+    stores.getExactStoreReadbackIdentity.mockResolvedValue(identity);
+    globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({ result }), { status: 200 })) as typeof fetch;
+
+    await expect(gateway(stores).proveExactNoBrandDictionaryValue(noBrandInput)).rejects.toMatchObject({
+      code: 'CONFIG_INVALID',
+      statusCode: 409,
+      details: {
+        attributeId: 31,
+        attributeNameZh: '服装和鞋类品牌',
+        attributeNameRu: 'Бренд одежды и обуви',
+        expectedDictionaryValueId: 126745801
+      }
+    });
+  });
+
   it('proves store-scoped absence only with the exact frozen ACTIVE credential and two strict empty reads', async () => {
     const identity = vaultIdentity({ task: false });
     const stores = repositoryMock(identity);

@@ -2,7 +2,7 @@ import { access, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DEPLOYMENT_PACKAGES, WORKFLOWS } from '../catalog.mjs';
-import { collectWorkflowDependencies, sanitizeWorkflow, sha256, validateWorkflowShape } from '../security.mjs';
+import { applyWorkflowDeploymentContract, collectWorkflowDependencies, sanitizeWorkflow, sha256, validateWorkflowShape } from '../security.mjs';
 import { makeWorkflowPortable } from '../portable-workflow.mjs';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -69,7 +69,7 @@ try {
   for (let index = 0; index < WORKFLOWS.length; index += 1) {
     const entry = WORKFLOWS[index];
     const { workflow: sanitizedWorkflow, report } = sanitizeWorkflow(rawWorkflows[index], entry);
-    const workflow = makeWorkflowPortable(sanitizedWorkflow);
+    const workflow = applyWorkflowDeploymentContract(makeWorkflowPortable(sanitizedWorkflow), entry);
     const findings = validateWorkflowShape(workflow, entry.id);
     if (findings.length > 0) throw new Error(`${entry.id} 验证失败：${findings.join('; ')}`);
 
@@ -111,6 +111,7 @@ try {
   const manifest = {
     schemaVersion: 1,
     source: 'local-n8n-rest-api',
+    newInstallActivationPolicy: 'inactive',
     workflowCount: manifestWorkflows.length,
     uniqueWorkflowCount: new Set(manifestWorkflows.map((item) => item.id)).size,
     packages: DEPLOYMENT_PACKAGES,

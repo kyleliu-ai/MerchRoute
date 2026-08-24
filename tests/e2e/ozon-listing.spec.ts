@@ -49,17 +49,17 @@ const catalogStatus = {
 };
 
 const catalogEntry = {
-  catalogEntryId: '17001:97001',
-  descriptionCategoryId: 17001,
-  typeId: 97001,
-  categoryNameZh: '箱包',
-  typeNameZh: '双肩背包',
-  categoryNameRu: 'Сумки',
-  typeNameRu: 'Рюкзаки',
-  pathZh: ['服饰配件', '箱包', '双肩背包'],
-  pathRu: ['Аксессуары', 'Сумки', 'Рюкзаки'],
-  displayPathZh: '服饰配件 → 箱包 → 双肩背包',
-  displayPathRu: 'Аксессуары → Сумки → Рюкзаки',
+  catalogEntryId: '15621048:91248',
+  descriptionCategoryId: 15621048,
+  typeId: 91248,
+  categoryNameZh: '鞋靴',
+  typeNameZh: '运动鞋',
+  categoryNameRu: 'Обувь',
+  typeNameRu: 'Кроссовки',
+  pathZh: ['服饰鞋包', '鞋靴', '运动鞋'],
+  pathRu: ['Одежда и обувь', 'Обувь', 'Кроссовки'],
+  displayPathZh: '服饰鞋包 → 鞋靴 → 运动鞋',
+  displayPathRu: 'Одежда и обувь → Обувь → Кроссовки',
   active: true,
   missingSyncCount: 0,
   updatedAt: '2026-07-27T02:00:00.000Z'
@@ -81,6 +81,123 @@ const ozonSystemTypeAttribute = {
   isCollection: false
 };
 
+const ozonRussianSizeAttribute = {
+  id: 4298,
+  name: 'Российский размер',
+  nameRu: 'Российский размер',
+  nameZh: '俄罗斯尺码',
+  description: '',
+  type: 'String',
+  required: true,
+  dictionaryId: 361,
+  maxCount: 1,
+  groupId: 0,
+  groupName: '',
+  complexId: 0,
+  isCollection: false
+};
+
+const ozonClothingBrandAttribute = {
+  id: 31,
+  name: 'Бренд в одежде и обуви',
+  nameRu: 'Бренд в одежде и обуви',
+  nameZh: '服装和鞋类品牌',
+  description: '',
+  type: 'Dictionary',
+  required: true,
+  dictionaryId: 28732849,
+  maxCount: 1,
+  groupId: 0,
+  groupName: '',
+  complexId: 0,
+  isCollection: false
+};
+
+const ozonGenderAttribute = {
+  id: 9163,
+  name: 'Пол',
+  nameRu: 'Пол',
+  nameZh: '性别',
+  description: '',
+  type: 'Dictionary',
+  required: true,
+  dictionaryId: 320,
+  maxCount: 1,
+  groupId: 0,
+  groupName: '',
+  complexId: 0,
+  isCollection: false
+};
+
+const ozonMergeCardAttribute = {
+  id: 8292,
+  name: 'Объединить на одной карточке',
+  nameRu: 'Объединить на одной карточке',
+  nameZh: '合并至一张卡片',
+  description: '',
+  type: 'String',
+  required: true,
+  dictionaryId: 0,
+  maxCount: 1,
+  groupId: 0,
+  groupName: '',
+  complexId: 0,
+  isCollection: false
+};
+
+const ozonProductColorAttribute = {
+  id: 10096,
+  name: 'Цвет товара',
+  nameRu: 'Цвет товара',
+  nameZh: '商品颜色',
+  description: '',
+  type: 'Dictionary',
+  required: true,
+  dictionaryId: 1494,
+  maxCount: 1,
+  groupId: 0,
+  groupName: '',
+  complexId: 0,
+  isCollection: false
+};
+
+const ozonSportsShoeSizeValues = [
+  [23539, '36'], [23545, '37'], [23550, '38'], [23554, '39'], [23558, '40'], [23566, '41'],
+  [23570, '42'], [23575, '43'], [23579, '44'], [23584, '45'], [23588, '46']
+].map(([id, value]) => ({ id: Number(id), value: String(value), valueZh: String(value), valueRu: String(value) }));
+
+const ozonPdfNameAttribute = {
+  id: 8789,
+  name: 'Название файла PDF',
+  nameRu: 'Название файла PDF',
+  nameZh: 'PDF文件名称',
+  description: '',
+  type: 'String',
+  required: false,
+  dictionaryId: 0,
+  maxCount: 1,
+  groupId: 0,
+  groupName: '',
+  complexId: 8788,
+  isCollection: false
+};
+
+const ozonPdfDocumentAttribute = {
+  id: 8790,
+  name: 'Документ PDF',
+  nameRu: 'Документ PDF',
+  nameZh: 'PDF 文件',
+  description: '',
+  type: 'URL',
+  required: false,
+  dictionaryId: 0,
+  maxCount: 1,
+  groupId: 0,
+  groupName: '',
+  complexId: 8788,
+  isCollection: false
+};
+
 const presetCategory = {
   categoryKey: 'ozon_17001_97001', nameZh: '双肩背包', nameRu: 'Рюкзаки', descriptionCategoryId: 17001, typeId: 97001,
   rowVersion: 1, createdAt: '2026-07-27T02:00:00.000Z', updatedAt: '2026-07-27T02:00:00.000Z', catalogActive: true,
@@ -89,7 +206,7 @@ const presetCategory = {
     attributes: [
       ozonSystemTypeAttribute,
       { id: 10, name: 'Материал', nameRu: 'Материал', nameZh: '材质', description: '', type: 'String', required: true, dictionaryId: 0, maxCount: 1, groupId: 0, groupName: '', complexId: 0, isCollection: false },
-      { id: 20, name: 'Размер', nameRu: 'Размер', nameZh: '尺寸', description: '', type: 'Dictionary', required: true, dictionaryId: 200, maxCount: 1, groupId: 0, groupName: '', complexId: 100, isCollection: false },
+      ozonRussianSizeAttribute,
       { id: 4389, name: 'Страна-изготовитель', nameRu: 'Страна-изготовитель', nameZh: '原产国', description: '', type: 'Dictionary', required: false, dictionaryId: 1935, maxCount: 2, groupId: 0, groupName: '', complexId: 0, isCollection: true },
       { id: 4495, name: 'Сезон', nameRu: 'Сезон', nameZh: '季节', description: '', type: 'Dictionary', required: false, dictionaryId: 703, maxCount: 1, groupId: 0, groupName: '', complexId: 0, isCollection: false },
       { id: 9163, name: 'Пол', nameRu: 'Пол', nameZh: '性别', description: '', type: 'Dictionary', required: false, dictionaryId: 320, maxCount: 2, groupId: 0, groupName: '', complexId: 0, isCollection: true },
@@ -99,7 +216,56 @@ const presetCategory = {
       { id: 21845, name: 'Видеообложка', nameRu: 'Видеообложка', nameZh: '视频封面系统字段', description: '', type: 'String', required: false, dictionaryId: 0, maxCount: 1, groupId: 0, groupName: '', complexId: 100002, isCollection: false },
       { id: 22273, name: 'Товары на видео', nameRu: 'Товары на видео', nameZh: '视频中的商品', description: '', type: 'String', required: false, dictionaryId: 0, maxCount: 1, groupId: 0, groupName: '', complexId: 100001, isCollection: false }
     ],
-    dictionarySnapshot: { '20': [{ id: 40, value: '40' }, { id: 41, value: '41' }] }, confirmedBy: ''
+    dictionarySnapshot: {
+      '4298': [
+        { id: 35, value: '35', valueZh: '35', valueRu: '35' },
+        { id: 36, value: '36', valueZh: '36', valueRu: '36' },
+        { id: 37, value: '37', valueZh: '37', valueRu: '37' }
+      ]
+    },
+    sizing: { sizeMode: 'sized', sizeAttributeKey: '4298:0' },
+    confirmedBy: ''
+  } }
+};
+
+const sportsShoePresetCategory = {
+  categoryKey: 'ozon_15621048_91248', nameZh: '运动鞋', nameRu: 'Кроссовки', descriptionCategoryId: 15621048, typeId: 91248,
+  rowVersion: 5, createdAt: '2026-08-24T00:00:00.000Z', updatedAt: '2026-08-24T00:00:00.000Z', catalogActive: true,
+  publishedVersion: { id: '55555555-5555-4555-8555-555555555557', categoryKey: 'ozon_15621048_91248', versionNo: 5, status: 'PUBLISHED', schemaHash: `sha256:${'d'.repeat(64)}`, confirmedBy: '', createdAt: '2026-08-24T00:00:00.000Z', updatedAt: '2026-08-24T00:00:00.000Z', snapshot: {
+    categoryKey: 'ozon_15621048_91248', nameZh: '运动鞋', nameRu: 'Кроссовки', descriptionCategoryId: 15621048, typeId: 91248,
+    attributes: [
+      ozonSystemTypeAttribute,
+      ozonClothingBrandAttribute,
+      ozonGenderAttribute,
+      ozonMergeCardAttribute,
+      ozonProductColorAttribute,
+      { id: 10, name: 'Материал', nameRu: 'Материал', nameZh: '材质', description: '', type: 'String', required: true, dictionaryId: 0, maxCount: 1, groupId: 0, groupName: '', complexId: 0, isCollection: false },
+      ozonRussianSizeAttribute,
+      ozonPdfNameAttribute,
+      ozonPdfDocumentAttribute
+    ],
+    dictionarySnapshot: {
+      '31': [{ id: 126745801, value: 'Нет бренда', valueZh: '无品牌', valueRu: 'Нет бренда' }],
+      '9163': [{ id: 22880, value: 'Мужской', valueZh: '男士', valueRu: 'Мужской' }],
+      '4298': ozonSportsShoeSizeValues
+    },
+    sizing: { sizeMode: 'sized', sizeAttributeKey: '4298:0' },
+    confirmedBy: ''
+  } }
+};
+
+const sizelessPresetCategory = {
+  categoryKey: 'ozon_18001_98001', nameZh: '无尺码配件', nameRu: 'Аксессуары', descriptionCategoryId: 18001, typeId: 98001,
+  rowVersion: 2, createdAt: '2026-07-27T02:00:00.000Z', updatedAt: '2026-07-27T02:00:00.000Z', catalogActive: true,
+  publishedVersion: { id: '66666666-6666-4666-8666-666666666666', categoryKey: 'ozon_18001_98001', versionNo: 3, status: 'PUBLISHED', schemaHash: `sha256:${'c'.repeat(64)}`, confirmedBy: '', createdAt: '2026-07-27T02:00:00.000Z', updatedAt: '2026-07-27T02:00:00.000Z', snapshot: {
+    categoryKey: 'ozon_18001_98001', nameZh: '无尺码配件', nameRu: 'Аксессуары', descriptionCategoryId: 18001, typeId: 98001,
+    attributes: [
+      ozonSystemTypeAttribute,
+      { id: 10, name: 'Материал', nameRu: 'Материал', nameZh: '材质', description: '', type: 'String', required: true, dictionaryId: 0, maxCount: 1, groupId: 0, groupName: '', complexId: 0, isCollection: false }
+    ],
+    dictionarySnapshot: {},
+    sizing: { sizeMode: 'sizeless' },
+    confirmedBy: ''
   } }
 };
 
@@ -278,6 +444,64 @@ const compatiblePreset = {
   defaultStock: 1
 };
 
+const sizingPricingTemplateId = '77777777-7777-4777-8777-777777777777';
+const sizingShippingTemplateId = '88888888-8888-4888-8888-888888888888';
+const sizingPreset = {
+  id: '77777777-7777-4777-8777-777777777778',
+  name: 'OZON-运动鞋预设',
+  description: '逐尺码默认库存验收',
+  categoryKey: sportsShoePresetCategory.categoryKey,
+  pricingTemplateId: sizingPricingTemplateId,
+  shippingTemplateId: sizingShippingTemplateId,
+  shippingServiceCode: 'CEL_RFBS_ECONOMY',
+  destinationCountryCode: 'RU',
+  vat: '0.2',
+  defaultStock: 1,
+  dimensions: { length: 32, width: 22, height: 12, dimensionUnit: 'cm', weight: 800, weightUnit: 'g' },
+  sharedAttributes: [
+    { attributeId: 10, complexId: 0, values: [{ value: '网布' }] },
+    { attributeId: 9163, complexId: 0, values: [{ dictionaryValueId: 22880 }] }
+  ],
+  variantAttributes: [],
+  titleTranslation: { workflowId: 'HDh0ZNLK2ps5qasR', language: '俄文', maxLength: 200 },
+  descriptionSource: 'E003',
+  sizeAttributeKey: '4298:0',
+  sizes: ozonSportsShoeSizeValues.map((size, index) => ({
+    sizeId: `77777777-7777-4777-8777-${String(index + 1).padStart(12, '0')}`,
+    value: `dict:${size.id}`,
+    stock: 1
+  })),
+  mediaPolicy: 'REPLACE_ALL',
+  rowVersion: 4,
+  createdAt: '2026-08-24T01:00:00.000Z',
+  updatedAt: '2026-08-24T01:00:00.000Z'
+};
+
+async function routeOzonSizingPresetEditor(page: Page, categories: unknown[], onSave: (body: any) => void) {
+  await page.route(/\/api\/v1\/ozon\/categories$/, (route) => route.fulfill({ json: { items: categories } }));
+  await page.route(/\/api\/v1\/ozon\/presets(?:\/.*)?$/, (route) => {
+    const request = route.request();
+    if (request.method() === 'GET') return route.fulfill({ json: { items: [sizingPreset] } });
+    const body = request.postDataJSON();
+    onSave(body);
+    return route.fulfill({ json: { preset: { ...sizingPreset, ...body, rowVersion: sizingPreset.rowVersion + 1 } } });
+  });
+  await page.route(/\/api\/v1\/pricing\/templates$/, (route) => route.fulfill({ json: { items: [{
+    id: sizingPricingTemplateId, name: 'OZON平台默认定价', platformCode: 'OZON', platformName: 'OZON', active: true,
+    publishedVersion: { id: '77777777-7777-4777-8777-777777777770', versionNo: 2, publishedAt: '2026-08-24T00:00:00.000Z' }
+  }] } }));
+  await page.route(/\/api\/v1\/shipping\/templates$/, (route) => route.fulfill({ json: { items: [{
+    id: sizingShippingTemplateId, name: 'CEL OZON-rFBS', platformCode: 'OZON', scenarioCode: 'OZON_RFBS', templateType: 'OZON_RFBS', active: true, carrierCode: 'CEL', carrierName: 'CEL物流', carrierActive: true,
+    publishedVersion: { id: '88888888-8888-4888-8888-888888888880', versionNo: 2, publishedAt: '2026-08-24T00:00:00.000Z' }
+  }] } }));
+  await page.route(new RegExp(`/api/v1/shipping/templates/${sizingShippingTemplateId}$`), (route) => route.fulfill({ json: { template: {
+    id: sizingShippingTemplateId, name: 'CEL OZON-rFBS', platformCode: 'OZON', scenarioCode: 'OZON_RFBS', templateType: 'OZON_RFBS', active: true, carrierCode: 'CEL', carrierName: 'CEL物流', carrierActive: true,
+    versions: [{ id: '88888888-8888-4888-8888-888888888880', versionNo: 2, status: 'PUBLISHED', definition: { currency: 'CNY', schemaVersion: '1', salePriceCurrencyCode: 'RUB', services: [
+      { code: 'CEL_RFBS_ECONOMY', name: 'CEL Economy', channel: '陆运经济', sortOrder: 10, rules: [] }
+    ] }, createdAt: '2026-08-24T00:00:00.000Z', updatedAt: '2026-08-24T00:00:00.000Z', publishedAt: '2026-08-24T00:00:00.000Z' }]
+  } } }));
+}
+
 const waitingAutoJob = {
   id: '17b43575-b742-448e-8fe5-dd704483c813',
   sku: '0000049',
@@ -445,7 +669,7 @@ test.describe('OZON 独立上品工作区', () => {
         const values: Record<string, Array<{ valueId: number; nameZh: string; nameRu: string }>> = {
           countries: [{ valueId: 9001, nameZh: '中国', nameRu: 'Китай' }],
           seasons: [{ valueId: 30940, nameZh: '夏季', nameRu: 'Лето' }],
-          kinds: [{ valueId: 22880, nameZh: '女性', nameRu: 'Женский' }],
+          kinds: [{ valueId: 22880, nameZh: '男士', nameRu: 'Мужской' }],
           colors: [{ valueId: 61575, nameZh: '黑色', nameRu: 'Черный' }]
         };
         return route.fulfill({ json: {
@@ -464,22 +688,30 @@ test.describe('OZON 独立上品工作区', () => {
       if (path === '/api/v1/ozon/catalog/sync') return route.fulfill({ status: 202, json: { runId: '11111111-1111-4111-8111-111111111111', status: 'RUNNING', accepted: true } });
       if (path === '/api/v1/ozon/categories' && route.request().method() === 'POST') {
         const category = {
-          categoryKey: 'ozon_17001_97001', nameZh: '双肩背包', nameRu: 'Рюкзаки', descriptionCategoryId: 17001, typeId: 97001,
+          categoryKey: 'ozon_15621048_91248', nameZh: '运动鞋', nameRu: 'Кроссовки', descriptionCategoryId: 15621048, typeId: 91248,
           rowVersion: 1, createdAt: '2026-07-27T02:00:00.000Z', updatedAt: '2026-07-27T02:00:00.000Z', catalogActive: true,
-          draftVersion: { id: '22222222-2222-4222-8222-222222222222', categoryKey: 'ozon_17001_97001', versionNo: 1, status: 'DRAFT', schemaHash: `sha256:${'a'.repeat(64)}`, confirmedBy: '', createdAt: '2026-07-27T02:00:00.000Z', updatedAt: '2026-07-27T02:00:00.000Z', snapshot: { categoryKey: 'ozon_17001_97001', nameZh: '双肩背包', nameRu: 'Рюкзаки', descriptionCategoryId: 17001, typeId: 97001, attributes: [
+          draftVersion: { id: '22222222-2222-4222-8222-222222222222', categoryKey: 'ozon_15621048_91248', versionNo: 1, status: 'DRAFT', schemaHash: `sha256:${'a'.repeat(64)}`, confirmedBy: '', createdAt: '2026-07-27T02:00:00.000Z', updatedAt: '2026-07-27T02:00:00.000Z', snapshot: { categoryKey: 'ozon_15621048_91248', nameZh: '运动鞋', nameRu: 'Кроссовки', descriptionCategoryId: 15621048, typeId: 91248, attributes: [
             { id: 10, name: 'Бренд', nameRu: 'Бренд', nameZh: '品牌', description: '', type: 'String', required: true, dictionaryId: 0, maxCount: 1, groupId: 0, groupName: '', complexId: 0, isCollection: false },
-            { id: 20, name: 'Размер', nameRu: 'Размер', nameZh: '尺寸', description: '', type: 'Dictionary', required: false, dictionaryId: 200, maxCount: 1, groupId: 0, groupName: '', complexId: 100, isCollection: false }
-          ], dictionarySnapshot: {}, confirmedBy: '' } }
+            ozonRussianSizeAttribute,
+            ozonPdfNameAttribute,
+            ozonPdfDocumentAttribute
+          ], dictionarySnapshot: {
+            '4298': [
+              { id: 35, value: '35', valueZh: '35', valueRu: '35' },
+              { id: 36, value: '36', valueZh: '36', valueRu: '36' }
+            ]
+          }, media: { defaultVideoUploadMode: 'COMPRESSED_COPY' }, sizing: { sizeMode: 'sized', sizeAttributeKey: '4298:0' }, confirmedBy: '' } }
         };
         templates.push(category);
         return route.fulfill({ json: { category } });
       }
       if (path.endsWith('/attributes-order') && route.request().method() === 'PUT') {
-        const input = route.request().postDataJSON() as { rowVersion: number; attributeKeys: string[] };
+        const input = route.request().postDataJSON() as { rowVersion: number; attributeKeys: string[]; sizing: { sizeMode: 'sized' | 'sizeless'; sizeAttributeKey?: string } };
         const category = templates.find((item) => path.includes(item.categoryKey));
         if (!category) return route.fulfill({ status: 404, json: { error: { code: 'NOT_FOUND' } } });
         const byKey = new Map(category.draftVersion.snapshot.attributes.map((attribute: any) => [`${attribute.id}:${attribute.complexId}`, attribute]));
         category.draftVersion.snapshot.attributes = input.attributeKeys.map((key) => byKey.get(key));
+        category.draftVersion.snapshot.sizing = input.sizing;
         category.rowVersion += 1;
         return route.fulfill({ json: { category } });
       }
@@ -1341,9 +1573,9 @@ test.describe('OZON 独立上品工作区', () => {
       shippingServiceCode: 'CEL_RFBS_ECONOMY',
       vat: '0.2', defaultStock: 1,
       dimensions: { length: 30, width: 20, height: 10, dimensionUnit: 'cm', weight: 0.8, weightUnit: 'kg' },
-      sharedAttributes: [], variantAttributes: [],
+      sharedAttributes: [{ attributeId: 10, complexId: 0, values: [{ value: '涤纶' }] }], variantAttributes: [],
       titleTranslation: { workflowId: 'HDh0ZNLK2ps5qasR', language: '俄文', maxLength: 60 },
-      descriptionSource: 'E003', sizes: [{ value: '', stock: 1 }], mediaPolicy: 'REPLACE_ALL',
+      descriptionSource: 'E003', sizeAttributeKey: '4298:0', sizes: [{ sizeId: '11111111-2222-4111-8111-111111111111', value: 'dict:35', stock: 1 }], mediaPolicy: 'REPLACE_ALL',
       rowVersion: 1, createdAt: '2026-08-02T08:00:00.000Z', updatedAt: '2026-08-02T08:00:00.000Z'
     };
     const presetItems = [
@@ -2700,7 +2932,7 @@ test.describe('OZON 独立上品工作区', () => {
           price: 2990,
           stock: 5,
           descriptionRu: '',
-          attributes: [{ attributeId: 20, complexId: 100, values: [{ dictionaryValueId: 40 }] }],
+          attributes: [{ attributeId: 4298, complexId: 0, values: [{ dictionaryValueId: 35 }] }],
           media: materialSeed.data.offers[0].media
         }]
       }
@@ -2862,8 +3094,8 @@ test.describe('OZON 独立上品工作区', () => {
         dimensions: { length: 30, width: 20, height: 10, dimensionUnit: 'cm', weight: 800, weightUnit: 'g' },
         sharedAttributes: [{ attributeId: 10, complexId: 0, values: [{ value: 'Нейлон' }] }],
         offers: [
-          { variantId: firstVariantId, productVariantId: firstVariantId, productVariantName: '咖啡色', productVariantColor: firstColor, variantCode: '01', offerId: '0000051-01', barcode: '', modelGroup: '0000051', price: 2990, stock: 5, descriptionRu: 'Описание коричневого варианта', attributes: [{ attributeId: 20, complexId: 100, values: [{ dictionaryValueId: 40 }] }], media: [] },
-          { variantId: secondVariantId, productVariantId: secondVariantId, productVariantName: '卡其色', productVariantColor: secondColor, variantCode: '02', offerId: '0000051-02', barcode: '', modelGroup: '0000051', price: 2990, stock: 5, descriptionRu: 'Описание варианта хаки', attributes: [{ attributeId: 20, complexId: 100, values: [{ dictionaryValueId: 41 }] }], media: [] }
+          { variantId: firstVariantId, productVariantId: firstVariantId, productVariantName: '咖啡色', productVariantColor: firstColor, variantCode: '01', offerId: '0000051-01', barcode: '', modelGroup: '0000051', price: 2990, stock: 5, descriptionRu: 'Описание коричневого варианта', attributes: [{ attributeId: 4298, complexId: 0, values: [{ dictionaryValueId: 35 }] }], media: [] },
+          { variantId: secondVariantId, productVariantId: secondVariantId, productVariantName: '卡其色', productVariantColor: secondColor, variantCode: '02', offerId: '0000051-02', barcode: '', modelGroup: '0000051', price: 2990, stock: 5, descriptionRu: 'Описание варианта хаки', attributes: [{ attributeId: 4298, complexId: 0, values: [{ dictionaryValueId: 36 }] }], media: [] }
         ],
         mediaAssets: [],
         mediaSourceRoot: 'G:\\01_MerchRoute\\OZON-Auto-Publish\\inbox\\0000051'
@@ -2985,7 +3217,7 @@ test.describe('OZON 独立上品工作区', () => {
           price: 2990,
           stock: 5,
           descriptionRu: 'Описание черного варианта',
-          attributes: [{ attributeId: 20, complexId: 100, values: [{ dictionaryValueId: 40 }] }],
+          attributes: [{ attributeId: 4298, complexId: 0, values: [{ dictionaryValueId: 35 }] }],
           media: []
         }],
         mediaAssets: [],
@@ -3130,7 +3362,7 @@ test.describe('OZON 独立上品工作区', () => {
           price: 2990,
           stock: 5,
           descriptionRu: `Описание варианта ${suffix}`,
-          attributes: [{ attributeId: 20, complexId: 100, values: [{ dictionaryValueId: 40 }] }],
+          attributes: [{ attributeId: 4298, complexId: 0, values: [{ dictionaryValueId: 35 }] }],
           media: []
         }],
         mediaAssets: [],
@@ -3363,7 +3595,7 @@ test.describe('OZON 独立上品工作区', () => {
             modelGroup: 'legacy-group-a',
             price: 2990,
             stock: 5,
-            attributes: [{ attributeId: 20, complexId: 100, values: [{ dictionaryValueId: 40 }] }],
+            attributes: [{ attributeId: 4298, complexId: 0, values: [{ dictionaryValueId: 35 }] }],
             media: []
           },
           {
@@ -3374,7 +3606,7 @@ test.describe('OZON 独立上品工作区', () => {
             modelGroup: 'legacy-group-b',
             price: 3090,
             stock: 6,
-            attributes: [{ attributeId: 20, complexId: 100, values: [{ dictionaryValueId: 41 }] }],
+            attributes: [{ attributeId: 4298, complexId: 0, values: [{ dictionaryValueId: 36 }] }],
             media: []
           }
         ],
@@ -3437,7 +3669,7 @@ test.describe('OZON 独立上品工作区', () => {
             ozonSystemTypeAttribute,
             { id: 85, name: 'Бренд', nameRu: 'Бренд', nameZh: '品牌', description: '', type: 'String', required: true, dictionaryId: 28732849, maxCount: 1, groupId: 0, groupName: '', complexId: 0, isCollection: false },
             { id: 9024, name: 'Код продавца', nameRu: 'Код продавца', nameZh: '卖家代码', description: '', type: 'String', required: false, dictionaryId: 0, maxCount: 1, groupId: 0, groupName: '', complexId: 0, isCollection: false },
-            { id: 20, name: 'Размер', nameRu: 'Размер', nameZh: '尺寸', description: '', type: 'Dictionary', required: true, dictionaryId: 200, maxCount: 1, groupId: 0, groupName: '', complexId: 100, isCollection: false },
+            ozonRussianSizeAttribute,
             { id: 10097, name: 'Название цвета', nameRu: 'Название цвета', nameZh: '颜色名称', description: '', type: 'String', required: false, dictionaryId: 0, maxCount: 1, groupId: 0, groupName: '', complexId: 0, isCollection: false }
           ]
         }
@@ -3466,7 +3698,7 @@ test.describe('OZON 独立上品工作区', () => {
           oldPrice: 770.65,
           minPrice: 192.66,
           stock: 18,
-          attributes: [{ attributeId: 20, complexId: 100, values: [{ dictionaryValueId: 40 }] }],
+          attributes: [{ attributeId: 4298, complexId: 0, values: [{ dictionaryValueId: 35 }] }],
           media: []
         }]
       }
@@ -3611,8 +3843,10 @@ test.describe('OZON 独立上品工作区', () => {
     await expect(drawer.getByText('当前类目支持产品介绍视频与视频封面')).toBeVisible();
     await expect(drawer.getByText('材质')).toBeVisible();
     await expect(drawer.getByText('Материал')).toBeVisible();
-    await drawer.getByLabel('OZON 尺码属性').click();
-    await page.locator('.ant-select-item-option-content').filter({ hasText: '尺寸 / Размер' }).click();
+    const categorySizing = drawer.getByLabel('类目尺码规则');
+    await expect(categorySizing).toHaveValue('俄罗斯尺码 / Российский размер · #4298');
+    await expect(categorySizing).toHaveAttribute('readonly');
+    await expect(drawer.getByText('当前类目按尺码生成 Offer', { exact: true })).toBeVisible();
     await expect(drawer.getByRole('button', { name: '添加尺码' })).toBeVisible();
     await drawer.getByLabel('默认定价模板').click();
     await expect(page.locator('.ant-select-item-option-content').filter({ hasText: 'OZON平台默认定价' })).toBeVisible();
@@ -3630,6 +3864,202 @@ test.describe('OZON 独立上品工作区', () => {
     await page.setViewportSize({ width: 320, height: 900 });
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     await expect(drawer.getByText('尺码与默认库存')).toBeVisible();
+  });
+
+  test('OZON 运动鞋预设继承类目 #4298 并保存逐尺码默认库存', async ({ page }) => {
+    let savedPresetBody: any;
+    await routeOzonSizingPresetEditor(page, [sportsShoePresetCategory, sizelessPresetCategory], (body) => { savedPresetBody = body; });
+
+    await page.goto('/listing/ozon?view=presets');
+    const presetRow = page.locator('.ozon-preset-table-shell tbody tr[data-row-key]').filter({ hasText: sizingPreset.name });
+    await presetRow.getByRole('button', { name: '编辑' }).click();
+    const drawer = page.getByRole('dialog', { name: sizingPreset.name });
+    const brandField = drawer.locator('.ant-form-item').filter({ hasText: '服装和鞋类品牌' }).first();
+    const genderField = drawer.locator('.ant-form-item').filter({ hasText: '性别' }).first();
+    const mergeCardField = drawer.locator('.ant-form-item').filter({ hasText: '合并至一张卡片' }).first();
+    const productColorField = drawer.locator('.ant-form-item').filter({ hasText: '商品颜色' }).first();
+    const materialField = drawer.locator('.ant-form-item').filter({ hasText: '材质' }).first();
+    const optionalPdfField = drawer.locator('.ant-form-item').filter({ hasText: 'PDF文件名称' }).first();
+    for (const requiredField of [brandField, genderField, mergeCardField, productColorField, materialField]) {
+      await expect(requiredField.locator('.ant-form-item-label > label')).toHaveClass(/ant-form-item-required/);
+    }
+    await expect(optionalPdfField.locator('.ant-form-item-label > label')).not.toHaveClass(/ant-form-item-required/);
+    await expect(brandField.getByRole('textbox', { name: '服装和鞋类品牌（系统自动生成）' })).toHaveValue('无品牌（系统自动生成） / Нет бренда');
+    await expect(brandField.getByRole('textbox')).toHaveAttribute('readonly');
+    await expect(brandField).toContainText('系统自动生成');
+    await expect(mergeCardField.getByRole('textbox', { name: '合并至一张卡片（系统自动生成）' })).toHaveValue('主 SKU（系统自动生成） / Основной SKU');
+    await expect(mergeCardField.getByRole('textbox')).toHaveAttribute('readonly');
+    await expect(productColorField.getByRole('textbox', { name: '商品颜色（自动取值）' })).toHaveValue('来自 E001 审核颜色 / Цвет из E001');
+    await expect(productColorField.getByRole('textbox')).toHaveAttribute('readonly');
+    await expect(productColorField).toContainText('E001 自动取值');
+    await expect(genderField.locator('.ant-select-selection-item')).toContainText('男士 / Мужской');
+    const categorySizing = drawer.getByLabel('类目尺码规则');
+    const categorySizingField = categorySizing.locator('xpath=ancestor::div[contains(concat(" ", normalize-space(@class), " "), " ant-form-item ")][1]');
+    await expect(categorySizing).toHaveValue('俄罗斯尺码 / Российский размер · #4298');
+    await expect(categorySizing).toHaveAttribute('readonly');
+    await expect(categorySizingField).toContainText('俄罗斯尺码');
+    await expect(categorySizingField).toContainText('Российский размер · #4298');
+    await expect(categorySizingField.locator('.ant-form-item-label > label')).toHaveClass(/ant-form-item-required/);
+    await expect(drawer.getByText('当前类目按尺码生成 Offer', { exact: true })).toBeVisible();
+    await expect(drawer.getByLabel('OZON 尺码属性')).toHaveCount(0);
+    await expect(drawer.getByText(/3 个颜色 × 11 个尺码 =/)).toBeVisible();
+    await expect(drawer.getByText('33 个 Offer', { exact: true })).toBeVisible();
+
+    await genderField.locator('.ant-select').hover();
+    await genderField.locator('.ant-select-clear').click();
+    await drawer.getByRole('button', { name: '保存修改' }).click();
+    await expect(genderField).toContainText('性别 / Пол · #9163 为 OZON 必填目录属性');
+    expect(savedPresetBody).toBeUndefined();
+    await genderField.locator('.ant-select-selector').click();
+    await page.locator('.ant-select-dropdown:visible .ant-select-item-option').filter({ hasText: '男士 / Мужской' }).click();
+
+    const sizeRows = drawer.locator('.ozon-preset-size-row');
+    await expect(sizeRows).toHaveCount(11);
+    await expect(sizeRows.nth(0).locator('.ant-select-selection-item')).toContainText('36');
+    await expect(sizeRows.nth(0).getByRole('spinbutton', { name: '默认库存' })).toHaveValue('1');
+    await expect(sizeRows.nth(10).locator('.ant-select-selection-item')).toContainText('46');
+    await expect(sizeRows.nth(10).getByRole('spinbutton', { name: '默认库存' })).toHaveValue('1');
+    await drawer.getByRole('button', { name: '保存修改' }).click();
+
+    await expect.poll(() => savedPresetBody).toBeTruthy();
+    expect(savedPresetBody).toMatchObject({
+      categoryKey: sportsShoePresetCategory.categoryKey,
+      sizeAttributeKey: '4298:0',
+      defaultStock: 1,
+      rowVersion: sizingPreset.rowVersion,
+      sizes: sizingPreset.sizes
+    });
+    expect(savedPresetBody.sizes).toHaveLength(11);
+    expect(savedPresetBody.sizes.map((size: any) => size.sizeId)).toEqual(sizingPreset.sizes.map((size) => size.sizeId));
+    expect(savedPresetBody.sharedAttributes).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ attributeId: 4298 })
+    ]));
+    expect(savedPresetBody.variantAttributes).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ attributeId: 4298 })
+    ]));
+    expect(savedPresetBody.sharedAttributes).toEqual(expect.arrayContaining([
+      { attributeId: 10, complexId: 0, values: [{ value: '网布' }] },
+      { attributeId: 9163, complexId: 0, values: [{ dictionaryValueId: 22880 }] }
+    ]));
+    expect(savedPresetBody.sharedAttributes).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ attributeId: 31 }),
+      expect.objectContaining({ attributeId: 8292 }),
+      expect.objectContaining({ attributeId: 10096 })
+    ]));
+    await expect(drawer).toBeHidden();
+  });
+
+  test('类目属性重新发布为必填后预设立即显示红星并阻止空值保存', async ({ page }) => {
+    let savedPresetBody: any;
+    const initialCategory = structuredClone(sportsShoePresetCategory);
+    initialCategory.publishedVersion.snapshot.attributes = initialCategory.publishedVersion.snapshot.attributes.map((attribute) => (
+      attribute.id === ozonPdfNameAttribute.id ? { ...attribute, required: false } : attribute
+    ));
+    const routedCategories: any[] = [initialCategory];
+    await routeOzonSizingPresetEditor(page, routedCategories, (body) => { savedPresetBody = body; });
+    await page.route(new RegExp(`/api/v1/ozon/categories/${initialCategory.categoryKey}/refresh$`), (route) => {
+      const current = routedCategories[0];
+      const refreshed = {
+        ...current,
+        rowVersion: current.rowVersion + 1,
+        draftVersion: {
+          ...current.publishedVersion,
+          id: '99999999-8888-4777-8666-555555555555',
+          versionNo: current.publishedVersion.versionNo + 1,
+          status: 'DRAFT',
+          snapshot: {
+            ...current.publishedVersion.snapshot,
+            attributes: current.publishedVersion.snapshot.attributes.map((attribute: any) => (
+              attribute.id === ozonPdfNameAttribute.id ? { ...attribute, required: true } : attribute
+            ))
+          }
+        }
+      };
+      routedCategories[0] = refreshed;
+      return route.fulfill({ json: { category: refreshed } });
+    });
+    await page.route(new RegExp(`/api/v1/ozon/categories/${initialCategory.categoryKey}/publish$`), (route) => {
+      const current = routedCategories[0];
+      const published = {
+        ...current,
+        rowVersion: current.rowVersion + 1,
+        draftVersion: undefined,
+        publishedVersion: { ...current.draftVersion, status: 'PUBLISHED' }
+      };
+      routedCategories[0] = published;
+      return route.fulfill({ json: { category: published } });
+    });
+
+    await page.goto('/listing/ozon?view=presets');
+    const presetRow = page.locator('.ozon-preset-table-shell tbody tr[data-row-key]').filter({ hasText: sizingPreset.name });
+    await presetRow.getByRole('button', { name: '编辑' }).click();
+    let drawer = page.getByRole('dialog', { name: sizingPreset.name });
+    let pdfNameField = drawer.locator('.ant-form-item').filter({ hasText: 'PDF文件名称' }).first();
+    await expect(pdfNameField.locator('.ant-form-item-label > label')).not.toHaveClass(/ant-form-item-required/);
+    await drawer.locator('.ant-drawer-close').click();
+
+    await page.getByRole('tab', { name: '类目模板' }).click();
+    const categoryRow = page.locator('tbody tr[data-row-key]').filter({ hasText: initialCategory.nameZh });
+    await categoryRow.getByRole('button', { name: '刷新' }).click();
+    await expect(page.getByText('运动鞋 已刷新为新草稿版本', { exact: true })).toBeVisible();
+    await expect(categoryRow).toContainText(`v${initialCategory.publishedVersion.versionNo + 1}`);
+    await categoryRow.getByRole('button', { name: /发\s*布/ }).click();
+    await expect(page.getByText('类目模板版本已发布', { exact: true })).toBeVisible();
+
+    await page.getByRole('tab', { name: '上品预设模板' }).click();
+    await presetRow.getByRole('button', { name: '编辑' }).click();
+    drawer = page.getByRole('dialog', { name: sizingPreset.name });
+    pdfNameField = drawer.locator('.ant-form-item').filter({ hasText: 'PDF文件名称' }).first();
+    await expect(pdfNameField.locator('.ant-form-item-label > label')).toHaveClass(/ant-form-item-required/);
+    await drawer.getByRole('button', { name: '保存修改' }).click();
+    await expect(pdfNameField).toContainText('PDF文件名称 / Название файла PDF · #8789 为 OZON 必填目录属性');
+    expect(savedPresetBody).toBeUndefined();
+  });
+
+  test('OZON 预设切换到无尺码类目时清空鞋码并只保留单库存行', async ({ page }) => {
+    let savedPresetBody: any;
+    await routeOzonSizingPresetEditor(page, [sportsShoePresetCategory, sizelessPresetCategory], (body) => { savedPresetBody = body; });
+
+    await page.goto('/listing/ozon?view=presets');
+    const presetRow = page.locator('.ozon-preset-table-shell tbody tr[data-row-key]').filter({ hasText: sizingPreset.name });
+    await presetRow.getByRole('button', { name: '编辑' }).click();
+    const drawer = page.getByRole('dialog', { name: sizingPreset.name });
+    const categoryField = drawer.locator('.ant-form-item').filter({ hasText: 'OZON 类目模板' }).first();
+    await categoryField.locator('.ant-select-selector').click();
+    await page.locator('.ant-select-dropdown:visible .ant-select-item-option').filter({ hasText: '无尺码配件' }).click();
+
+    await expect(drawer.getByText('当前类目为无尺码商品', { exact: true })).toBeVisible();
+    await expect(drawer.getByRole('button', { name: '添加尺码' })).toHaveCount(0);
+    await expect(drawer.getByRole('button', { name: '删除' })).toHaveCount(0);
+    await drawer.locator('.ant-form-item').filter({ hasText: '材质' }).first().getByRole('textbox').fill('涤纶');
+    const sizeRows = drawer.locator('.ozon-preset-size-row');
+    await expect(sizeRows).toHaveCount(1);
+    await expect(sizeRows.getByRole('combobox', { name: '尺码值' })).toHaveCount(0);
+    await sizeRows.getByRole('spinbutton', { name: '默认库存' }).fill('9');
+
+    await page.setViewportSize({ width: 320, height: 900 });
+    await expect(drawer.getByText('尺码与默认库存', { exact: true })).toBeVisible();
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await drawer.getByRole('button', { name: '保存修改' }).click();
+
+    await expect.poll(() => savedPresetBody).toBeTruthy();
+    expect(savedPresetBody).toMatchObject({
+      categoryKey: sizelessPresetCategory.categoryKey,
+      defaultStock: 9,
+      rowVersion: sizingPreset.rowVersion,
+      sizes: [{ value: '', stock: 9 }],
+      variantAttributes: []
+    });
+    expect(savedPresetBody.sharedAttributes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ attributeId: 8229, complexId: 0, values: [{ dictionaryValueId: sizelessPresetCategory.typeId }] }),
+      { attributeId: 10, complexId: 0, values: [{ value: '涤纶' }] }
+    ]));
+    expect(savedPresetBody.sharedAttributes).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ attributeId: 4298 })
+    ]));
+    expect(savedPresetBody).not.toHaveProperty('sizeAttributeKey');
+    expect(savedPresetBody.sizes[0].sizeId).toMatch(/^[0-9a-f-]{36}$/i);
+    await expect(drawer).toBeHidden();
   });
 
   test('已进入远程阶段的迁移前任务保留工作台详情，新的提交入口改走 publication 计划', async ({ page }) => {
@@ -3787,7 +4217,7 @@ test.describe('OZON 独立上品工作区', () => {
         offers: [{
           variantId: '12912912-9129-4129-8129-129129129129', variantCode: '01', offerId: '0000049-01',
           barcode: '', modelGroup: '0000049', price: 7425, oldPrice: 14850, minPrice: 3712.5,
-          stock: 8, descriptionRu: 'Описание', attributes: [{ attributeId: 20, complexId: 100, values: [{ dictionaryValueId: 40 }] }], media: []
+          stock: 8, descriptionRu: 'Описание', attributes: [{ attributeId: 4298, complexId: 0, values: [{ dictionaryValueId: 35 }] }], media: []
         }]
       }
     };
@@ -4006,7 +4436,7 @@ test.describe('OZON 独立上品工作区', () => {
     await expect(drawer).not.toContainText('7425');
   });
 
-  test('类目模板只允许中文搜索并自动创建平台字段', async ({ page }) => {
+  test('类目模板保存尺码模式并且 PDF 复合属性不得冒充尺码', async ({ page }) => {
     let requestBody: unknown;
     let orderBody: unknown;
     page.on('request', (request) => {
@@ -4022,32 +4452,45 @@ test.describe('OZON 独立上品工作区', () => {
     await expect(dialog.getByText('description_category_id')).toHaveCount(0);
     await expect(dialog.getByText('属性快照 JSON')).toHaveCount(0);
     const categorySearch = dialog.getByRole('combobox', { name: '搜索 OZON 中文类目' });
-    await categorySearch.fill('背包');
-    await expect(page.locator('.ant-select-item-option-content').filter({ hasText: '双肩背包' })).toBeVisible();
+    await categorySearch.fill('运动鞋');
+    await expect(page.locator('.ant-select-item-option-content').filter({ hasText: '运动鞋' })).toBeVisible();
     await categorySearch.press('ArrowDown');
     await categorySearch.press('Enter');
     await dialog.getByRole('button', { name: '创建草稿' }).click();
     await expect(dialog).toBeHidden();
-    expect(requestBody).toEqual({ catalogEntryId: '17001:97001' });
-    await expect(page.getByText('属性顺序 · 2 项')).toBeVisible();
-    await expect(page.locator('.ozon-category-drawer .mono-small')).toHaveText('ozon_17001_97001');
+    expect(requestBody).toEqual({ catalogEntryId: '15621048:91248' });
+    await expect(page.getByText('属性顺序 · 4 项')).toBeVisible();
+    await expect(page.locator('.ozon-category-drawer .mono-small')).toHaveText('ozon_15621048_91248');
+    const categoryDrawer = page.locator('.ozon-category-drawer');
+    await expect(categoryDrawer.getByText('媒体、尺码与合规规则', { exact: true })).toBeVisible();
+    const sizeModeField = categoryDrawer.locator('.ant-form-item').filter({ hasText: '尺码模式' }).first();
+    await expect(sizeModeField).toContainText('有尺码（按尺码生成 Offer）');
+    const sizeAttributeField = categoryDrawer.locator('.ant-form-item').filter({ hasText: 'OZON 尺码属性' }).first();
+    await expect(sizeAttributeField).toContainText('俄罗斯尺码');
+    await expect(sizeAttributeField).toContainText('#4298');
+    await sizeAttributeField.locator('.ant-select-selector').click();
+    const sizeOptions = page.locator('.ant-select-dropdown:visible');
+    await expect(sizeOptions).toContainText('俄罗斯尺码 / Российский размер · #4298');
+    await expect(sizeOptions).not.toContainText('PDF文件名称');
+    await expect(sizeOptions).not.toContainText('PDF 文件');
+    await page.keyboard.press('Escape');
     const rows = page.locator('.ozon-attribute-order-row');
     await expect(rows.nth(0)).toContainText('品牌');
     await expect(rows.nth(0)).toContainText('Бренд');
-    await rows.nth(1).getByRole('button', { name: '置顶 尺寸' }).click();
-    await expect(rows.nth(0)).toContainText('尺寸');
-    await expect(rows.nth(0)).toContainText('Размер');
+    await rows.filter({ hasText: 'PDF文件名称' }).getByRole('button', { name: '置顶 PDF文件名称' }).click();
+    await expect(rows.nth(0)).toContainText('PDF文件名称');
     const requiredFirst = page.getByRole('button', { name: '必填置顶' });
     await expect(requiredFirst).toBeEnabled();
     await requiredFirst.click();
     await expect(rows.nth(0)).toContainText('品牌');
-    await expect(rows.nth(1)).toContainText('尺寸');
+    await expect(rows.nth(1)).toContainText('俄罗斯尺码');
     await expect(requiredFirst).toBeDisabled();
     await page.getByRole('button', { name: '保存草稿' }).click();
     await expect.poll(() => orderBody).toEqual({
       rowVersion: 1,
       defaultVideoUploadMode: 'COMPRESSED_COPY',
-      attributeKeys: ['10:0', '20:100']
+      sizing: { sizeMode: 'sized', sizeAttributeKey: '4298:0' },
+      attributeKeys: ['10:0', '4298:0', '8789:8788', '8790:8788']
     });
     await expect(page.getByText('草稿已保存')).toBeVisible();
   });

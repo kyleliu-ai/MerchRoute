@@ -5,6 +5,7 @@ import {
   assertOzonTitle,
   isOzonSystemMediaAttributeId,
   nextOzonVariantCode,
+  OZON_NO_BRAND_DICTIONARY_VALUE_ID,
   stableOzonOfferId,
   validateOzonDescription,
   validateOzonTitle,
@@ -20,8 +21,8 @@ import {
   enforceOzonProductTypeAttribute
 } from '../../utils/ozon-sku-identity.js';
 
-const NO_BRAND_ATTRIBUTE_ID = 85;
-const NO_BRAND_DICTIONARY_VALUE_ID = 126745801;
+const NO_BRAND_ATTRIBUTE_IDS = new Set([31, 85]);
+const MAIN_SKU_GROUP_ATTRIBUTE_ID = 8292;
 
 type OzonOffer = OzonListingDraft['data']['offers'][number];
 
@@ -258,14 +259,22 @@ export function prepareOzonManagedSharedAttributes(input: {
     const key = `${attributeId}:0`;
     if (available.has(key)) values.set(key, { attributeId, complexId: 0, values: value.map((entry) => ({ ...entry })) });
   };
-  const brandKey = `${NO_BRAND_ATTRIBUTE_ID}:0`;
-  if (input.brandMode === 'FORCE_NO_BRAND') {
-    put(NO_BRAND_ATTRIBUTE_ID, [{ value: '无品牌' }]);
-  } else if (!values.has(brandKey)) {
-    const brand = String(input.brandValue || '').trim();
-    const noBrand = !brand || ['无品牌', 'нет бренда'].includes(brand.toLocaleLowerCase('ru-RU'));
-    put(NO_BRAND_ATTRIBUTE_ID, [{ value: noBrand ? '无品牌' : brand }]);
+  const brandAttributeIds = input.categoryAttributes
+    .filter((attribute) => attribute.complexId === 0 && NO_BRAND_ATTRIBUTE_IDS.has(attribute.id))
+    .map((attribute) => attribute.id);
+  const requestedBrand = String(input.brandValue || '').trim();
+  const explicitlyNoBrand = ['无品牌', 'нет бренда'].includes(requestedBrand.toLocaleLowerCase('ru-RU'));
+  for (const brandAttributeId of brandAttributeIds) {
+    const brandKey = `${brandAttributeId}:0`;
+    if (input.brandMode === 'FORCE_NO_BRAND' || explicitlyNoBrand) {
+      put(brandAttributeId, [{ value: '无品牌' }]);
+    } else if (!values.has(brandKey)) {
+      put(brandAttributeId, [{ value: requestedBrand || '无品牌' }]);
+    }
   }
+  // Every Offer of one materialized product must use the same stable grouping
+  // value so OZON can merge colors and sizes onto one product card.
+  put(MAIN_SKU_GROUP_ATTRIBUTE_ID, [{ value: input.sku }]);
   put(9024, [{ value: input.sku }]);
   if (typeof input.titleRu === 'string' && input.titleRu.trim()) put(4180, [{ value: assertOzonMaterialTitle(input.titleRu) }]);
   // product.json keeps the original source. Only the outbound attribute value
@@ -304,7 +313,9 @@ export function normalizeOzonNoBrandForPlatform(
   attributes: OzonAttributeValueInput[],
   categoryAttributes: OzonCategoryAttribute[]
 ): OzonAttributeValueInput[] {
-  const supportsBrand = categoryAttributes.some((attribute) => attribute.id === NO_BRAND_ATTRIBUTE_ID && attribute.complexId === 0);
+  const supportsBrand = categoryAttributes.some((attribute) => (
+    NO_BRAND_ATTRIBUTE_IDS.has(attribute.id) && attribute.complexId === 0
+  ));
   return supportsBrand ? normalizeOzonNoBrandAttributeForPlatform(attributes) : attributes.map(cloneAttribute);
 }
 
@@ -312,11 +323,11 @@ export function normalizeOzonNoBrandAttributeForPlatform(
   attributes: OzonAttributeValueInput[]
 ): OzonAttributeValueInput[] {
   return attributes.map((attribute) => {
-    if (attribute.attributeId !== NO_BRAND_ATTRIBUTE_ID || attribute.complexId !== 0) return cloneAttribute(attribute);
-    const noBrand = attribute.values.some((value) => value.dictionaryValueId === NO_BRAND_DICTIONARY_VALUE_ID
+    if (!NO_BRAND_ATTRIBUTE_IDS.has(attribute.attributeId) || attribute.complexId !== 0) return cloneAttribute(attribute);
+    const noBrand = attribute.values.some((value) => value.dictionaryValueId === OZON_NO_BRAND_DICTIONARY_VALUE_ID
       || ['无品牌', 'нет бренда'].includes(String(value.value || '').trim().toLocaleLowerCase('ru-RU')));
     return noBrand
-      ? { attributeId: NO_BRAND_ATTRIBUTE_ID, complexId: 0, values: [{ dictionaryValueId: NO_BRAND_DICTIONARY_VALUE_ID }] }
+      ? { attributeId: attribute.attributeId, complexId: 0, values: [{ dictionaryValueId: OZON_NO_BRAND_DICTIONARY_VALUE_ID }] }
       : cloneAttribute(attribute);
   });
 }

@@ -87,8 +87,10 @@ function eventText(event: WbAutoPublishEvent) {
 function jobReasonCell(job: WbAutoPublishJob) {
   const presentation = wbAutoPublishNoticePresentation(job.state);
   const hasNotice = Boolean(job.lastErrorCode || job.lastErrorMessage);
-  return <div className={`wb-automation-reason${hasNotice ? ` has-${presentation.tone}` : ''}`}>
-    <span>{jobReason(job)}</span>
+  const succeeded = job.state === 'SUCCEEDED';
+  return <div className={`wb-current-reason wb-automation-reason${hasNotice ? ` has-${presentation.tone}` : ''}`}>
+    <span>{succeeded ? '该店铺上品已完成' : jobReason(job)}</span>
+    {succeeded && <small>公共媒体已在成功上品后清理</small>}
     {job.lastErrorCode && <code>{presentation.codeLabel}：{job.lastErrorCode}</code>}
   </div>;
 }
@@ -204,7 +206,7 @@ export function WbAutoPublishPanel({
         { title: 'SKU', width: 150, render: (_, job) => <Space size={4}><strong className="mono-small">{job.sku}</strong><Tooltip title="复制 SKU"><Button aria-label={`复制 SKU ${job.sku}`} type="text" size="small" icon={<CopyOutlined />} onClick={() => void navigator.clipboard.writeText(job.sku).then(() => message.success(`已复制 SKU ${job.sku}`))} /></Tooltip></Space> },
         { title: '轮次 / 方式', width: 190, render: (_, job) => <div><Space size={4}><Tag color="blue">第 {job.runNo} 轮</Tag>{job.operationMode === 'COMPATIBLE_UPSERT' ? <Tag color="purple">兼容更新</Tag> : <Tag>自动创建</Tag>}</Space><Text type="secondary">R{job.baseRevision} → R{job.targetRevision}</Text>{job.variantSummary && <Text type="secondary">新增 {job.variantSummary.created} · 更新 {job.variantSummary.updated} · 保留 {job.variantSummary.preserved}</Text>}</div> },
         { title: '自动状态', width: 160, render: (_, job) => stateTag(job.state) },
-        { title: '绑定预设', width: 190, render: (_, job) => job.presetName || job.presetId ? <div className="wb-automation-preset"><Space size={4} wrap><strong>{job.presetName || '预设快照'}</strong>{job.sourcePresetExists === false && <Tag color="default">来源已删除</Tag>}</Space><Text type="secondary">R{job.presetRowVersion || '—'} · 已锁定快照</Text></div> : <Text type="secondary">—</Text> },
+        { title: '绑定预设', width: 190, render: (_, job) => job.presetName || job.presetId ? <div className="wb-current-preset wb-automation-preset"><Space size={4} wrap><strong>{job.presetName || '预设快照'}</strong>{job.sourcePresetExists === false && <Tag color="default">来源已删除</Tag>}</Space><Text type="secondary">R{job.presetRowVersion || '—'} · 已锁定快照</Text></div> : <Text type="secondary">—</Text> },
         { title: '当前说明', width: 320, render: (_, job) => jobReasonCell(job) },
         { title: '更新时间', width: 155, render: (_, job) => <span className="mono-small">{dateTime(job.updatedAt)}</span> },
         { title: '操作', width: 100, fixed: 'right', render: (_, job) => <Button size="small" icon={<EyeOutlined />} onClick={() => setSelectedJob({ storeId: job.storeId, sku: job.sku })}>查看详情</Button> },

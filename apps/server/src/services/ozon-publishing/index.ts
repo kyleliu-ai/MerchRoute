@@ -12,6 +12,7 @@ import {
   OZON_CONTENT_POLICY_VERSION,
   OZON_TITLE_MAX_LENGTH,
   findMissingOzonRequiredAttributes,
+  projectOzonPresetRequiredAttributeCoverage,
   hasOzonCjk,
   hasOzonInvalidPlatformCharacters,
   isOzonSystemMediaAttributeId,
@@ -2333,6 +2334,23 @@ export class OzonPublishingService {
       const category = await this.repository.getCategory(preset.categoryKey);
       const published = category.publishedVersion;
       if (!published) throw new AppError('CONFIG_INVALID', '店铺默认预设引用的 OZON 类目尚未发布', { categoryKey: preset.categoryKey }, 409);
+      const requiredAttributeCoverage = projectOzonPresetRequiredAttributeCoverage(published.snapshot, preset);
+      const missingPresetRequiredAttributes = requiredAttributeCoverage.filter((attribute) => !attribute.covered);
+      if (missingPresetRequiredAttributes.length) {
+        throw new AppError(
+          'CONFIG_INVALID',
+          `OZON 店铺默认预设缺少必填目录属性：${missingPresetRequiredAttributes.map((attribute) => (
+            `${attribute.nameZh || attribute.nameRu || attribute.name} / ${attribute.nameRu || attribute.name} · #${attribute.attributeId}`
+          )).join('；')}`,
+          {
+            categoryKey: preset.categoryKey,
+            presetId: presetBinding.id,
+            missingRequiredAttributes: missingPresetRequiredAttributes,
+            requiredAttributeCoverage
+          },
+          409
+        );
+      }
       const procurement = purchase.procurementVersions?.[0];
       if (!procurement) throw new AppError('CONFIG_INVALID', '产品没有可用于 OZON 物化的采购版本', { sku }, 409);
       const sourceVariants = ozonSharedMaterialVariants(listing);
@@ -2733,12 +2751,27 @@ export class OzonPublishingService {
       parsed.data.offers
     );
     if (missingRequiredAttributes.length) {
+      const attributesById = new Map(published.snapshot.attributes.map((attribute) => [attribute.id, attribute]));
+      const missingRequiredAttributeDetails = missingRequiredAttributes.map((offer) => ({
+        ...offer,
+        attributes: offer.attributeIds.map((attributeId) => {
+          const attribute = attributesById.get(attributeId);
+          return {
+            attributeId,
+            name: String(attribute?.name || ''),
+            nameRu: String(attribute?.nameRu || attribute?.name || ''),
+            nameZh: String(attribute?.nameZh || '')
+          };
+        })
+      }));
       throw new AppError(
         'CONFIG_INVALID',
-        missingRequiredAttributes
-          .map((offer) => `${offer.offerId}: 缺少必填属性 ${offer.attributeIds.join(', ')}`)
+        missingRequiredAttributeDetails
+          .map((offer) => `${offer.offerId}: 缺少必填目录属性 ${offer.attributes.map((attribute) => (
+            `${attribute.nameZh || attribute.nameRu || attribute.name} / ${attribute.nameRu || attribute.name} · #${attribute.attributeId}`
+          )).join('、')}`)
           .join('；'),
-        { missingRequiredAttributes },
+        { missingRequiredAttributes: missingRequiredAttributeDetails },
         409
       );
     }
@@ -5279,7 +5312,7 @@ export function manualListingPlatformAttributes(
 export function manualListingPlatformBrand(brandInput: string, attributes: OzonAttributeValueInput[]): string {
   const brand = String(brandInput || '').trim();
   if (brand === '无品牌' || brand.toLocaleLowerCase('ru-RU') === 'нет бренда') return 'Нет бренда';
-  const platformBrand = attributes.find((attribute) => attribute.attributeId === 85 && attribute.complexId === 0);
+  const platformBrand = attributes.find((attribute) => [31, 85].includes(attribute.attributeId) && attribute.complexId === 0);
   if (platformBrand?.values.some((value) => value.dictionaryValueId === 126745801)) return 'Нет бренда';
   return brand;
 }
@@ -5318,7 +5351,7 @@ export function deriveOzonStorePresetOfferIds(
   return identityPlan.offerIdentities.map((identity) => identity.offerId);
 }
 
-type OzonSharedMaterialVariant = {
+export type OzonSharedMaterialVariant = {
   variantId: string;
   productVariantId: string;
   productVariantName: string;
@@ -5426,7 +5459,7 @@ export function assertOzonVariantColorCategoryCompatibility(
   }
 }
 
-function expandOzonStorePresetSeeds(
+export function expandOzonStorePresetSeeds(
   variants: OzonSharedMaterialVariant[],
   preset: OzonPresetInput
 ): Array<OzonSharedMaterialVariant & {

@@ -8,7 +8,7 @@ import { AppError } from '@n8n-media-review/shared';
 import { OzonRepository } from '../../repositories/ozon.js';
 import type { PurchaseRepository } from '../../repositories/purchases.js';
 import { OzonPublishingService } from './index.js';
-import { OzonAutoPublishingCoordinator, buildOzonPricingItem, buildOzonVariantIdentities, buildSharedAttributes, expandOzonOfferSeeds, inspectOzonMediaManifest, resolveOzonVariantPublicationScope, resolvePublicationDimensions, sameOzonPrePlanMediaEvidence, selectOzonPricingOption, selectPrices, uniqueManifestAssets } from './auto-publishing.js';
+import { OzonAutoPublishingCoordinator, buildOzonPricingItem, buildOzonVariantIdentities, buildSharedAttributes, currentPresetReplanPlanContract, inspectOzonMediaManifest, resolveOzonVariantPublicationScope, resolvePublicationDimensions, sameOzonPrePlanMediaEvidence, selectOzonPricingOption, selectPrices, uniqueManifestAssets } from './auto-publishing.js';
 
 const roots: string[] = [];
 
@@ -613,6 +613,75 @@ describe('OZON automatic media delivery wake-up', () => {
     }));
   });
 
+  it('does not enqueue #31 automatic work until the exact store-scoped no-brand dictionary proof passes', async () => {
+    const enqueueAutomaticJob = vi.fn(async () => ({ job: undefined, becameRunnable: false, deferred: false }));
+    const repository = {
+      configured: true,
+      enqueueAutomaticJob,
+      getSettings: vi.fn(async () => ({ rootDirectory: 'G:/missing-test-root' })),
+      getListing: vi.fn(async () => { throw new AppError('NOT_FOUND', 'OZON 草稿不存在', undefined, 404); })
+    } as unknown as OzonRepository;
+    const eligibleStore = {
+      id: '00000000-0000-4000-8000-000000000010',
+      storeAlias: 'glauke',
+      configVersion: 4,
+      credential: { activeVersionId: '00000000-0000-4000-8000-000000000050' },
+      defaultPresetId: '00000000-0000-4000-8000-000000000020',
+      presetRowVersion: 5,
+      autoPublishActivatedAt: '2026-08-01T00:00:00.000Z',
+      noBrandDictionaryRequirement: {
+        descriptionCategoryId: 15621048,
+        typeId: 91248,
+        attributeId: 31,
+        dictionaryId: 28732849,
+        categoryVersionId: '00000000-0000-4000-8000-000000000060'
+      }
+    };
+    const proveExactNoBrandDictionaryValue = vi.fn()
+      .mockRejectedValueOnce(new AppError('CONFIG_INVALID', 'Нет бренда 不唯一', undefined, 409))
+      .mockResolvedValueOnce({ dictionaryValueId: 126745801, value: 'Нет бренда' });
+    const coordinator = new OzonAutoPublishingCoordinator(
+      repository,
+      {} as OzonPublishingService,
+      { getProductIdentityBySku: vi.fn(async () => undefined) } as unknown as PurchaseRepository,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      { warn: vi.fn() } as unknown as FastifyBaseLogger,
+      {},
+      {
+        storeRepository: { listEligibleAutoStores: vi.fn(async () => [eligibleStore]) } as any,
+        storeService: {} as any,
+        storeGateway: { proveExactNoBrandDictionaryValue } as any
+      }
+    );
+    const delivery = {
+      sku: '0000152',
+      stageId: 'E005' as const,
+      submissionId: 'no-brand-proof',
+      deliveredAt: '2026-08-24T00:00:00.000Z'
+    };
+
+    await expect(coordinator.onMediaDelivered(delivery)).resolves.toBeUndefined();
+    expect(enqueueAutomaticJob).not.toHaveBeenCalled();
+
+    await coordinator.onMediaDelivered({ ...delivery, submissionId: 'no-brand-proof-confirmed' });
+    expect(enqueueAutomaticJob).toHaveBeenCalledOnce();
+    expect(proveExactNoBrandDictionaryValue).toHaveBeenNthCalledWith(2, {
+      storeId: eligibleStore.id,
+      expectedStoreConfigVersion: 4,
+      expectedCredentialVersionId: '00000000-0000-4000-8000-000000000050',
+      categoryVersionId: '00000000-0000-4000-8000-000000000060',
+      presetRowVersion: 5,
+      descriptionCategoryId: 15621048,
+      typeId: 91248,
+      attributeId: 31,
+      dictionaryId: 28732849
+    });
+    expect(proveExactNoBrandDictionaryValue.mock.calls[1]?.[0]).not.toHaveProperty('leaseToken');
+  });
+
   it('never falls back to the legacy credential after the default store has activated Vault', async () => {
     const enqueueAutomaticJob = vi.fn();
     const repository = {
@@ -954,6 +1023,97 @@ describe('OZON automatic media delivery wake-up', () => {
         ])
       })]
     }));
+  });
+
+  it('does not plan or freeze a store when its #31 no-brand dictionary proof fails at fan-out', async () => {
+    const variantId = '00000000-0000-4000-8000-000000000020';
+    const jobId = '00000000-0000-4000-8000-000000000040';
+    const completeFanoutPreparation = vi.fn(async () => undefined);
+    const freezePreparationFanoutPlan = vi.fn();
+    const automaticPublicationPlan = vi.fn();
+    const createAutomaticPublicationsFromFrozenPlan = vi.fn();
+    const proveExactNoBrandDictionaryValue = vi.fn(async () => {
+      throw new AppError('CONFIG_INVALID', 'Нет бренда 字典缺失', undefined, 409);
+    });
+    const coordinator = new OzonAutoPublishingCoordinator(
+      {
+        configured: true,
+        resolveAutomaticMediaDeliveryEvidence: vi.fn(async () => ([{
+          sourceStageId: 'E004',
+          submissionId: 'video',
+          variantId,
+          deliveredAt: '2026-08-24T00:01:00.000Z',
+          decision: 'ACCEPTED',
+          jobId
+        }]))
+      } as unknown as OzonRepository,
+      {} as OzonPublishingService,
+      {} as PurchaseRepository,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      { warn: vi.fn() } as unknown as FastifyBaseLogger,
+      {},
+      {
+        storeRepository: {
+          listEligibleAutoStores: vi.fn(async () => [{
+            id: '00000000-0000-4000-8000-000000000010',
+            storeAlias: 'glauke',
+            configVersion: 4,
+            credential: { activeVersionId: '00000000-0000-4000-8000-000000000050' },
+            defaultPresetId: '00000000-0000-4000-8000-000000000030',
+            presetRowVersion: 5,
+            noBrandDictionaryRequirement: {
+              descriptionCategoryId: 15621048,
+              typeId: 91248,
+              attributeId: 31,
+              dictionaryId: 28732849,
+              categoryVersionId: '00000000-0000-4000-8000-000000000060'
+            }
+          }]),
+          freezePreparationFanoutPlan,
+          completeFanoutPreparation,
+          finalizeMediaFanoutBatch: vi.fn()
+        } as any,
+        storeService: { automaticPublicationPlan, createAutomaticPublicationsFromFrozenPlan } as any,
+        storeGateway: { proveExactNoBrandDictionaryValue } as any
+      }
+    );
+    const job = {
+      id: jobId,
+      rowVersion: 9,
+      payload: {
+        multistorePreparation: true,
+        mediaDeliveries: [{
+          sourceStageId: 'E004', submissionId: 'video', variantId,
+          deliveredAt: '2026-08-24T00:01:00.000Z'
+        }]
+      }
+    } as unknown as import('@n8n-media-review/shared').OzonPublishJob;
+    const listing = {
+      sku: '0000152',
+      rowVersion: 7,
+      data: {
+        offers: [{ productVariantId: variantId, media: [{ assetId: 'video-1' }] }],
+        mediaAssets: [{
+          assetId: 'video-1', sourceStageId: 'E004', sourceSubmissionId: 'video',
+          productVariantId: variantId, deliveredAt: '2026-08-24T00:01:00.000Z'
+        }]
+      }
+    } as unknown as import('@n8n-media-review/shared').OzonListingDraft;
+
+    await (coordinator as any).dispatchPreparedListing(job, listing, {}, { enabled: true });
+
+    expect(proveExactNoBrandDictionaryValue).toHaveBeenCalledOnce();
+    expect(automaticPublicationPlan).not.toHaveBeenCalled();
+    expect(freezePreparationFanoutPlan).not.toHaveBeenCalled();
+    expect(createAutomaticPublicationsFromFrozenPlan).not.toHaveBeenCalled();
+    expect(completeFanoutPreparation).toHaveBeenCalledWith(jobId, {
+      publicationIds: [],
+      storeIds: [],
+      failures: [expect.objectContaining({ code: 'OZON_NO_ELIGIBLE_AUTO_STORE' })]
+    });
   });
 
   it.each([
@@ -2072,27 +2232,6 @@ describe('OZON stable variant identities', () => {
     expect(identities.get(newVariantId)).toEqual({ variantCode: '01', offerId: '0000052-01' });
   });
 
-  it('expands media variants by preset sizes and keeps each size stock and category value', () => {
-    const mediaVariant = { variantId: randomUUID(), variantName: '咖啡色', images: [], videos: [] };
-    const seeds = expandOzonOfferSeeds([mediaVariant], {
-      defaultStock: 1,
-      sizeAttributeKey: '20:100',
-      sizes: [
-        { sizeId: randomUUID(), value: 'dict:40', stock: 8 },
-        { sizeId: randomUUID(), value: 'dict:41', stock: 5 }
-      ]
-    });
-    expect(seeds).toHaveLength(2);
-    expect(seeds.map((seed) => seed.stock)).toEqual([8, 5]);
-    expect(seeds.map((seed) => seed.sizeAttribute)).toEqual([
-      { attributeId: 20, complexId: 100, values: [{ dictionaryValueId: 40 }] },
-      { attributeId: 20, complexId: 100, values: [{ dictionaryValueId: 41 }] }
-    ]);
-    expect(seeds[0]?.variantId).not.toBe(mediaVariant.variantId);
-    expect(expandOzonOfferSeeds([mediaVariant], { defaultStock: 3, sizeAttributeKey: undefined, sizes: [{ value: '', stock: 3 }] })).toEqual([
-      { variantId: mediaVariant.variantId, mediaVariant, stock: 3 }
-    ]);
-  });
 });
 
 describe('OZON automatic package dimensions', () => {
@@ -2396,6 +2535,656 @@ describe('OZON PRE_PLAN preparation recovery evidence', () => {
     })).rejects.toMatchObject({ code: 'TASK_LOCKED' });
   });
 });
+
+describe('OZON frozen fan-out current-preset replan recovery', () => {
+  it('returns a read-only 33-offer preview and creates one idempotent replacement request', async () => {
+    const harness = createFrozenReplanHarness();
+    const dryRun = await harness.coordinator.preparationRecheckPlan(harness.job.id, {
+      rowVersion: harness.job.rowVersion
+    });
+
+    expect(dryRun.plan).toMatchObject({
+      canRecheck: true,
+      recoveryMode: 'REPLAN_WITH_CURRENT_PRESET',
+      frozen: {
+        preview: {
+          storeCount: 1,
+          offerCount: 33,
+          requiredAttributeCoverage: [{
+            storeId: harness.storeIds[0],
+            categoryKey: 'ozon_shoes',
+            complete: true
+          }]
+        }
+      }
+    });
+    const preview = (dryRun.plan.frozen as any).preview;
+    expect(preview.offers).toHaveLength(33);
+    expect(preview.offers.every((offer: any) => offer.stock === 1)).toBe(true);
+    expect(preview.requiredAttributeCoverage[0].attributes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ attributeId: 31, source: 'SYSTEM', covered: true, materialized: true }),
+      expect.objectContaining({ attributeId: 9163, source: 'PRESET', covered: true, materialized: true }),
+      expect.objectContaining({ attributeId: 8292, source: 'SYSTEM', covered: true, materialized: true }),
+      expect.objectContaining({ attributeId: 4298, source: 'SIZE', covered: true, materialized: true })
+    ]));
+    expect(harness.automaticPublicationPlan).toHaveBeenLastCalledWith(
+      harness.listing.sku,
+      harness.listing.rowVersion,
+      harness.storeIds,
+      { prepareSharedSource: false, readOnly: true }
+    );
+
+    const applied = await harness.coordinator.recheckPreparation(harness.job.id, {
+      rowVersion: dryRun.plan.rowVersion,
+      planHash: dryRun.plan.planHash,
+      requestId: dryRun.plan.requestId
+    });
+    const automaticPlanCallsAfterApply = harness.automaticPublicationPlan.mock.calls.length;
+    const supersededDetail = await harness.coordinator.preparationTaskDetail(harness.job.id);
+    const supersededPlan = await harness.coordinator.preparationRecheckPlan(harness.job.id, {
+      rowVersion: harness.job.rowVersion
+    });
+    const replay = await harness.coordinator.recheckPreparation(harness.job.id, {
+      rowVersion: dryRun.plan.rowVersion,
+      planHash: dryRun.plan.planHash,
+      requestId: dryRun.plan.requestId
+    });
+
+    expect(harness.replaceAutomaticPreparationWithCurrentPreset).toHaveBeenCalledTimes(1);
+    expect(harness.replaceAutomaticPreparationWithCurrentPreset).toHaveBeenCalledWith(expect.objectContaining({
+      jobId: harness.job.id,
+      expectedJobRowVersion: dryRun.plan.rowVersion,
+      planHash: dryRun.plan.planHash,
+      requestId: dryRun.plan.requestId,
+      expectedFanoutPlanHash: harness.originalFanoutPlanHash,
+      expectedListingRowVersion: harness.listing.rowVersion,
+      expectedListingRevision: harness.listing.revision,
+      expectedGeneratedVersionId: harness.listing.generatedVersionId,
+      expectedCurrentPlanHash: `sha256:${'b'.repeat(64)}`,
+      expectedPlanContractHash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+      expectedSettingsRowVersion: 6,
+      expectedRootDirectoryHash: `sha256:${'2'.repeat(64)}`,
+      expectedVariantColorAuthorityHash: `sha256:${'3'.repeat(64)}`,
+      targetStores: [expect.objectContaining({
+        expectedOfferIds: expect.arrayContaining(['0000152-01', '0000152-33']),
+        expectedProductSnapshotHash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        expectedProductContractHash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        expectedModeEvidenceHash: `sha256:${'7'.repeat(64)}`,
+        expectedPublishedCategoryVersionId: '81000000-0000-4000-8000-000000000008'
+      })]
+    }));
+    expect(applied).toMatchObject({ recoveryMode: 'REPLAN_WITH_CURRENT_PRESET', idempotent: false });
+    expect(supersededDetail).toMatchObject({
+      recovery: {
+        canRecheck: false,
+        recoveryMode: 'NONE',
+        blockedReason: 'SUPERSEDED_BY_REPLAN_WITH_CURRENT_PRESET'
+      },
+      supersession: { replacementPreparationJobId: harness.replacementJob.id }
+    });
+    expect(supersededPlan.plan).toMatchObject({
+      canRecheck: false,
+      recoveryMode: 'NONE',
+      blockedReason: 'SUPERSEDED_BY_REPLAN_WITH_CURRENT_PRESET',
+      supersession: { replacementPreparationJobId: harness.replacementJob.id }
+    });
+    expect(replay).toMatchObject({
+      recoveryMode: 'REPLAN_WITH_CURRENT_PRESET',
+      idempotent: true,
+      job: { id: harness.replacementJob.id }
+    });
+    expect(harness.automaticPublicationPlan).toHaveBeenCalledTimes(automaticPlanCallsAfterApply);
+    expect(harness.repository.recheck).not.toHaveBeenCalled();
+  });
+
+  it('uses each store preset current published category for required coverage', async () => {
+    const harness = createFrozenReplanHarness({ secondStore: true, secondCategoryMissingRequired: true });
+    const dryRun = await harness.coordinator.preparationRecheckPlan(harness.job.id, {
+      rowVersion: harness.job.rowVersion
+    });
+
+    expect(harness.repository.getCategory).toHaveBeenCalledWith('ozon_shoes');
+    expect(harness.repository.getCategory).toHaveBeenCalledWith('ozon_boots');
+    expect(harness.repository.getCategory).not.toHaveBeenCalledWith('legacy_listing_category');
+    expect(dryRun.plan).toMatchObject({
+      canRecheck: false,
+      recoveryMode: 'REPLAN_WITH_CURRENT_PRESET',
+      frozen: { preview: { storeCount: 2, offerCount: 66 } }
+    });
+    expect(dryRun.plan.blockedReason).toContain(`REQUIRED_ATTRIBUTE_NOT_MATERIALIZED:${harness.storeIds[1]}:555:0`);
+    expect((dryRun.plan.frozen as any).preview.requiredAttributeCoverage).toEqual(expect.arrayContaining([
+      expect.objectContaining({ storeId: harness.storeIds[0], categoryKey: 'ozon_shoes', complete: true }),
+      expect.objectContaining({ storeId: harness.storeIds[1], categoryKey: 'ozon_boots', complete: false })
+    ]));
+  });
+
+  it('blocks apply on gateway, lease or remote evidence and never falls through to generic recheck', async () => {
+    const harness = createFrozenReplanHarness({ evidenceBlockers: ['GATEWAY_EVIDENCE_PRESENT'] });
+    const dryRun = await harness.coordinator.preparationRecheckPlan(harness.job.id, {
+      rowVersion: harness.job.rowVersion
+    });
+    expect(dryRun.plan).toMatchObject({
+      canRecheck: false,
+      recoveryMode: 'REPLAN_WITH_CURRENT_PRESET'
+    });
+    expect(dryRun.plan.blockedReason).toContain('GATEWAY_EVIDENCE_PRESENT');
+
+    await expect(harness.coordinator.recheckPreparation(harness.job.id, {
+      rowVersion: dryRun.plan.rowVersion,
+      planHash: dryRun.plan.planHash,
+      requestId: dryRun.plan.requestId
+    })).rejects.toMatchObject({ code: 'OZON_READBACK_REQUIRED' });
+    expect(harness.replaceAutomaticPreparationWithCurrentPreset).not.toHaveBeenCalled();
+    expect(harness.repository.recheck).not.toHaveBeenCalled();
+  });
+
+  it('proves the storeId-only no-brand dictionary gate on dry-run and again before replacement', async () => {
+    const harness = createFrozenReplanHarness({ noBrandGateFails: true });
+    const dryRun = await harness.coordinator.preparationRecheckPlan(harness.job.id, {
+      rowVersion: harness.job.rowVersion
+    });
+
+    expect(dryRun.plan).toMatchObject({
+      canRecheck: false,
+      recoveryMode: 'REPLAN_WITH_CURRENT_PRESET'
+    });
+    expect(dryRun.plan.blockedReason).toContain('CURRENT_PRESET_NO_BRAND_DICTIONARY_UNPROVEN');
+    expect(harness.proveExactNoBrandDictionaryValue).toHaveBeenCalledWith(expect.objectContaining({
+      storeId: harness.storeIds[0]
+    }));
+    expect(harness.proveExactNoBrandDictionaryValue.mock.calls[0]?.[0]).not.toHaveProperty('leaseToken');
+    expect(harness.automaticPublicationPlan).not.toHaveBeenCalled();
+
+    await expect(harness.coordinator.recheckPreparation(harness.job.id, {
+      rowVersion: dryRun.plan.rowVersion,
+      planHash: dryRun.plan.planHash,
+      requestId: dryRun.plan.requestId
+    })).rejects.toMatchObject({ code: 'OZON_READBACK_REQUIRED' });
+    expect(harness.proveExactNoBrandDictionaryValue).toHaveBeenCalledTimes(2);
+    expect(harness.replaceAutomaticPreparationWithCurrentPreset).not.toHaveBeenCalled();
+  });
+
+  it('freezes only the dry-run stores after identity-neutral semantic CAS and blocks every business drift', async () => {
+    const targetStoreId = '10000000-0000-4000-8000-000000000001';
+    const extraStoreId = '20000000-0000-4000-8000-000000000002';
+    const credentialVersionId = '12000000-0000-4000-8000-000000000001';
+    const presetId = '13000000-0000-4000-8000-000000000001';
+    const categoryVersionId = '14000000-0000-4000-8000-000000000001';
+    const presetSnapshot = { categoryKey: 'ozon_shoes', sizes: [{ value: '40', stock: 1 }] };
+    const semanticProductSnapshot = {
+      titleRu: 'Кроссовки',
+      sharedAttributes: [{ attributeId: 9163, values: [{ dictionaryValueId: 22880 }] }],
+      offers: [{
+        offerId: '0000152-01', stock: 1, price: 1500,
+        attributes: [{ attributeId: 4298, revision: 'business-v1', values: [{ value: '40' }] }],
+        images: ['variants/brown/images/01.png']
+      }]
+    };
+    const dryRunProductSnapshot = {
+      ...structuredClone(semanticProductSnapshot),
+      materialHash: `sha256:${'1'.repeat(64)}`,
+      generatedVersionId: '15000000-0000-4000-8000-000000000001',
+      revision: 4,
+      rowVersion: 8
+    };
+    const replacementProductSnapshot = {
+      ...structuredClone(semanticProductSnapshot),
+      materialHash: `sha256:${'2'.repeat(64)}`,
+      generatedVersionId: '16000000-0000-4000-8000-000000000001',
+      revision: 5,
+      rowVersion: 9
+    };
+    const productSnapshotHash = `sha256:${createHash('sha256').update(stableTestJson(dryRunProductSnapshot)).digest('hex')}`;
+    const productContractHash = `sha256:${createHash('sha256').update(stableTestJson(semanticProductSnapshot)).digest('hex')}`;
+    const replacementProductSnapshotHash = `sha256:${createHash('sha256')
+      .update(stableTestJson(replacementProductSnapshot)).digest('hex')}`;
+    const modeEvidenceHash = `sha256:${'8'.repeat(64)}`;
+    const targetStore = {
+      id: targetStoreId,
+      storeAlias: 'target',
+      rowVersion: 3,
+      configVersion: 4,
+      defaultPresetId: presetId,
+      presetRowVersion: 5,
+      presetSnapshot,
+      autoPublishMode: 'CREATE_ONLY',
+      credential: { activeVersionId: credentialVersionId },
+      warehouseId: 'warehouse-1',
+      fulfillmentMode: 'FBS',
+      accountCurrency: 'RUB'
+    };
+    const target = {
+      id: targetStoreId,
+      rowVersion: 3,
+      configVersion: 4,
+      credentialVersionId,
+      presetId,
+      presetRowVersion: 5,
+      presetDefinitionHash: `sha256:${'f'.repeat(64)}`,
+      presetSnapshotHash: `sha256:${createHash('sha256').update(stableTestJson(presetSnapshot)).digest('hex')}`,
+      publicationMode: 'CREATE_ONLY',
+      warehouseId: 'warehouse-1',
+      fulfillmentMode: 'FBS',
+      accountCurrency: 'RUB',
+      expectedOfferIds: ['0000152-01'],
+      categoryKey: 'ozon_shoes',
+      expectedPublishedCategoryVersionId: categoryVersionId,
+      expectedProductSnapshotHash: productSnapshotHash,
+      expectedProductContractHash: productContractHash,
+      expectedModeEvidenceHash: modeEvidenceHash
+    };
+    const deliveredAt = '2026-08-24T01:00:00.000Z';
+    const job: any = {
+      id: 'b8094cb3-2c9c-411c-af6b-aab99bbff6d1',
+      sku: '0000152', taskKind: 'SHARED_PREPARATION', state: 'READY', source: 'AUTO',
+      storeAlias: 'default', offerIds: ['0000152-01'], rowVersion: 1, retryCount: 0,
+      stageStates: {}, ozonProductLinks: [],
+      payload: {
+        multistorePreparation: true,
+        mediaDeliveries: [{ sourceStageId: 'E005', submissionId: 'images', variantId: 'brown', deliveredAt }],
+        replanRecovery: { recoveryMode: 'REPLAN_WITH_CURRENT_PRESET', targetStores: [target] }
+      },
+      createdAt: deliveredAt, updatedAt: deliveredAt
+    };
+    const listing: any = {
+      sku: job.sku, productName: '运动鞋', status: 'READY', managementSource: 'AUTO',
+      rowVersion: 9, revision: 5,
+      data: {
+        mediaAssets: [{
+          assetId: 'asset-1', relativePath: 'variants/brown/images/01.png', kind: 'image',
+          sourceStageId: 'E005', sourceSubmissionId: 'images', productVariantId: 'brown', deliveredAt
+        }],
+        offers: [{ offerId: '0000152-01', media: [{ assetId: 'asset-1' }] }]
+      }
+    };
+    let frozenPlan: any;
+    const replacementPlan = {
+      schemaVersion: 3,
+      planHash: `sha256:${'9'.repeat(64)}`,
+      sku: listing.sku,
+      contentPolicyVersion: 'merchroute-ozon-content-v3',
+      materialHash: `sha256:${'2'.repeat(64)}`,
+      materialHashVersion: 'ozon-shared-material-v1',
+      sourceMediaIdentityHash: `sha256:${'5'.repeat(64)}`,
+      settingsRowVersion: 6,
+      rootDirectoryHash: `sha256:${'6'.repeat(64)}`,
+      variantColorAuthority: { hash: `sha256:${'7'.repeat(64)}` },
+      items: [{
+        storeId: targetStoreId,
+        ready: true,
+        blockers: [],
+        storeRowVersion: target.rowVersion,
+        storeConfigVersion: target.configVersion,
+        credentialVersionId: target.credentialVersionId,
+        presetId: target.presetId,
+        presetRowVersion: target.presetRowVersion,
+        presetDefinitionHash: target.presetDefinitionHash,
+        publicationMode: target.publicationMode,
+        warehouseId: target.warehouseId,
+        fulfillmentMode: target.fulfillmentMode,
+        accountCurrency: target.accountCurrency,
+        offerIds: target.expectedOfferIds
+      }],
+      stores: [{
+        storeId: targetStoreId,
+        productSnapshot: replacementProductSnapshot,
+        productSnapshotHash: replacementProductSnapshotHash,
+        modeEvidence: { evidenceHash: modeEvidenceHash }
+      }]
+    };
+    const dryRunPlan = {
+      ...structuredClone(replacementPlan),
+      planHash: `sha256:${'a'.repeat(64)}`,
+      materialHash: `sha256:${'1'.repeat(64)}`,
+      stores: [{
+        storeId: targetStoreId,
+        productSnapshot: dryRunProductSnapshot,
+        productSnapshotHash,
+        modeEvidence: { evidenceHash: modeEvidenceHash }
+      }]
+    };
+    const expectedPlanContract = currentPresetReplanPlanContract(dryRunPlan, [target]);
+    expect(dryRunPlan.materialHash).not.toBe(replacementPlan.materialHash);
+    expect(dryRunProductSnapshot.generatedVersionId).not.toBe(replacementProductSnapshot.generatedVersionId);
+    expect(currentPresetReplanPlanContract(replacementPlan, [target]).hash).toBe(expectedPlanContract.hash);
+    Object.assign(job.payload.replanRecovery, {
+      expectedCurrentPlanHash: dryRunPlan.planHash,
+      expectedPlanContractHash: expectedPlanContract.hash,
+      expectedSettingsRowVersion: expectedPlanContract.settingsRowVersion,
+      expectedRootDirectoryHash: expectedPlanContract.rootDirectoryHash,
+      expectedVariantColorAuthorityHash: expectedPlanContract.variantColorAuthorityHash
+    });
+    expect(job.payload.replanRecovery.expectedCurrentPlanHash).not.toBe(replacementPlan.planHash);
+    let driftPlan: 'TITLE' | 'ATTRIBUTE' | 'STOCK' | 'PRICE' | 'MEDIA' | undefined;
+    const automaticPublicationPlan = vi.fn(async (_sku: string, _rowVersion: number, storeIds: string[]) => {
+      const result = {
+        ...structuredClone(replacementPlan),
+        items: replacementPlan.items.filter((item) => storeIds.includes(item.storeId)),
+        stores: structuredClone(replacementPlan.stores.filter((entry) => storeIds.includes(entry.storeId)))
+      };
+      if (driftPlan === 'TITLE') {
+        result.stores[0]!.productSnapshot.titleRu = 'Другие кроссовки';
+      } else if (driftPlan === 'ATTRIBUTE') {
+        // This nested business field deliberately shares the name "revision"
+        // with a top-level replacement identity. It must never be normalized away.
+        result.stores[0]!.productSnapshot.offers[0]!.attributes[0]!.revision = 'business-v2';
+      } else if (driftPlan === 'STOCK') {
+        result.stores[0]!.productSnapshot.offers[0]!.stock = 2;
+      } else if (driftPlan === 'PRICE') {
+        result.stores[0]!.productSnapshot.offers[0]!.price = 1600;
+      } else if (driftPlan === 'MEDIA') {
+        result.stores[0]!.productSnapshot.offers[0]!.images[0] = 'variants/brown/images/02.png';
+      }
+      if (driftPlan) {
+        result.stores[0]!.productSnapshotHash = `sha256:${createHash('sha256')
+          .update(stableTestJson(result.stores[0]!.productSnapshot)).digest('hex')}`;
+      }
+      return result;
+    });
+    const freezePreparationFanoutPlan = vi.fn(async (_jobId: string, _rowVersion: number, plan: any) => {
+      frozenPlan = structuredClone(plan);
+      job.payload = { ...job.payload, fanoutPlan: frozenPlan };
+      return frozenPlan;
+    });
+    const createAutomaticPublicationsFromFrozenPlan = vi.fn(async () => ({
+      publications: [{ id: '30000000-0000-4000-8000-000000000003' }],
+      failures: [], accepted: 1, failed: 0
+    }));
+    const storeRepository = {
+      listEligibleAutoStores: vi.fn(async () => [targetStore, { ...targetStore, id: extraStoreId, storeAlias: 'extra' }]),
+      freezePreparationFanoutPlan,
+      finalizeMediaFanoutBatch: vi.fn(async () => true),
+      completeFanoutPreparation: vi.fn(async () => undefined)
+    };
+    const repository = {
+      resolveAutomaticMediaDeliveryEvidence: vi.fn(async ({ identities }: any) => identities.map((identity: any) => ({
+        ...identity, decision: 'ACCEPTED', jobId: job.id
+      }))),
+      getCategory: vi.fn(async () => ({ publishedVersion: { id: categoryVersionId } })),
+      getJob: vi.fn(async () => job)
+    };
+    const coordinator = new OzonAutoPublishingCoordinator(
+      repository as any,
+      { dispatchAutomaticJob: vi.fn() } as any,
+      {} as any, {} as any, {} as any, {} as any, {} as any,
+      { warn: vi.fn() } as any,
+      {},
+      {
+        storeRepository: storeRepository as any,
+        storeService: { automaticPublicationPlan, createAutomaticPublicationsFromFrozenPlan } as any
+      }
+    );
+
+    for (const drift of ['TITLE', 'ATTRIBUTE', 'STOCK', 'PRICE', 'MEDIA'] as const) {
+      driftPlan = drift;
+      await expect((coordinator as any).dispatchPreparedListing(job, listing, {}, { enabled: true }))
+        .rejects.toMatchObject({ code: 'OZON_CURRENT_PRESET_PLAN_DRIFT' });
+    }
+    expect(freezePreparationFanoutPlan).not.toHaveBeenCalled();
+    driftPlan = undefined;
+
+    await (coordinator as any).dispatchPreparedListing(job, listing, {}, { enabled: true });
+
+    expect(automaticPublicationPlan).toHaveBeenCalledWith(listing.sku, listing.rowVersion, [targetStoreId]);
+    expect(frozenPlan.items.map((item: any) => item.storeId)).toEqual([targetStoreId]);
+    expect(createAutomaticPublicationsFromFrozenPlan).toHaveBeenCalledWith(
+      expect.objectContaining({ items: [expect.objectContaining({ storeId: targetStoreId })] }),
+      expect.objectContaining({ sourceStageId: 'E005', submissionId: 'images' }),
+      job.id
+    );
+  });
+
+  it('keeps GET evidence SQL strictly read-only and reserves row locks for apply', async () => {
+    const fanoutPlanHash = `sha256:${'a'.repeat(64)}`;
+    const query = vi.fn(async (sqlInput: unknown) => {
+      const sql = String(sqlInput);
+      if (sql.includes('FROM ozon_publish_jobs WHERE id=$1')) {
+        return { rows: [{
+          id: 'b8094cb3-2c9c-411c-af6b-aab99bbff6d1', sku: '0000152', source: 'AUTO',
+          task_kind: 'SHARED_PREPARATION', state: 'NEEDS_ATTENTION', row_version: 7,
+          payload: { multistorePreparation: true, fanoutPlan: { planHash: fanoutPlanHash } },
+          product_links: [], directory_stage: 'INBOX'
+        }] };
+      }
+      if (sql.includes('FROM ozon_store_publications')) return { rows: [] };
+      if (sql.includes('FROM ozon_media_deliveries')) {
+        return { rows: [{
+          source_stage_id: 'E005', submission_id: 'images', variant_id: 'brown',
+          payload: { autoPublishDecision: 'ACCEPTED' }
+        }] };
+      }
+      if (sql.includes('COUNT(*) count')) return { rows: [{ count: '0' }] };
+      throw new Error(`unexpected read-only replan evidence query: ${sql}`);
+    });
+    const repository = new OzonRepository();
+    Object.defineProperty(repository, 'pool', { value: { query }, configurable: true });
+
+    await repository.getAutomaticPreparationReplanEvidence('b8094cb3-2c9c-411c-af6b-aab99bbff6d1');
+
+    expect(query).toHaveBeenCalled();
+    expect(query.mock.calls.map(([sql]) => String(sql)).some((sql) => /FOR\s+(UPDATE|SHARE)/i.test(sql))).toBe(false);
+    expect(query.mock.calls.map(([sql]) => String(sql)).some((sql) => /^\s*(INSERT|UPDATE|DELETE)\b/i.test(sql))).toBe(false);
+  });
+});
+
+function createFrozenReplanHarness(options: {
+  secondStore?: boolean;
+  secondCategoryMissingRequired?: boolean;
+  evidenceBlockers?: string[];
+  noBrandGateFails?: boolean;
+} = {}) {
+  const originalFanoutPlanHash = `sha256:${'a'.repeat(64)}`;
+  const currentPlanHash = `sha256:${'b'.repeat(64)}`;
+  const evidenceHash = `sha256:${'c'.repeat(64)}`;
+  const storeIds = [
+    '10000000-0000-4000-8000-000000000001',
+    ...(options.secondStore ? ['20000000-0000-4000-8000-000000000002'] : [])
+  ];
+  const publicationIds = storeIds.map((_, index) => `${index + 3}0000000-0000-4000-8000-00000000000${index + 3}`);
+  const publicationJobIds = storeIds.map((_, index) => `${index + 5}0000000-0000-4000-8000-00000000000${index + 5}`);
+  const generatedVersionId = '70000000-0000-4000-8000-000000000007';
+  const listing: any = {
+    sku: '0000152', productName: '运动鞋', managementSource: 'AUTO', status: 'READY',
+    rowVersion: 8, revision: 4, generatedVersionId,
+    materialHash: `sha256:${'d'.repeat(64)}`,
+    materialHashVersion: 'ozon-shared-material-v1',
+    contentPolicyVersion: 'merchroute-ozon-content-v3',
+    dataSignature: `sha256:${'e'.repeat(64)}`,
+    data: { categoryKey: 'legacy_listing_category', categoryVersionId: randomUUID(), offers: [] },
+    createdAt: '2026-08-24T01:00:00.000Z', updatedAt: '2026-08-24T01:01:00.000Z'
+  };
+  const job: any = {
+    id: 'b8094cb3-2c9c-411c-af6b-aab99bbff6d1', sku: listing.sku,
+    taskKind: 'SHARED_PREPARATION', state: 'NEEDS_ATTENTION', source: 'AUTO', storeAlias: 'default',
+    offerIds: [], rowVersion: 7, retryCount: 0, stageStates: {}, ozonProductLinks: [],
+    lastErrorCode: 'CONFIG_INVALID', lastErrorMessage: '缺少必填属性 31, 9163, 8292',
+    payload: {
+      multistorePreparation: true,
+      mediaDeliveries: [{
+        sourceStageId: 'E005', submissionId: 'images', variantId: 'brown',
+        deliveredAt: '2026-08-24T01:00:00.000Z'
+      }],
+      fanoutPlan: {
+        schemaVersion: 3, planHash: originalFanoutPlanHash,
+        items: storeIds.map((storeId) => ({ storeId, ready: false, blockers: ['缺少必填属性'] }))
+      }
+    },
+    createdAt: '2026-08-24T01:00:00.000Z', updatedAt: '2026-08-24T01:02:00.000Z'
+  };
+  const requiredAttributes = [
+    { id: 31, complexId: 0, name: 'Бренд одежды и обуви', nameRu: 'Бренд одежды и обуви', nameZh: '服装和鞋类品牌', required: true },
+    { id: 9163, complexId: 0, name: 'Пол', nameRu: 'Пол', nameZh: '性别', required: true },
+    { id: 8292, complexId: 0, name: 'Объединить на одной карточке', nameRu: 'Объединить на одной карточке', nameZh: '合并至一张卡片', required: true },
+    { id: 4298, complexId: 0, name: 'Российский размер', nameRu: 'Российский размер', nameZh: '俄罗斯尺码', required: true }
+  ];
+  const categories = new Map<string, any>([
+    ['ozon_shoes', {
+      publishedVersion: { id: '81000000-0000-4000-8000-000000000008', snapshot: {
+        attributes: requiredAttributes, sizing: { sizeAttributeKey: '4298:0' }
+      } }
+    }],
+    ['ozon_boots', {
+      publishedVersion: { id: '82000000-0000-4000-8000-000000000008', snapshot: {
+        attributes: [
+          ...requiredAttributes,
+          ...(options.secondCategoryMissingRequired
+            ? [{ id: 555, complexId: 0, name: 'Материал', nameRu: 'Материал', nameZh: '材质', required: true }]
+            : [])
+        ],
+        sizing: { sizeAttributeKey: '4298:0' }
+      } }
+    }]
+  ]);
+  const sizes = Array.from({ length: 11 }, (_, index) => ({
+    sizeId: `${String(index + 1).padStart(8, '0')}-0000-4000-8000-000000000001`,
+    value: String(35 + index), stock: 1
+  }));
+  const planStores = storeIds.map((storeId, storeIndex) => {
+    const categoryKey = storeIndex === 0 ? 'ozon_shoes' : 'ozon_boots';
+    const presetSnapshot = {
+      categoryKey,
+      sharedAttributes: [{ attributeId: 9163, complexId: 0, values: [{ dictionaryValueId: 22880, value: 'Мужской' }] }],
+      variantAttributes: [], sizeAttributeKey: '4298:0', sizes
+    };
+    const offers = Array.from({ length: 33 }, (_, offerIndex) => ({
+      offerId: `${listing.sku}-${String(offerIndex + 1).padStart(2, '0')}`,
+      variantId: `color-${Math.floor(offerIndex / 11) + 1}`,
+      sizeId: sizes[offerIndex % sizes.length]!.sizeId,
+      stock: 1,
+      attributes: [{ attributeId: 4298, complexId: 0, values: [{ value: sizes[offerIndex % sizes.length]!.value }] }]
+    }));
+    const productSnapshot = {
+      sharedAttributes: [
+        { attributeId: 31, complexId: 0, values: [{ dictionaryValueId: 1, value: 'Нет бренда' }] },
+        { attributeId: 9163, complexId: 0, values: [{ dictionaryValueId: 22880, value: 'Мужской' }] },
+        { attributeId: 8292, complexId: 0, values: [{ value: listing.sku }] }
+      ],
+      offers
+    };
+    return {
+      storeId,
+      storeSnapshot: { storeAlias: `store-${storeIndex + 1}`, presetSnapshot },
+      productSnapshot,
+      productSnapshotHash: `sha256:${createHash('sha256').update(stableTestJson(productSnapshot)).digest('hex')}`,
+      modeEvidence: { evidenceHash: `sha256:${String(storeIndex + 7).repeat(64)}` }
+    };
+  });
+  const planItems = planStores.map((entry, index) => ({
+    storeId: entry.storeId, storeAlias: `store-${index + 1}`, ready: true, blockers: [],
+    storeRowVersion: 3, storeConfigVersion: 4,
+    credentialVersionId: `${index + 1}2000000-0000-4000-8000-00000000000${index + 1}`,
+    presetId: `${index + 1}3000000-0000-4000-8000-00000000000${index + 1}`,
+    presetRowVersion: 5, presetDefinitionHash: `sha256:${String(index + 5).repeat(64)}`,
+    publicationMode: 'CREATE_ONLY', warehouseId: `warehouse-${index + 1}`,
+    fulfillmentMode: 'FBS', accountCurrency: 'RUB',
+    offerIds: (entry.productSnapshot.offers as any[]).map((offer) => offer.offerId)
+  }));
+  const eligibleStores = planItems.map((item, index) => ({
+    id: item.storeId,
+    storeAlias: item.storeAlias,
+    rowVersion: item.storeRowVersion,
+    configVersion: item.storeConfigVersion,
+    defaultPresetId: item.presetId,
+    presetRowVersion: item.presetRowVersion,
+    presetSnapshot: planStores[index]!.storeSnapshot.presetSnapshot,
+    autoPublishMode: item.publicationMode,
+    credential: { activeVersionId: item.credentialVersionId },
+    warehouseId: item.warehouseId,
+    fulfillmentMode: item.fulfillmentMode,
+    accountCurrency: item.accountCurrency,
+    ...(options.noBrandGateFails ? {
+      noBrandDictionaryRequirement: {
+        categoryVersionId: '81000000-0000-4000-8000-000000000008',
+        descriptionCategoryId: 17001,
+        typeId: 97001,
+        attributeId: 31,
+        dictionaryId: 1
+      }
+    } : {})
+  }));
+  const freshPlan = {
+    schemaVersion: 3,
+    planHash: currentPlanHash,
+    sku: listing.sku,
+    contentPolicyVersion: listing.contentPolicyVersion,
+    materialHash: listing.materialHash,
+    materialHashVersion: listing.materialHashVersion,
+    sourceMediaIdentityHash: `sha256:${'1'.repeat(64)}`,
+    settingsRowVersion: 6,
+    rootDirectoryHash: `sha256:${'2'.repeat(64)}`,
+    variantColorAuthority: { hash: `sha256:${'3'.repeat(64)}` },
+    items: planItems,
+    stores: planStores
+  };
+  const evidenceBlockers = options.evidenceBlockers || [];
+  const evidence: any = {
+    safe: evidenceBlockers.length === 0,
+    blockers: evidenceBlockers,
+    evidenceHash,
+    originalJobId: job.id,
+    originalJobRowVersion: job.rowVersion,
+    originalFanoutPlanHash,
+    publicationIds,
+    publicationJobIds,
+    storeIds,
+    publicationCount: storeIds.length,
+    publicationJobCount: storeIds.length,
+    gatewayRequestCount: evidenceBlockers.includes('GATEWAY_EVIDENCE_PRESENT') ? 1 : 0,
+    mappingCount: 0,
+    productLinkCount: 0,
+    mediaDeliveryCount: 2,
+    activeLeaseCount: 0,
+    activeSlotCount: 0,
+    activeStatusRefreshCount: 0
+  };
+  const replacementJob: any = {
+    ...job,
+    id: '90000000-0000-5000-8000-000000000009',
+    state: 'READY', rowVersion: 1, revision: listing.revision + 1,
+    payload: { multistorePreparation: true, replanRecovery: { recoveryMode: 'REPLAN_WITH_CURRENT_PRESET' } }
+  };
+  const automaticPublicationPlan = vi.fn(async () => structuredClone(freshPlan));
+  const proveExactNoBrandDictionaryValue = vi.fn(async () => {
+    if (options.noBrandGateFails) {
+      throw new AppError('CONFIG_INVALID', 'Нет бренда 字典值不唯一', undefined, 409);
+    }
+    return { dictionaryValueId: 126745801 };
+  });
+  const replaceAutomaticPreparationWithCurrentPreset = vi.fn(async (input: any) => {
+    const marker = {
+      requestId: input.requestId,
+      planHash: input.planHash,
+      replacementPreparationJobId: replacementJob.id
+    };
+    job.rowVersion += 1;
+    job.payload = { ...job.payload, replanReplacement: marker };
+    return { job: replacementJob, supersededJob: structuredClone(job), idempotent: false };
+  });
+  const repository: any = {
+    getJob: vi.fn(async (id: string) => id === replacementJob.id ? replacementJob : job),
+    getListing: vi.fn(async () => listing),
+    getCategory: vi.fn(async (categoryKey: string) => categories.get(categoryKey)
+      || Promise.reject(new AppError('NOT_FOUND', '类目不存在', { categoryKey }, 404))),
+    getAutomaticPreparationReplanEvidence: vi.fn(async () => evidence),
+    replaceAutomaticPreparationWithCurrentPreset,
+    recheck: vi.fn()
+  };
+  const coordinator = new OzonAutoPublishingCoordinator(
+    repository,
+    {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
+    { warn: vi.fn() } as any,
+    {},
+    {
+      storeRepository: { listEligibleAutoStores: vi.fn(async () => eligibleStores) } as any,
+      storeService: { automaticPublicationPlan } as any,
+      storeGateway: { proveExactNoBrandDictionaryValue } as any
+    }
+  );
+  return {
+    coordinator, repository, job, listing, replacementJob, storeIds, originalFanoutPlanHash,
+    automaticPublicationPlan, replaceAutomaticPreparationWithCurrentPreset, proveExactNoBrandDictionaryValue
+  };
+}
 
 async function createPrePlanHarness(options: {
   mediaOwnerDrift?: boolean;

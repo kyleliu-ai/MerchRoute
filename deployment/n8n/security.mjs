@@ -157,6 +157,16 @@ export function sanitizeWorkflow(rawWorkflow, catalogEntry) {
   };
 }
 
+export function applyWorkflowDeploymentContract(workflow, catalogEntry) {
+  return {
+    ...workflow,
+    settings: {
+      ...(workflow.settings || {}),
+      ...(catalogEntry.deploymentSettings || {}),
+    },
+  };
+}
+
 function inspectValue(value, path, findings, key = '') {
   if (typeof value === 'string') {
     if (SENSITIVE_KEY.test(key) && !isSafeReference(value)) findings.push(`${path}: 敏感字段仍含字面值`);

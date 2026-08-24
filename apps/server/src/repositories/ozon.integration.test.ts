@@ -6,7 +6,7 @@ import { ozonPresetInputSchema, stableOzonOfferId } from '@n8n-media-review/shar
 import { registerOzonRoutes } from '../routes/ozon.js';
 import { OzonPublishingService } from '../services/ozon-publishing/index.js';
 import { OzonStoreRepository } from './ozon-stores.js';
-import { OzonRepository } from './ozon.js';
+import { OZON_AUTOMATIC_REPLAN_MEDIA_REBIND_SQL, OzonRepository } from './ozon.js';
 
 const connectionString = process.env.DATABASE_URL;
 const schema = `ozon_test_${randomUUID().replaceAll('-', '')}`;
@@ -908,6 +908,98 @@ describe.runIf(Boolean(connectionString))('OZON repository PostgreSQL integratio
     expect(Number(idempotentTypeSnapshots.rows[0]!.count)).toBe(Number(typeMigratedSnapshots.rows[0]!.count));
     listing = typeMigratedListing;
 
+    const sizedCategoryInput = {
+      categoryKey: 'sized_sneakers',
+      nameRu: 'Кроссовки',
+      nameZh: '运动鞋',
+      descriptionCategoryId: 17028922,
+      typeId: 970642857,
+      attributes: [
+        {
+          id: 4298, name: 'Российский размер', nameRu: 'Российский размер', nameZh: '俄罗斯尺码',
+          type: 'String', required: true, dictionaryId: 361, complexId: 0
+        },
+        {
+          id: 31, name: 'Бренд в одежде и обуви', nameRu: 'Бренд в одежде и обуви', nameZh: '服装和鞋类品牌',
+          type: 'String', required: true, dictionaryId: 28732849, complexId: 0
+        },
+        {
+          id: 9163, name: 'Пол', nameRu: 'Пол', nameZh: '性别',
+          type: 'String', required: true, dictionaryId: 320, complexId: 0
+        },
+        {
+          id: 8292, name: 'Объединить на одной карточке', nameRu: 'Объединить на одной карточке', nameZh: '合并至一张卡片',
+          type: 'String', required: true, dictionaryId: 0, complexId: 0
+        }
+      ],
+      dictionarySnapshot: {
+        '4298': [
+          { id: 40, value: '40 中文 / 40 RU', valueRu: '40 RU', valueZh: '40 中文' },
+          { id: 41, value: '41 中文 / 41 RU', valueRu: '41 RU', valueZh: '41 中文' }
+        ]
+      },
+      sizing: { sizeMode: 'sized' as const, sizeAttributeKey: '4298:0' },
+      confirmedBy: 'integration-test'
+    };
+    await repository.createCategory(sizedCategoryInput);
+    const sizedCategory = await repository.publishCategory(sizedCategoryInput.categoryKey, 'integration-test');
+    expect(sizedCategory.publishedVersion?.snapshot.sizing).toEqual({ sizeMode: 'sized', sizeAttributeKey: '4298:0' });
+
+    const sizedPresetInput = {
+      name: 'OZON 运动鞋尺码预设',
+      categoryKey: sizedCategory.categoryKey,
+      pricingTemplateId: randomUUID(),
+      shippingTemplateId: randomUUID(),
+      shippingServiceCode: 'CEL_RFBS_ECONOMY',
+      vat: '0.2' as const,
+      defaultStock: 8,
+      dimensions: { length: 300, width: 200, height: 120, dimensionUnit: 'mm' as const, weight: 700, weightUnit: 'g' as const },
+      sharedAttributes: [{ attributeId: 9163, complexId: 0, values: [{ dictionaryValueId: 22880 }] }],
+      sizeAttributeKey: '4298:0',
+      sizes: [
+        { sizeId: randomUUID(), value: 'dict:40', stock: 8 },
+        { sizeId: randomUUID(), value: 'dict:41', stock: 5 }
+      ]
+    };
+    const sizedPreset = await repository.createPreset(sizedPresetInput);
+    expect(sizedPreset.sizes).toMatchObject([{ value: 'dict:40', stock: 8 }, { value: 'dict:41', stock: 5 }]);
+    await expect(repository.createPreset({
+      ...sizedPresetInput,
+      name: '缺少性别',
+      sharedAttributes: []
+    })).rejects.toMatchObject({
+      code: 'CONFIG_INVALID',
+      statusCode: 409,
+      message: expect.stringContaining('性别 / Пол · #9163')
+    });
+    await expect(repository.createPreset({
+      ...sizedPresetInput,
+      name: '非法尺码字典值',
+      sizes: [{ sizeId: randomUUID(), value: 'dict:99', stock: 1 }]
+    })).rejects.toMatchObject({ code: 'CONFIG_INVALID', statusCode: 409 });
+    await expect(repository.createPreset({
+      ...sizedPresetInput,
+      name: '错误尺码属性',
+      sizeAttributeKey: '9533:0'
+    })).rejects.toMatchObject({ code: 'CONFIG_INVALID', statusCode: 409 });
+    await expect(repository.createPreset({
+      ...sizedPresetInput,
+      name: '无尺码类目错用尺码',
+      categoryKey: category.categoryKey
+    })).rejects.toMatchObject({ code: 'CONFIG_INVALID', statusCode: 409 });
+    await expect(repository.updatePreset(sizedPreset.id, {
+      ...sizedPresetInput,
+      sizes: [{ sizeId: randomUUID(), value: 'dict:99', stock: 1 }],
+      rowVersion: sizedPreset.rowVersion
+    })).rejects.toMatchObject({ code: 'CONFIG_INVALID', statusCode: 409 });
+    expect((await repository.getPreset(sizedPreset.id)).rowVersion).toBe(sizedPreset.rowVersion);
+    const sizedPresetUpdated = await repository.updatePreset(sizedPreset.id, {
+      ...sizedPresetInput,
+      sizes: sizedPresetInput.sizes.map((size, index) => ({ ...size, stock: index + 2 })),
+      rowVersion: sizedPreset.rowVersion
+    });
+    expect(sizedPresetUpdated).toMatchObject({ rowVersion: sizedPreset.rowVersion + 1, sizes: [{ stock: 2 }, { stock: 3 }] });
+
     const preset = await repository.createPreset({
       name: 'OZON 默认预设',
       categoryKey: category.categoryKey,
@@ -916,6 +1008,8 @@ describe.runIf(Boolean(connectionString))('OZON repository PostgreSQL integratio
       shippingServiceCode: 'CEL_RFBS_ECONOMY',
       vat: '0.2',
       defaultStock: 10,
+      sharedAttributes: [{ attributeId: 10, complexId: 0, values: [{ value: 'MerchRoute' }] }],
+      variantAttributes: [{ attributeId: 20, complexId: 100, values: [{ dictionaryValueId: 40 }] }],
       dimensions: { length: 300, width: 200, height: 120, dimensionUnit: 'mm', weight: 700, weightUnit: 'g' }
     });
     expect(await repository.getPreset(preset.id)).toMatchObject({
@@ -931,6 +1025,8 @@ describe.runIf(Boolean(connectionString))('OZON repository PostgreSQL integratio
       shippingServiceCode: 'CEL_RFBS_ECONOMY',
       vat: '0.2',
       defaultStock: 10,
+      sharedAttributes: [{ attributeId: 10, complexId: 0, values: [{ value: 'MerchRoute' }] }],
+      variantAttributes: [{ attributeId: 20, complexId: 100, values: [{ dictionaryValueId: 40 }] }],
       dimensions: { length: 300, width: 200, height: 120, dimensionUnit: 'mm', weight: 700, weightUnit: 'g' }
     });
     expect(waitingPreset).toMatchObject({ name: '非默认自动预设' });
@@ -3377,6 +3473,63 @@ describe.runIf(Boolean(connectionString))('OZON repository PostgreSQL integratio
       (SELECT COUNT(*)::int FROM ${schema}.ozon_publish_events WHERE job_id=$1) AS event_count`,
     [driftJob.id, sku, driftSubmissionId, variantId]);
     expect(afterRejected.rows).toEqual(beforeRejected.rows);
+  });
+
+  it('rebinds automatic replan media with one UUID parameter type in real PostgreSQL', async () => {
+    const originalJobId = randomUUID();
+    const replacementJobId = randomUUID();
+    const requestId = randomUUID();
+    const sku = '0000997';
+    const planHash = `sha256:${'a'.repeat(64)}`;
+    const evidenceHash = `sha256:${'b'.repeat(64)}`;
+    const reboundAt = '2026-08-24T09:00:00.000Z';
+    const client = await admin.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(`SET LOCAL search_path TO ${schema},public`);
+      await client.query(`INSERT INTO ozon_publish_jobs(id,sku,state,source,store_alias,task_kind)
+        VALUES($1,$3,'FAILED','AUTO','default','SHARED_PREPARATION'),
+          ($2,$3,'READY','AUTO','default','SHARED_PREPARATION')`, [originalJobId, replacementJobId, sku]);
+      await client.query(`INSERT INTO ozon_media_deliveries(
+        sku,source_stage_id,submission_id,variant_id,job_id,payload
+      ) VALUES($1,'E005','replan-media-uuid-cast','brown',$2,$3::jsonb)`, [
+        sku,
+        originalJobId,
+        JSON.stringify({ autoPublishDecision: 'ACCEPTED' })
+      ]);
+
+      const rebound = await client.query(OZON_AUTOMATIC_REPLAN_MEDIA_REBIND_SQL, [
+        originalJobId,
+        replacementJobId,
+        sku,
+        requestId,
+        planHash,
+        evidenceHash,
+        reboundAt
+      ]);
+      expect(rebound.rowCount).toBe(1);
+      const readback = await client.query<{ job_id: string; payload: Record<string, unknown> }>(`SELECT job_id,payload
+        FROM ozon_media_deliveries
+        WHERE sku=$1 AND source_stage_id='E005' AND submission_id='replan-media-uuid-cast'`, [sku]);
+      expect(readback.rows).toEqual([{
+        job_id: replacementJobId,
+        payload: {
+          autoPublishDecision: 'ACCEPTED',
+          replanOwnershipHistory: [{
+            schemaVersion: 1,
+            fromPreparationJobId: originalJobId,
+            toPreparationJobId: replacementJobId,
+            requestId,
+            planHash,
+            evidenceHash,
+            reboundAt
+          }]
+        }
+      }]);
+    } finally {
+      await client.query('ROLLBACK').catch(() => undefined);
+      client.release();
+    }
   });
 });
 

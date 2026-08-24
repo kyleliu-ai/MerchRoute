@@ -70,6 +70,31 @@ describe('OZON shared material preparation', () => {
     ]));
   });
 
+  it('materializes footwear no-brand #31 and stable main-SKU grouping #8292', () => {
+    const footwearAttributes = [
+      { id: 31, complexId: 0, type: 'String', required: true, dictionaryId: 28732849 },
+      { id: 8292, complexId: 0, type: 'String', required: true, dictionaryId: 0 }
+    ] as any;
+    const prepared = prepareOzonManagedSharedAttributes({
+      categoryAttributes: footwearAttributes,
+      attributes: [
+        { attributeId: 31, complexId: 0, values: [{ value: '旧品牌' }] },
+        { attributeId: 8292, complexId: 0, values: [{ value: '不稳定分组' }] }
+      ],
+      sku: '0000152',
+      typeId: 91248,
+      brandMode: 'PRESERVE_OR_DEFAULT',
+      brandValue: '无品牌'
+    });
+    const platform = normalizeOzonNoBrandForPlatform(prepared, footwearAttributes);
+
+    expect(platform.find((attribute) => attribute.attributeId === 31)?.values)
+      .toEqual([{ dictionaryValueId: 126745801 }]);
+    expect(platform.find((attribute) => attribute.attributeId === 8292)?.values)
+      .toEqual([{ value: '0000152' }]);
+    expect(JSON.stringify(platform)).not.toContain('不稳定分组');
+  });
+
   it('refreshes only the explicit shared managed fields', () => {
     const existing = [
       { attributeId: 85, complexId: 0, values: [{ value: '人工品牌' }] },

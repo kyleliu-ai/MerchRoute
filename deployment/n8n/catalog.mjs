@@ -5,7 +5,12 @@ export const WORKFLOWS = Object.freeze([
   { id: 'noHJuIiHfHryuA2e', category: 'core', label: 'E004-v01-主图生视频-FFmpeg', dependencies: ['x8D4EHfqI2DHcgL7'] },
   { id: 'aj5sD7nSxxpTuRMh', category: 'core', label: 'E005-v07-图片加logo-Resize' },
   { id: '6rGNfgghmkkeYhfG', category: 'core', label: 'E006-v02-拼多多商品媒体下载' },
-  { id: 'G8MSbp9u0dudSgba', category: 'core', label: 'E007-v01-1688产品媒体下载' },
+  {
+    id: 'G8MSbp9u0dudSgba',
+    category: 'core',
+    label: 'E007-v01-1688产品媒体下载',
+    deploymentSettings: { executionTimeout: 1200 },
+  },
   { id: 'KmZ1AibtVGxzCgzc', category: 'core', label: 'S001-Url文件下载-v02' },
   { id: 'ieWnRGeC7KdeS1GT', category: 'core', label: 'S003-v8-即梦4.5-5图生7图' },
   { id: '5fKlIwJWfXJM1y4E', category: 'core', label: 'S005-v05-文件上传-转URL-硅基API' },

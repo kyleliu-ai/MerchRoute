@@ -4,7 +4,9 @@ import { mkdir, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import type { FastifyBaseLogger } from 'fastify';
 import {
   AppError,
+  inferOzonCategorySizing,
   OZON_DEFAULT_STORE_ID,
+  ozonCategorySizeAttributeCandidates,
   type OzonCatalogEntry,
   type OzonCatalogDictionaryName,
   type OzonCatalogDictionaryResult,
@@ -199,8 +201,16 @@ export class OzonCatalogService {
     const entry = await this.repository.getCatalogEntry(`${category.descriptionCategoryId}:${category.typeId}`);
     const snapshot = await this.buildTemplateSnapshot(entry);
     const currentAttributes = (category.draftVersion || category.publishedVersion)?.snapshot.attributes || [];
-    snapshot.media = (category.draftVersion || category.publishedVersion)?.snapshot.media
+    const currentSnapshot = (category.draftVersion || category.publishedVersion)?.snapshot;
+    snapshot.media = currentSnapshot?.media
       || { defaultVideoUploadMode: 'COMPRESSED_COPY' };
+    const currentSizeKey = currentSnapshot?.sizing?.sizeMode === 'sized'
+      ? currentSnapshot.sizing.sizeAttributeKey
+      : undefined;
+    const currentSizeCandidateStillExists = currentSizeKey
+      && ozonCategorySizeAttributeCandidates(snapshot.attributes)
+        .some((attribute) => `${attribute.id}:${attribute.complexId}` === currentSizeKey);
+    if (currentSizeCandidateStillExists) snapshot.sizing = currentSnapshot!.sizing;
     snapshot.attributes = reconcileOzonAttributeOrder(currentAttributes, snapshot.attributes);
     return this.repository.saveCategoryDraft(categoryKey, { ...snapshot, categoryKey });
   }
@@ -296,6 +306,7 @@ export class OzonCatalogService {
         ...(value.infoZh || value.infoRu ? { info: value.infoZh || value.infoRu } : {})
       }));
     }));
+    const sizeDictionarySnapshot = await this.readSizeDictionarySnapshot(entry, attributes);
     return {
       categoryKey: `ozon_${entry.descriptionCategoryId}_${entry.typeId}`,
       nameRu: entry.typeNameRu || entry.categoryNameRu,
@@ -303,11 +314,42 @@ export class OzonCatalogService {
       descriptionCategoryId: entry.descriptionCategoryId,
       typeId: entry.typeId,
       attributes,
-      dictionarySnapshot: { ...schemaRu.dictionarySnapshot, ...dictionarySnapshot },
+      dictionarySnapshot: { ...schemaRu.dictionarySnapshot, ...dictionarySnapshot, ...sizeDictionarySnapshot },
       media: { defaultVideoUploadMode: 'COMPRESSED_COPY' },
+      sizing: inferOzonCategorySizing(attributes),
       sourceSnapshot: { catalogEntry: entry, RU: schemaRuRaw, ZH_HANS: schemaZhRaw },
       confirmedBy: ''
     };
+  }
+
+  private async readSizeDictionarySnapshot(
+    entry: Pick<OzonCatalogEntry, 'descriptionCategoryId' | 'typeId'>,
+    attributes: OzonCategoryAttribute[]
+  ): Promise<Record<string, Array<{ id: number; value: string; info?: string; valueRu?: string; valueZh?: string }>>> {
+    const dictionaryAttributes = ozonCategorySizeAttributeCandidates(attributes)
+      .filter((attribute) => attribute.dictionaryId > 0);
+    if (!dictionaryAttributes.length) return {};
+    if (!this.source.attributeValues) {
+      throw new AppError('VERIFY_FAILED', '字典型 OZON 尺码属性无法读取属性值，已拒绝覆盖类目模板', {
+        attributeIds: dictionaryAttributes.map((attribute) => attribute.id)
+      }, 502);
+    }
+    try {
+      const entries = await Promise.all(dictionaryAttributes.map(async (attribute) => {
+        const [ru, zh] = await Promise.all([
+          this.readAllAttributeValues(entry, attribute.id, 'RU'),
+          this.readAllAttributeValues(entry, attribute.id, 'ZH_HANS')
+        ]);
+        return [String(attribute.id), mergeCategoryDictionaryValues(attribute, ru, zh)] as const;
+      }));
+      return Object.fromEntries(entries);
+    } catch (error) {
+      if (error instanceof AppError) throw error;
+      throw new AppError('VERIFY_FAILED', 'OZON 尺码字典同步失败，已保留上一版类目模板', {
+        attributeIds: dictionaryAttributes.map((attribute) => attribute.id),
+        cause: error instanceof Error ? error.message : String(error)
+      }, 502);
+    }
   }
 
   private async synchronizeFieldDictionaries(sourceEntry: OzonCatalogEntryInput): Promise<OzonCatalogDictionaryValueInput[]> {
@@ -573,6 +615,52 @@ function mergeAttributeValues(
   });
 }
 
+function mergeCategoryDictionaryValues(
+  attribute: Pick<OzonCategoryAttribute, 'id' | 'name' | 'nameRu' | 'nameZh'>,
+  ru: LocalizedAttributeValue[],
+  zh: LocalizedAttributeValue[]
+): Array<{ id: number; value: string; info?: string; valueRu?: string; valueZh?: string }> {
+  const label = attribute.nameZh || attribute.nameRu || attribute.name;
+  if (!ru.length || !zh.length) {
+    throw new CatalogSyncError('OZON_SYNC_FAILED', `OZON 尺码属性 ${label} (#${attribute.id}) 中俄字典为空`);
+  }
+  const uniqueRu = uniqueLocalizedAttributeValues(ru, attribute.id, 'RU');
+  const uniqueZh = uniqueLocalizedAttributeValues(zh, attribute.id, 'ZH_HANS');
+  const zhById = new Map(uniqueZh.map((value) => [value.id, value]));
+  const missingChinese = uniqueRu.filter((value) => !zhById.get(value.id)?.value);
+  if (missingChinese.length) {
+    throw new CatalogSyncError(
+      'OZON_SYNC_FAILED',
+      `OZON 尺码属性 ${label} (#${attribute.id}) 有 ${missingChinese.length} 个值缺少中文`
+    );
+  }
+  return uniqueRu.map((value) => {
+    const localized = zhById.get(value.id)!;
+    return {
+      id: value.id,
+      value: bilingualDictionaryLabel(localized.value, value.value),
+      valueRu: value.value,
+      valueZh: localized.value,
+      ...(localized.info || value.info ? { info: localized.info || value.info } : {})
+    };
+  });
+}
+
+function uniqueLocalizedAttributeValues(
+  values: LocalizedAttributeValue[],
+  attributeId: number,
+  language: OzonLanguage
+): LocalizedAttributeValue[] {
+  const seen = new Set<number>();
+  for (const value of values) {
+    if (seen.has(value.id)) {
+      throw new CatalogSyncError('OZON_SYNC_FAILED', `OZON ${language} 属性 ${attributeId} 字典包含重复值 ID ${value.id}`);
+    }
+    seen.add(value.id);
+  }
+  return values;
+}
+
 function directoryForAttribute(attribute: Pick<OzonCategoryAttribute, 'id' | 'dictionaryId'>): OzonCatalogDictionaryName | undefined {
   return FIELD_DICTIONARIES.find((definition) =>
     definition.attributeId === attribute.id && definition.dictionaryId === attribute.dictionaryId
@@ -667,7 +755,7 @@ function normalizeAttribute(value: unknown, language: OzonLanguage): OzonCategor
   if (!id) return undefined;
   const dictionaryId = nonnegativeInteger(row.dictionaryId ?? row.dictionary_id);
   const rawType = String(row.type || 'Unknown');
-  const type = ['String', 'Integer', 'Decimal', 'Boolean', 'Dictionary', 'Image', 'Unknown'].includes(rawType)
+  const type = ['String', 'Integer', 'Decimal', 'Boolean', 'Dictionary', 'Image', 'URL', 'Unknown'].includes(rawType)
     ? rawType as OzonCategoryAttribute['type']
     : dictionaryId ? 'Dictionary' : 'Unknown';
   const name = String(row.name || `Attribute ${id}`).trim();

@@ -75,8 +75,10 @@ import {
   ozonAutoJobCanCancel,
   ozonJobHasActiveLease,
   ozonJobHasRemoteProgress,
+  projectOzonPresetRequiredAttributeCoverage,
   stableOzonOfferId,
   nextOzonVariantCode,
+  ozonCategorySizeAttributeCandidates,
   validateOzonDescription,
   validateOzonTitle,
   type OzonActiveJobSummary,
@@ -90,6 +92,7 @@ import {
   type OzonMediaAsset,
   type OzonNetworkRecovery,
   type OzonPresetInput,
+  type OzonPresetRequiredAttributeCoverage,
   type OzonProductLink,
   type OzonPublicationTaskSummary,
   type OzonPublishJobState,
@@ -147,6 +150,7 @@ export type OzonListingEditorContext =
   | { mode: 'AUTO_TASK_SNAPSHOT'; sku: string; jobId: string; storeId: string };
 const OZON_VIDEO_SYSTEM_ATTRIBUTE_IDS = new Set([21837, 21841, 21845, 22273]);
 const OZON_AUTOMATED_ATTRIBUTE_IDS = new Set([9048, 4180, 4191, 10097, ...OZON_VIDEO_SYSTEM_ATTRIBUTE_IDS]);
+const OZON_PRESET_OFFER_EXAMPLE_COLOR_COUNT = 3;
 const OZON_PURCHASE_ATTRIBUTE_ID_SET = new Set<number>(OZON_MANUAL_PURCHASE_ATTRIBUTE_IDS);
 const OZON_WEIGHT_TO_GRAMS = { g: 1, kg: 1_000, lb: 453.59237 } as const;
 type OzonPurchaseProjectionView = OzonManualPurchaseMeasurementProjection & { warning?: string };
@@ -3190,6 +3194,8 @@ function CategoryTemplatesPanel() {
   const [selectedEntry, setSelectedEntry] = useState<OzonCatalogEntry>();
   const [attributeOrder, setAttributeOrder] = useState<OzonCategoryAttribute[]>([]);
   const [defaultVideoUploadMode, setDefaultVideoUploadMode] = useState<'ORIGINAL' | 'COMPRESSED_COPY'>('COMPRESSED_COPY');
+  const [sizeMode, setSizeMode] = useState<'sized' | 'sizeless'>('sizeless');
+  const [categorySizeAttributeKey, setCategorySizeAttributeKey] = useState<string>();
   const [orderDirty, setOrderDirty] = useState(false);
   const debouncedQuery = useDebouncedValue(categoryQuery.trim(), 250);
   const categories = useQuery({ queryKey: ['ozon-categories'], queryFn: api.ozonCategories });
@@ -3210,10 +3216,16 @@ function CategoryTemplatesPanel() {
   const catalog = catalogStatus.data?.catalog;
   const dictionaryCounts = catalog?.dictionaryCounts || { countries: 0, seasons: 0, kinds: 0, colors: 0 };
   const readyDictionaryCount = Object.values(dictionaryCounts).filter((count) => count > 0).length;
+  const sizeAttributeCandidates = ozonCategorySizeAttributeCandidates(attributeOrder);
+  const selectedCategorySizeAttribute = sizeAttributeCandidates.find((attribute) => ozonAttributeKey(attribute) === categorySizeAttributeKey);
+  const preferredSizeAttribute = sizeAttributeCandidates.find((attribute) => attribute.id === 4298) || sizeAttributeCandidates[0];
+  const sizingIsValid = sizeMode === 'sizeless' || Boolean(selectedCategorySizeAttribute);
   useEffect(() => {
     const snapshot = selected?.draftVersion?.snapshot || selected?.publishedVersion?.snapshot;
     setAttributeOrder(snapshot ? [...snapshot.attributes] : []);
     setDefaultVideoUploadMode(snapshot?.media?.defaultVideoUploadMode || 'COMPRESSED_COPY');
+    setSizeMode(snapshot?.sizing?.sizeMode || 'sizeless');
+    setCategorySizeAttributeKey(snapshot?.sizing?.sizeMode === 'sized' ? snapshot.sizing.sizeAttributeKey || undefined : undefined);
     setOrderDirty(false);
   }, [selected?.categoryKey, selected?.rowVersion]);
   useEffect(() => {
@@ -3247,10 +3259,11 @@ function CategoryTemplatesPanel() {
     onError: showError
   });
   const saveOrder = useMutation({
-    mutationFn: (input: { categoryKey: string; rowVersion: number; attributeKeys: string[]; defaultVideoUploadMode: 'ORIGINAL' | 'COMPRESSED_COPY' }) => api.saveOzonCategoryAttributeOrder(input.categoryKey, {
+    mutationFn: (input: { categoryKey: string; rowVersion: number; attributeKeys: string[]; defaultVideoUploadMode: 'ORIGINAL' | 'COMPRESSED_COPY'; sizing: { sizeMode: 'sized' | 'sizeless'; sizeAttributeKey?: string } }) => api.saveOzonCategoryAttributeOrder(input.categoryKey, {
       rowVersion: input.rowVersion,
       attributeKeys: input.attributeKeys,
-      defaultVideoUploadMode: input.defaultVideoUploadMode
+      defaultVideoUploadMode: input.defaultVideoUploadMode,
+      sizing: input.sizing
     }),
     onSuccess: async ({ category }) => {
       setOrderDirty(false);
@@ -3309,10 +3322,17 @@ function CategoryTemplatesPanel() {
   };
   const persistAttributeOrder = () => {
     if (!selected) return;
+    if (!sizingIsValid) {
+      message.error(sizeAttributeCandidates.length ? '请选择有效的 OZON 尺码属性' : '当前类目没有可用的 OZON 尺码属性，请改为无尺码或先刷新类目');
+      return;
+    }
     saveOrder.mutate({
       categoryKey: selected.categoryKey,
       rowVersion: selected.rowVersion,
       defaultVideoUploadMode,
+      sizing: sizeMode === 'sized'
+        ? { sizeMode, sizeAttributeKey: categorySizeAttributeKey }
+        : { sizeMode },
       attributeKeys: attributeOrder.map(ozonAttributeKey)
     });
   };
@@ -3382,7 +3402,7 @@ function CategoryTemplatesPanel() {
         ]} />}
       </div>
     </Modal>
-    <Drawer className="ozon-drawer ozon-category-drawer" width="min(1180px, 98vw)" open={Boolean(detailKey)} onClose={() => setDetailKey(undefined)} title={selected ? <Space wrap><TagsOutlined /><strong>{selected.nameZh || selected.nameRu} / {selected.nameRu}</strong><span className="mono-small">{selected.categoryKey}</span></Space> : 'OZON 类目模板'} extra={<Space wrap><Button icon={<SaveOutlined />} loading={saveOrder.isPending} disabled={!orderDirty || !attributeOrder.length} onClick={persistAttributeOrder}>保存草稿</Button><Button icon={<CheckCircleOutlined />} disabled={!selected?.draftVersion || orderDirty} loading={publish.isPending} onClick={() => selected && publish.mutate(selected)}>发布</Button></Space>}>
+    <Drawer className="ozon-drawer ozon-category-drawer" width="min(1180px, 98vw)" open={Boolean(detailKey)} onClose={() => setDetailKey(undefined)} title={selected ? <Space wrap><TagsOutlined /><strong>{selected.nameZh || selected.nameRu} / {selected.nameRu}</strong><span className="mono-small">{selected.categoryKey}</span></Space> : 'OZON 类目模板'} extra={<Space wrap><Button icon={<SaveOutlined />} loading={saveOrder.isPending} disabled={!orderDirty || !attributeOrder.length || !sizingIsValid} onClick={persistAttributeOrder}>保存草稿</Button><Button icon={<CheckCircleOutlined />} disabled={!selected?.draftVersion || orderDirty || !sizingIsValid} loading={publish.isPending} onClick={() => selected && publish.mutate(selected)}>发布</Button></Space>}>
       {selected && detailSnapshot ? <div className="ozon-category-detail">
         {selected.catalogIssue && <Alert type="warning" showIcon message="本地目录状态需要复核" description={selected.catalogIssue} />}
         {attributeOrder.some((attribute) => !ozonAttributeNameZh(attribute)) && <Alert type="warning" showIcon message="部分属性尚无中文名称" description="点击“刷新”重新读取 OZON 中俄属性；缺失中文时仍保留俄文原名和平台 ID，不进行机器翻译。" />}
@@ -3394,17 +3414,63 @@ function CategoryTemplatesPanel() {
           { key: 'draft', label: '草稿版本', children: selected.draftVersion ? `v${selected.draftVersion.versionNo}` : '—' },
           { key: 'published', label: '已发布版本', children: selected.publishedVersion ? `v${selected.publishedVersion.versionNo}` : '—' }
         ]} />
-        <Card size="small" title="媒体规则">
-          <Form.Item label="默认视频上传方式" extra="只影响之后新建的 OZON 共享草稿；已创建 publication 继续使用各店冻结快照。">
+        <Card size="small" title="媒体、尺码与合规规则">
+          <Row gutter={14}>
+            <Col xs={24} md={12}>
+              <Form.Item label="默认视频上传方式" extra="只影响之后新建的 OZON 共享草稿；已创建 publication 继续使用各店冻结快照。">
+                <Select
+                  aria-label="默认视频上传方式"
+                  value={defaultVideoUploadMode}
+                  options={[
+                    { value: 'COMPRESSED_COPY', label: '使用压缩副本' },
+                    { value: 'ORIGINAL', label: '使用原视频' }
+                  ]}
+                  onChange={(value) => { setDefaultVideoUploadMode(value); setOrderDirty(true); }}
+                />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
+              <Form.Item label="尺码模式" required>
+                <Select
+                  aria-label="尺码模式"
+                  value={sizeMode}
+                  options={[
+                    { value: 'sized', label: '有尺码（按尺码生成 Offer）' },
+                    { value: 'sizeless', label: '无尺码（单库存行）' }
+                  ]}
+                  onChange={(value) => {
+                    setSizeMode(value);
+                    setCategorySizeAttributeKey(value === 'sized' ? preferredSizeAttribute && ozonAttributeKey(preferredSizeAttribute) : undefined);
+                    setOrderDirty(true);
+                  }}
+                />
+              </Form.Item>
+            </Col>
+          </Row>
+          {sizeMode === 'sized' && <Form.Item
+            label="OZON 尺码属性"
+            required
+            validateStatus={selectedCategorySizeAttribute ? undefined : 'error'}
+            help={!sizeAttributeCandidates.length
+              ? '当前类目没有识别到顶层尺码属性；PDF、视频和其他复合属性不能作为尺码。'
+              : selectedCategorySizeAttribute ? undefined : '请选择一个有效的 OZON 尺码属性。'}
+            extra="仅显示语义属于尺码且 complexId=0 的顶层属性；运动鞋优先使用俄罗斯尺码 #4298。"
+          >
             <Select
-              value={defaultVideoUploadMode}
-              options={[
-                { value: 'COMPRESSED_COPY', label: '使用压缩副本' },
-                { value: 'ORIGINAL', label: '使用原视频' }
-              ]}
-              onChange={(value) => { setDefaultVideoUploadMode(value); setOrderDirty(true); }}
+              aria-label="OZON 尺码属性"
+              showSearch
+              optionFilterProp="label"
+              value={categorySizeAttributeKey}
+              placeholder={sizeAttributeCandidates.length ? '选择 OZON 尺码属性' : '没有可用尺码属性'}
+              disabled={!sizeAttributeCandidates.length}
+              options={sizeAttributeCandidates.map((attribute) => ({
+                value: ozonAttributeKey(attribute),
+                label: `${bilingualOzonAttributeLabel(attribute)}${attribute.required ? ' · 必填' : ' · 选填'}${attribute.dictionaryId ? ` · 字典 #${attribute.dictionaryId}` : ''}`
+              }))}
+              onChange={(value) => { setCategorySizeAttributeKey(value); setOrderDirty(true); }}
             />
-          </Form.Item>
+          </Form.Item>}
+          {sizeMode === 'sizeless' && <Alert showIcon type="info" message="当前类目按无尺码商品上品" description="上品预设只保留一行默认库存，不生成额外尺码 Offer。" />}
         </Card>
         <Card size="small" title={`属性顺序 · ${attributeOrder.length} 项`} extra={<Space wrap><Button size="small" icon={<ArrowUpOutlined />} disabled={!attributeOrder.some((attribute) => attribute.required) || requiredOzonAttributesAreFirst(attributeOrder)} onClick={moveRequiredAttributesToTop}>必填置顶</Button>{orderDirty ? <Tag color="gold">设置未保存</Tag> : <Tag color="green">草稿已保存</Tag>}</Space>}>
           <Alert className="ozon-attribute-order-note" type="info" showIcon message="新建和刷新时自动将必填属性置顶" description="需要重新整理时，点击“必填置顶”；也可以点击任一属性左侧的“置顶”调整顺序。同组内保留当前顺序，平台 ID、类型、必填和字典配置只读不可篡改。" />
@@ -3466,7 +3532,9 @@ function PresetTemplatesPanel() {
   const shippingTemplateId = Form.useWatch('shippingTemplateId', form) as string | undefined;
   const shippingServiceCode = Form.useWatch('shippingServiceCode', form) as string | undefined;
   const categoryKey = Form.useWatch('categoryKey', form) as string | undefined;
-  const sizeAttributeKey = Form.useWatch('sizeAttributeKey', form) as string | undefined;
+  const watchedSharedAttributeValues = Form.useWatch('sharedAttributeValues', form) as Record<string, unknown> | undefined;
+  const watchedVariantAttributeValues = Form.useWatch('variantAttributeValues', form) as Record<string, unknown> | undefined;
+  const watchedPresetSizes = Form.useWatch('sizes', form) as Array<{ sizeId?: string; value?: string; stock?: number }> | undefined;
   const shippingDetail = useQuery({ queryKey: ['shipping-template', shippingTemplateId], queryFn: () => api.shippingTemplate(shippingTemplateId!), enabled: Boolean(editId && shippingTemplateId), retry: false });
   const publishedShippingVersion = useMemo(() => shippingDetail.data?.template.versions.find((version) => version.status === 'PUBLISHED'), [shippingDetail.data]);
   const shippingServices = publishedShippingVersion?.definition.services || [];
@@ -3474,10 +3542,34 @@ function PresetTemplatesPanel() {
   const destinationCodes = useMemo(() => [...new Set(selectedService?.rules.flatMap((rule) => rule.destinationCountryCodes || []) || [])], [selectedService]);
   const selectedCategory = categories.data?.items.find((item) => item.categoryKey === categoryKey);
   const categoryAttributes = selectedCategory?.publishedVersion?.snapshot.attributes || [];
-  const sharedCategoryAttributes = categoryAttributes.filter((attribute) => attribute.complexId === 0 && !OZON_AUTOMATED_ATTRIBUTE_IDS.has(attribute.id));
+  const categorySizing = selectedCategory?.publishedVersion?.snapshot.sizing || { sizeMode: 'sizeless' as const };
+  const inheritedSizeAttributeKey = categorySizing.sizeMode === 'sized' ? categorySizing.sizeAttributeKey || undefined : undefined;
+  const selectedSizeAttribute = ozonCategorySizeAttributeCandidates(categoryAttributes)
+    .find((attribute) => ozonAttributeKey(attribute) === inheritedSizeAttributeKey);
+  const sharedCategoryAttributes = categoryAttributes.filter((attribute) => attribute.complexId === 0
+    && ozonAttributeKey(attribute) !== inheritedSizeAttributeKey
+    && !OZON_AUTOMATED_ATTRIBUTE_IDS.has(attribute.id));
   const variantCategoryAttributes = categoryAttributes.filter((attribute) => attribute.complexId > 0 && !OZON_AUTOMATED_ATTRIBUTE_IDS.has(attribute.id));
+  const presetRequiredCoverage = selectedCategory?.publishedVersion
+    ? projectOzonPresetRequiredAttributeCoverage(
+      { attributes: categoryAttributes, sizing: categorySizing },
+      {
+        sharedAttributes: presetAttributeInputs(sharedCategoryAttributes, watchedSharedAttributeValues, selectedCategory),
+        variantAttributes: presetAttributeInputs(variantCategoryAttributes, watchedVariantAttributeValues),
+        sizeAttributeKey: inheritedSizeAttributeKey,
+        sizes: (watchedPresetSizes || []).map((size) => ({
+          sizeId: size.sizeId,
+          value: String(size.value || '').trim(),
+          stock: Number(size.stock || 0)
+        }))
+      }
+    )
+    : [];
+  const presetRequiredCoverageByKey = new Map(presetRequiredCoverage.map((attribute) => [attribute.attributeKey, attribute]));
+  const configuredSizeCount = selectedSizeAttribute
+    ? (watchedPresetSizes || []).filter((size) => Boolean(String(size.value || '').trim())).length
+    : categoryKey ? 1 : 0;
   const presetVideoCompatibility = ozonVideoCompatibility(categoryAttributes);
-  const selectedSizeAttribute = variantCategoryAttributes.find((attribute) => ozonAttributeKey(attribute) === sizeAttributeKey);
   useEffect(() => {
     if (!editId) return;
     const defaults = {
@@ -3497,10 +3589,30 @@ function PresetTemplatesPanel() {
       sizes: (source.sizes?.length ? source.sizes : defaults.sizes).map((size) => ({ ...size, sizeId: size.sizeId || crypto.randomUUID() }))
     });
   }, [editId, form, selected]);
+  useEffect(() => {
+    if (!editId || !selectedCategory?.publishedVersion) return;
+    const currentSizeAttributeKey = form.getFieldValue('sizeAttributeKey') as string | undefined;
+    form.setFieldValue('sizeAttributeKey', inheritedSizeAttributeKey);
+    if (currentSizeAttributeKey === inheritedSizeAttributeKey) return;
+    const currentStock = Number(form.getFieldValue(['sizes', 0, 'stock']) || 0);
+    form.setFieldValue('sizes', [{ sizeId: crypto.randomUUID(), value: '', stock: currentStock }]);
+  }, [editId, form, inheritedSizeAttributeKey, selectedCategory?.publishedVersion?.id]);
   const save = useMutation({
     mutationFn: (values: any) => {
       const category = categories.data?.items.find((item) => item.categoryKey === values.categoryKey);
       if (!category?.publishedVersion) throw new Error('请选择已发布的 OZON 类目模板');
+      const publishedSizing = category.publishedVersion.snapshot.sizing || { sizeMode: 'sizeless' as const };
+      const publishedSizeAttributeKey = publishedSizing.sizeMode === 'sized' ? publishedSizing.sizeAttributeKey || undefined : undefined;
+      const publishedSizeAttribute = ozonCategorySizeAttributeCandidates(category.publishedVersion.snapshot.attributes)
+        .find((attribute) => ozonAttributeKey(attribute) === publishedSizeAttributeKey);
+      if (publishedSizing.sizeMode === 'sized' && !publishedSizeAttribute) {
+        throw new Error('当前类目的已发布尺码规则已失效，请先刷新并重新发布类目模板');
+      }
+      const sharedAttributes = category.publishedVersion.snapshot.attributes.filter((attribute) => attribute.complexId === 0
+        && ozonAttributeKey(attribute) !== publishedSizeAttributeKey
+        && !OZON_AUTOMATED_ATTRIBUTE_IDS.has(attribute.id));
+      const variantAttributes = category.publishedVersion.snapshot.attributes.filter((attribute) => attribute.complexId > 0
+        && !OZON_AUTOMATED_ATTRIBUTE_IDS.has(attribute.id));
       const input: OzonPresetInput = {
         name: values.name,
         description: values.description || '',
@@ -3512,17 +3624,25 @@ function PresetTemplatesPanel() {
         vat: values.vat,
         defaultStock: Number(values.sizes?.[0]?.stock || 0),
         dimensions: normalizeOzonPresetDimensionsToGrams(values.dimensions),
-        sharedAttributes: presetAttributeInputs(sharedCategoryAttributes, values.sharedAttributeValues, category),
+        sharedAttributes: presetAttributeInputs(sharedAttributes, values.sharedAttributeValues, category),
         variantAttributes: presetAttributeInputs(
-          variantCategoryAttributes.filter((attribute) => ozonAttributeKey(attribute) !== values.sizeAttributeKey),
+          variantAttributes,
           values.variantAttributeValues
         ),
         titleTranslation: values.titleTranslation,
         descriptionSource: 'E003',
-        sizeAttributeKey: values.sizeAttributeKey || undefined,
-        sizes: normalizeOzonPresetSizes(values.sizes, Boolean(values.sizeAttributeKey)),
+        sizeAttributeKey: publishedSizeAttributeKey,
+        sizes: normalizeOzonPresetSizes(values.sizes, Boolean(publishedSizeAttributeKey)),
         mediaPolicy: values.mediaPolicy
       };
+      const uncoveredRequiredAttributes = projectOzonPresetRequiredAttributeCoverage(
+        { attributes: category.publishedVersion.snapshot.attributes, sizing: publishedSizing },
+        input
+      ).filter((attribute) => !attribute.covered);
+      if (uncoveredRequiredAttributes.length) {
+        throw new Error(uncoveredRequiredAttributes.map((attribute) => attribute.reason
+          || `必填目录属性 ${attribute.nameZh || attribute.nameRu || attribute.name} / ${attribute.nameRu || attribute.name} · #${attribute.attributeId} 尚未配置`).join('；'));
+      }
       return editId === 'new' ? api.createOzonPreset(input) : api.updateOzonPreset(editId!, { ...input, rowVersion: selected!.rowVersion });
     },
     onSuccess: () => { setEditId(undefined); void Promise.all([queryClient.invalidateQueries({ queryKey: ['ozon-presets'] }), queryClient.invalidateQueries({ queryKey: ['ozon-automation-status'] })]); message.success('OZON 上品预设已保存'); },
@@ -3535,6 +3655,17 @@ function PresetTemplatesPanel() {
     const next = new URLSearchParams(searchParams);
     next.set('settings', '1');
     setSearchParams(next, { replace: true });
+  };
+  const changePresetCategory = (nextCategoryKey: string) => {
+    const nextCategory = categories.data?.items.find((item) => item.categoryKey === nextCategoryKey);
+    const nextSizing = nextCategory?.publishedVersion?.snapshot.sizing || { sizeMode: 'sizeless' as const };
+    const nextSizeAttributeKey = nextSizing.sizeMode === 'sized' ? nextSizing.sizeAttributeKey || undefined : undefined;
+    form.setFieldsValue({
+      sharedAttributeValues: {},
+      variantAttributeValues: {},
+      sizeAttributeKey: nextSizeAttributeKey,
+      sizes: [{ sizeId: crypto.randomUUID(), value: '', stock: 0 }]
+    });
   };
   return <div className="ozon-panel">
     <div className="ozon-preset-registry">
@@ -3582,7 +3713,7 @@ function PresetTemplatesPanel() {
       </Card>}
     </div>
     <Drawer className="ozon-drawer ozon-preset-drawer" width="min(1180px, 98vw)" open={Boolean(editId)} onClose={() => setEditId(undefined)} title={<Space><SettingOutlined /><strong>{editId === 'new' ? '新建 OZON 上品预设模板' : selected?.name || '加载 OZON 上品预设'}</strong></Space>} extra={<Button type="primary" icon={<SaveOutlined />} loading={save.isPending} onClick={() => form.submit()}>{editId === 'new' ? '创建预设' : '保存修改'}</Button>}>
-      <Form form={form} layout="vertical" className="ozon-preset-editor" onFinish={(values) => save.mutate(values)}>
+      <Form form={form} layout="vertical" className="ozon-preset-editor" scrollToFirstError={{ behavior: 'smooth', block: 'center' }} onFinish={(values) => save.mutate(values)}>
         <Card title="基础信息">
           <Form.Item name="name" label="预设名称" rules={[{ required: true, whitespace: true, message: '请输入预设名称' }]}><Input placeholder="例如：OZON 家居商品蓝图 V1" /></Form.Item>
           <Alert showIcon type="info" message="店铺绑定及发布策略请在 OZON上品设置中管理" description="本预设只保存商品生成规则，不保存默认店铺、自动发布、发布模式、仓库、履约方式或币种。" action={<Button onClick={openStoreSettings}>管理店铺策略</Button>} />
@@ -3610,7 +3741,7 @@ function PresetTemplatesPanel() {
           </Row>
         </Card>
         <Card title="商品资料默认值">
-          <Row gutter={14}><Col xs={24} md={12}><Form.Item name="categoryKey" label="OZON 类目模板" rules={[{ required: true, message: '请选择类目模板' }]}><Select showSearch optionFilterProp="label" placeholder="选择已发布的 OZON 类目" options={(categories.data?.items || []).map((item) => ({ value: item.categoryKey, label: `${item.nameZh || item.nameRu}${item.nameRu && item.nameZh ? ` / ${item.nameRu}` : ''} · V${item.publishedVersion?.versionNo || '-'}`, disabled: !item.publishedVersion }))} onChange={() => form.setFieldsValue({ sharedAttributeValues: {}, variantAttributeValues: {}, sizeAttributeKey: undefined, sizes: [{ sizeId: crypto.randomUUID(), value: '', stock: 0 }] })} /></Form.Item></Col></Row>
+          <Row gutter={14}><Col xs={24} md={12}><Form.Item name="categoryKey" label="OZON 类目模板" rules={[{ required: true, message: '请选择类目模板' }]}><Select showSearch optionFilterProp="label" placeholder="选择已发布的 OZON 类目" options={(categories.data?.items || []).map((item) => ({ value: item.categoryKey, label: `${item.nameZh || item.nameRu}${item.nameRu && item.nameZh ? ` / ${item.nameRu}` : ''} · V${item.publishedVersion?.versionNo || '-'}`, disabled: !item.publishedVersion }))} onChange={changePresetCategory} /></Form.Item></Col></Row>
           <Alert showIcon type="info" message="履约、仓库和合同币种不属于商品预设" description="这些值在每家 OZON 店铺中单独配置和验证，发布计划按店铺冻结。" action={<Button onClick={openStoreSettings}>打开店铺设置</Button>} />
           <Row gutter={14}><Col xs={12} md={8}><Form.Item name="vat" label="VAT"><Select options={['0', '0.05', '0.07', '0.1', '0.2', '0.22'].map((value) => ({ value, label: Number(value) ? `${Number(value) * 100}%` : '0%' }))} /></Form.Item></Col><Col xs={24} md={8}><Form.Item name="mediaPolicy" label="媒体规则"><Select options={[{ value: 'REPLACE_ALL', label: '全量替换' }, { value: 'KEEP_ORDER', label: '保持顺序' }]} /></Form.Item></Col></Row>
           <div className="ozon-video-policy">
@@ -3629,57 +3760,165 @@ function PresetTemplatesPanel() {
 
         <Card title={<Space><TagsOutlined />OZON 类目字段{categoryAttributes.length ? <Tag>{categoryAttributes.length} 项</Tag> : null}</Space>}>
           {!categoryKey ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="请先选择 OZON 类目模板" /> : !selectedCategory?.publishedVersion ? <Alert showIcon type="warning" message="当前类目没有已发布字段" /> : <>
-            <Alert showIcon type="info" message="这些是新建商品资料的默认值" description="中俄文属性名对照显示；留空后可在手动上品资料中补充。标题、详情、颜色和 offer_id 由自动链路生成。" />
-            <OzonPresetAttributeFields title="所有变体共享" attributes={sharedCategoryAttributes} formField="sharedAttributeValues" dictionarySnapshot={selectedCategory.publishedVersion.snapshot.dictionarySnapshot} categoryType={selectedCategory} />
+            <Alert showIcon type="info" message="红星为 OZON 必填目录属性" description="用户填写项必须在预设中补齐；带“系统自动生成”的只读项由发布计划写入。标题、详情、颜色和 offer_id 仍由自动链路生成。" />
+            <OzonPresetAttributeFields title="所有变体共享" attributes={sharedCategoryAttributes} formField="sharedAttributeValues" dictionarySnapshot={selectedCategory.publishedVersion.snapshot.dictionarySnapshot} categoryType={selectedCategory} coverageByKey={presetRequiredCoverageByKey} />
             <Divider />
-            <OzonPresetAttributeFields title="每个变体的默认值" attributes={variantCategoryAttributes.filter((attribute) => ozonAttributeKey(attribute) !== sizeAttributeKey)} formField="variantAttributeValues" dictionarySnapshot={selectedCategory.publishedVersion.snapshot.dictionarySnapshot} />
+            <OzonPresetAttributeFields title="每个变体的默认值" attributes={variantCategoryAttributes} formField="variantAttributeValues" dictionarySnapshot={selectedCategory.publishedVersion.snapshot.dictionarySnapshot} coverageByKey={presetRequiredCoverageByKey} />
           </>}
         </Card>
 
         <Card title="尺码与默认库存">
-          <Form.Item name="sizeAttributeKey" label="OZON 尺码属性" extra="选择类目的变体尺码字段后，系统会按产品变体 × 尺码行生成 offer。无尺码商品可留空。"><Select allowClear showSearch optionFilterProp="label" placeholder="无尺码商品" options={variantCategoryAttributes.map((attribute) => ({ value: ozonAttributeKey(attribute), label: bilingualOzonAttributeLabel(attribute) }))} onChange={() => form.setFieldValue('sizes', [{ sizeId: crypto.randomUUID(), value: '', stock: Number(form.getFieldValue(['sizes', 0, 'stock']) || 0) }])} /></Form.Item>
-          {!selectedSizeAttribute && <Alert showIcon type="info" message="当前按无尺码商品处理" description="只使用一个默认库存值；不会额外拆分尺码 offer。" />}
+          <Form.Item name="sizeAttributeKey" hidden><Input /></Form.Item>
+          <Form.Item
+            required={Boolean(selectedSizeAttribute?.required)}
+            label={selectedSizeAttribute
+              ? <OzonPresetAttributeLabel attribute={selectedSizeAttribute} />
+              : '类目尺码规则'}
+            extra="尺码规则来自所选类目的已发布版本，不能在上品预设中单独更改。"
+          >
+            <Input
+              aria-label="类目尺码规则"
+              readOnly
+              value={!categoryKey
+                ? '请先选择 OZON 类目模板'
+                : selectedSizeAttribute
+                  ? bilingualOzonAttributeLabel(selectedSizeAttribute)
+                  : categorySizing.sizeMode === 'sized'
+                    ? '已发布尺码规则失效，请先修复类目模板'
+                    : '无尺码（单库存行）'}
+            />
+          </Form.Item>
+          {!categoryKey
+            ? <Alert showIcon type="info" message="请先选择 OZON 类目模板" description="选择类目后将自动继承已发布的尺码规则。" />
+            : categorySizing.sizeMode === 'sized' && !selectedSizeAttribute
+              ? <Alert showIcon type="error" message="类目尺码规则已失效" description="请先在类目模板中重新选择有效尺码属性并发布，再编辑本预设。" />
+              : selectedSizeAttribute
+                ? <Alert showIcon type="success" message="当前类目按尺码生成 Offer" description={`系统按产品媒体变体 × ${bilingualOzonAttributeLabel(selectedSizeAttribute)} 生成 Offer，并使用每行默认库存。`} />
+                : <Alert showIcon type="info" message="当前类目为无尺码商品" description="保存时只使用第一行默认库存，不生成额外尺码 Offer。" />}
           <Form.List name="sizes">
             {(fields, { add, remove }) => <Space direction="vertical" size={10} style={{ width: '100%' }}>
               {(selectedSizeAttribute ? fields : fields.slice(0, 1)).map((field, index) => <div className="ozon-preset-size-row" key={field.key}>
                 <span>{String(index + 1).padStart(2, '0')}</span>
                 <Form.Item name={[field.name, 'sizeId']} hidden><Input /></Form.Item>
-                {selectedSizeAttribute ? <Form.Item name={[field.name, 'value']} label={bilingualOzonAttributeLabel(selectedSizeAttribute)} rules={[{ required: true, message: '请选择或填写尺码' }]}><OzonPresetAttributeValueEditor attribute={selectedSizeAttribute} dictionarySnapshot={selectedCategory?.publishedVersion?.snapshot.dictionarySnapshot || {}} /></Form.Item> : <Form.Item label="尺码"><Input disabled value="无尺码" /></Form.Item>}
-                <Form.Item name={[field.name, 'stock']} label={selectedSizeAttribute ? '默认库存' : '默认库存'} rules={[{ required: true }, { type: 'number', min: 0 }]}><InputNumber min={0} precision={0} /></Form.Item>
+                {selectedSizeAttribute ? <Form.Item
+                  name={[field.name, 'value']}
+                  label={`尺码值 ${index + 1}`}
+                  extra={bilingualOzonAttributeLabel(selectedSizeAttribute)}
+                  rules={[
+                    { required: true, message: '请选择或填写尺码' },
+                    { validator: async (_, value) => {
+                      if (!value) return;
+                      const sizes = (form.getFieldValue('sizes') || []) as Array<{ value?: string }>;
+                      if (sizes.filter((size) => size?.value === value).length > 1) throw new Error(`尺码值不能重复：${value}`);
+                    } }
+                  ]}
+                ><OzonPresetAttributeValueEditor strictDictionary attribute={selectedSizeAttribute} dictionarySnapshot={selectedCategory?.publishedVersion?.snapshot.dictionarySnapshot || {}} /></Form.Item> : <Form.Item label="尺码值"><Input aria-label="尺码值" disabled value="无尺码" /></Form.Item>}
+                <Form.Item name={[field.name, 'stock']} label="默认库存" rules={[{ required: true, message: '请输入默认库存' }, { type: 'number', min: 0, message: '默认库存不能小于 0' }]}><InputNumber min={0} precision={0} /></Form.Item>
                 {selectedSizeAttribute && <Button danger type="text" disabled={fields.length <= 1} onClick={() => remove(field.name)}>删除</Button>}
               </div>)}
               {selectedSizeAttribute && <Button icon={<PlusOutlined />} disabled={fields.length >= 99} onClick={() => add({ sizeId: crypto.randomUUID(), value: '', stock: 0 })}>添加尺码</Button>}
             </Space>}
           </Form.List>
+          {categoryKey && <Alert
+            showIcon
+            type="info"
+            message="Offer 数量预览"
+            description={selectedSizeAttribute
+              ? <>实际按“产品颜色数 × 尺码数”生成；当前已填写 {configuredSizeCount} 个尺码。例如 {OZON_PRESET_OFFER_EXAMPLE_COLOR_COUNT} 个颜色 × {configuredSizeCount} 个尺码 = <strong>{OZON_PRESET_OFFER_EXAMPLE_COLOR_COUNT * configuredSizeCount} 个 Offer</strong>。</>
+              : <>无尺码类目按“产品颜色数 × 1”生成。例如 {OZON_PRESET_OFFER_EXAMPLE_COLOR_COUNT} 个颜色 × 1 = <strong>{OZON_PRESET_OFFER_EXAMPLE_COLOR_COUNT} 个 Offer</strong>。</>}
+          />}
         </Card>
       </Form>
     </Drawer>
   </div>;
 }
 
-function OzonPresetAttributeFields({ title, attributes, formField, dictionarySnapshot, categoryType }: {
+function OzonPresetAttributeLabel({ attribute }: { attribute: OzonCategoryAttribute }) {
+  return <span className="ozon-preset-attribute-label">
+    <strong>{ozonAttributeNameZh(attribute) || '中文名缺失'}</strong>
+    <small>{ozonAttributeNameRu(attribute) || '俄文名缺失'} · #{attribute.id}{attribute.complexId ? ` / complex ${attribute.complexId}` : ''}</small>
+  </span>;
+}
+
+function ozonRequiredPresetAttributeRule(attribute: OzonCategoryAttribute) {
+  return {
+    validator: async (_rule: unknown, value: unknown) => {
+      const present = Array.isArray(value)
+        ? value.some((entry) => Boolean(String(entry ?? '').trim()))
+        : Boolean(String(value ?? '').trim());
+      if (!present) throw new Error(`${bilingualOzonAttributeLabel(attribute)} 为 OZON 必填目录属性`);
+    }
+  };
+}
+
+function OzonPresetProjectedReadOnlyField({ attribute, coverage }: {
+  attribute: OzonCategoryAttribute;
+  coverage: OzonPresetRequiredAttributeCoverage;
+}) {
+  const generatedValue = coverage.systemValue;
+  const displayValue = coverage.source === 'COLOR'
+    ? '来自 E001 审核颜色 / Цвет из E001'
+    : coverage.source === 'SIZE'
+      ? '来自尺码与默认库存 / Из настройки размеров'
+      : generatedValue ? `${generatedValue.labelZh} / ${generatedValue.labelRu}` : '系统自动生成';
+  const detail = coverage.source === 'COLOR'
+    ? '发布时读取 E001 已审核的产品颜色并写入每个颜色变体，禁止在预设中手工覆盖。'
+    : coverage.source === 'SIZE'
+      ? '请在“尺码与默认库存”中逐行配置，目录字段区不重复填写。'
+      : generatedValue?.kind === 'NO_BRAND'
+        ? '系统按无品牌策略精确解析 OZON 字典值，禁止在预设中手工覆盖。'
+        : generatedValue?.kind === 'MAIN_SKU'
+          ? '发布时使用商品主 SKU，确保同款颜色和尺码合并至同一张商品卡片。'
+          : '发布计划根据商品与类目快照生成，禁止在预设中手工覆盖。';
+  return <Form.Item
+    key={ozonAttributeKey(attribute)}
+    required={attribute.required}
+    label={<OzonPresetAttributeLabel attribute={attribute} />}
+    extra={detail}
+  >
+    <Input
+      aria-label={`${ozonAttributeNameZh(attribute) || ozonAttributeNameRu(attribute) || attribute.id}${coverage.source === 'SYSTEM' ? '（系统自动生成）' : '（自动取值）'}`}
+      readOnly
+      value={displayValue}
+      suffix={<Tag color="blue">{coverage.source === 'COLOR' ? 'E001 自动取值' : coverage.source === 'SIZE' ? '尺码配置' : '系统自动生成'}</Tag>}
+    />
+  </Form.Item>;
+}
+
+function OzonPresetAttributeFields({ title, attributes, formField, dictionarySnapshot, categoryType, coverageByKey }: {
   title: string;
   attributes: OzonCategoryAttribute[];
   formField: 'sharedAttributeValues' | 'variantAttributeValues';
   dictionarySnapshot: Record<string, Array<{ id: number; value: string; info?: string }>>;
   categoryType?: OzonCategoryTypeDescriptor;
+  coverageByKey: ReadonlyMap<string, OzonPresetRequiredAttributeCoverage>;
 }) {
   return <section className="ozon-preset-attribute-scope">
     <div className="ozon-preset-scope-heading"><strong>{title}</strong><Tag>{attributes.length} 项</Tag></div>
-    {!attributes.length ? <Text type="secondary">当前类目没有该范围的可配置字段</Text> : <div className="ozon-attribute-grid">{attributes.map((attribute) => attribute.id === 8229 && attribute.complexId === 0
-      ? <OzonCategoryTypeReadOnlyField key={ozonAttributeKey(attribute)} attribute={attribute} categoryType={categoryType} />
-      : <Form.Item
+    {!attributes.length ? <Text type="secondary">当前类目没有该范围的可配置字段</Text> : <div className="ozon-attribute-grid">{attributes.map((attribute) => {
+      const coverage = coverageByKey.get(ozonAttributeKey(attribute));
+      if (attribute.id === 8229 && attribute.complexId === 0) {
+        return <OzonCategoryTypeReadOnlyField key={ozonAttributeKey(attribute)} attribute={attribute} categoryType={categoryType} />;
+      }
+      if (coverage && coverage.source !== 'PRESET') {
+        return <OzonPresetProjectedReadOnlyField key={ozonAttributeKey(attribute)} attribute={attribute} coverage={coverage} />;
+      }
+      return <Form.Item
         key={ozonAttributeKey(attribute)}
         name={[formField, ozonAttributeKey(attribute)]}
-        label={<span className="ozon-preset-attribute-label"><strong>{ozonAttributeNameZh(attribute) || '中文名缺失'}</strong><small>{ozonAttributeNameRu(attribute) || '俄文名缺失'} · #{attribute.id}{attribute.complexId ? ` / complex ${attribute.complexId}` : ''}</small></span>}
-        extra={attribute.required ? '平台必填；预设可留空，自动上品前必须补齐。' : undefined}
-      ><OzonPresetAttributeValueEditor attribute={attribute} dictionarySnapshot={dictionarySnapshot} /></Form.Item>)}</div>}
+        required={attribute.required}
+        label={<OzonPresetAttributeLabel attribute={attribute} />}
+        rules={attribute.required ? [ozonRequiredPresetAttributeRule(attribute)] : undefined}
+        extra={attribute.required ? 'OZON 必填；必须在本预设中填写。' : undefined}
+      ><OzonPresetAttributeValueEditor attribute={attribute} dictionarySnapshot={dictionarySnapshot} /></Form.Item>;
+    })}</div>}
   </section>;
 }
 
-function OzonPresetAttributeValueEditor({ attribute, dictionarySnapshot, value, onChange }: {
+function OzonPresetAttributeValueEditor({ attribute, dictionarySnapshot, strictDictionary = false, value, onChange }: {
   attribute: OzonCategoryAttribute;
   dictionarySnapshot: Record<string, Array<{ id: number; value: string; info?: string; valueRu?: string; valueZh?: string }>>;
+  strictDictionary?: boolean;
   value?: string | string[];
   onChange?: (value: string | string[] | undefined) => void;
 }) {
@@ -3703,7 +3942,8 @@ function OzonPresetAttributeValueEditor({ attribute, dictionarySnapshot, value, 
       value: `dict:${entry.id}`,
       label: bilingualDictionaryValue(entry.valueZh || entry.value, entry.valueRu || '')
     }));
-  if (directory || options.length) return <Select
+  const dictionaryBacked = Boolean(directory || options.length || (strictDictionary && attribute.dictionaryId));
+  if (dictionaryBacked || options.length) return <Select
     value={value}
     onChange={onChange}
     allowClear
@@ -3712,9 +3952,14 @@ function OzonPresetAttributeValueEditor({ attribute, dictionarySnapshot, value, 
     maxCount={attribute.maxCount}
     maxTagCount="responsive"
     loading={localDictionary.isFetching}
-    status={localDictionary.isError && !options.length ? 'error' : undefined}
+    disabled={strictDictionary && Boolean(attribute.dictionaryId) && !options.length && !localDictionary.isFetching}
+    status={(localDictionary.isError || (strictDictionary && Boolean(attribute.dictionaryId))) && !options.length ? 'error' : undefined}
     optionFilterProp="label"
-    placeholder={localDictionary.isError && !options.length ? '本地字典不可用，请先同步' : '输入中文搜索并选择字典值'}
+    placeholder={strictDictionary && attribute.dictionaryId && !options.length
+      ? '尺码字典不可用，请先刷新并发布类目模板'
+      : localDictionary.isError && !options.length
+        ? '本地字典不可用，请先同步'
+        : '输入中文搜索并选择字典值'}
     notFoundContent="没有匹配的 OZON 字典值"
     options={options}
   />;

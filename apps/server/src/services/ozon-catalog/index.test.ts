@@ -159,6 +159,94 @@ describe('OZON local category catalog', () => {
     });
   });
 
+  it('freezes a paginated bilingual dictionary for the real top-level shoe-size attribute', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'merchroute-ozon-size-dictionary-'));
+    roots.push(root);
+    const repository = new FakeRepository();
+    const attributeValues = vi.fn(async (_categoryId: number, _typeId: number, _attributeId: number, language: 'RU' | 'ZH_HANS', lastValueId: number) => ({
+      result: {
+        result: lastValueId === 0
+          ? [{ id: 40, value: language === 'RU' ? '40 RU' : '40 中文', info: '' }]
+          : [{ id: 41, value: language === 'RU' ? '41 RU' : '41 中文', info: '' }],
+        has_next: lastValueId === 0
+      }
+    }));
+    const service = new OzonCatalogService(repository as any, root, logger(), {
+      source: {
+        categoryTree: async () => ({ result: [] }),
+        categorySchema: async (_categoryId, _typeId, language) => ({
+          body: { result: [
+            {
+              id: 4298,
+              name: language === 'RU' ? 'Российский размер' : '俄罗斯尺码',
+              type: 'String', is_required: true, dictionary_id: 361,
+              max_value_count: 1, group_id: 0, group_name: '', attribute_complex_id: 0
+            },
+            {
+              id: 8790,
+              name: language === 'RU' ? 'Документ PDF' : 'PDF 文件',
+              type: 'URL', is_required: false, dictionary_id: 0,
+              max_value_count: 1, group_id: 0, group_name: '', attribute_complex_id: 8788
+            }
+          ] }
+        }),
+        attributeValues
+      }
+    });
+
+    await expect(service.createCategory('17001:97001')).resolves.toMatchObject({ categoryKey: 'ozon_17001_97001' });
+    expect(repository.created).toMatchObject({
+      sizing: { sizeMode: 'sized', sizeAttributeKey: '4298:0' },
+      attributes: expect.arrayContaining([expect.objectContaining({ id: 8790, type: 'URL', complexId: 8788 })]),
+      dictionarySnapshot: {
+        '4298': [
+          { id: 40, value: '40 中文 / 40 RU', valueRu: '40 RU', valueZh: '40 中文' },
+          { id: 41, value: '41 中文 / 41 RU', valueRu: '41 RU', valueZh: '41 中文' }
+        ]
+      }
+    });
+    expect(attributeValues).toHaveBeenCalledTimes(4);
+    expect(attributeValues.mock.calls.map((call) => [call[3], call[4]])).toEqual(expect.arrayContaining([
+      ['RU', 0], ['ZH_HANS', 0], ['RU', 40], ['ZH_HANS', 40]
+    ]));
+  });
+
+  it('fails closed and keeps the previous category draft when the size dictionary refresh fails', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'merchroute-ozon-size-refresh-'));
+    roots.push(root);
+    const repository = new FakeRepository();
+    repository.category = {
+      categoryKey: 'ozon_17001_97001', descriptionCategoryId: 17001, typeId: 97001,
+      rowVersion: 3, nameRu: 'Кроссовки', nameZh: '运动鞋', createdAt: '', updatedAt: '',
+      draftVersion: {
+        id: 'draft-v1', categoryKey: 'ozon_17001_97001', versionNo: 1, status: 'DRAFT', schemaHash: 'sha256:test',
+        snapshot: {
+          categoryKey: 'ozon_17001_97001', descriptionCategoryId: 17001, typeId: 97001,
+          nameRu: 'Кроссовки', nameZh: '运动鞋', attributes: [], dictionarySnapshot: {},
+          media: { defaultVideoUploadMode: 'COMPRESSED_COPY' }, sizing: { sizeMode: 'sizeless' }, confirmedBy: ''
+        },
+        confirmedBy: '', createdAt: '', updatedAt: ''
+      }
+    };
+    const service = new OzonCatalogService(repository as any, root, logger(), {
+      source: {
+        categoryTree: async () => ({ result: [] }),
+        categorySchema: async (_categoryId, _typeId, language) => ({ body: { result: [{
+          id: 4298, name: language === 'RU' ? 'Российский размер' : '俄罗斯尺码', type: 'String',
+          is_required: true, dictionary_id: 361, max_value_count: 1, group_id: 0, group_name: '', attribute_complex_id: 0
+        }] } }),
+        attributeValues: async (_categoryId, _typeId, _attributeId, language) => {
+          if (language === 'ZH_HANS') throw new Error('中文尺码字典暂时不可用');
+          return { result: { result: [{ id: 40, value: '40', info: '' }], has_next: false } };
+        }
+      }
+    });
+
+    await expect(service.refreshCategory('ozon_17001_97001')).rejects.toMatchObject({ code: 'VERIFY_FAILED' });
+    expect(repository.saved).toBeUndefined();
+    expect(repository.category.draftVersion.snapshot.sizing).toEqual({ sizeMode: 'sizeless' });
+  });
+
   it('keeps the previous catalog when the Chinese tree is empty', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'merchroute-ozon-catalog-empty-'));
     roots.push(root);
@@ -217,6 +305,8 @@ class FakeRepository {
   completed?: { entries: any[]; dictionaryValues: any[] };
   failed?: { errorCode: string; errorMessage: string };
   created?: any;
+  saved?: any;
+  category?: any;
   snapshotPath?: string;
   private run = {
     runId: '11111111-1111-4111-8111-111111111111', trigger: 'MANUAL', status: 'RUNNING',
@@ -244,6 +334,8 @@ class FakeRepository {
   }
   async searchCatalogDictionary() { return []; }
   async createCategory(input: any) { this.created = input; return { ...input, rowVersion: 1, createdAt: '', updatedAt: '' }; }
+  async getCategory() { return this.category; }
+  async saveCategoryDraft(_categoryKey: string, input: any) { this.saved = input; return { ...this.category, draftVersion: { snapshot: input } }; }
 }
 
 function logger() {

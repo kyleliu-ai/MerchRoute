@@ -16,6 +16,7 @@ import {
   applyOzonVariantColorDefaults,
   createOzonCompatibleAppendProductIdentity,
   createOzonCompatibleAppendSettingsBinding,
+  expandOzonStorePresetSeeds,
   inspectOzonMp4Buffer,
   manualListingPlatformAttributes,
   manualListingPlatformBrand,
@@ -54,6 +55,139 @@ describe('OZON store-owned settings binding', () => {
     expect(() => assertSameAutomaticSettings(base, structuredClone(base), '0000132')).toThrowError(
       expect.objectContaining({ code: 'TASK_LOCKED' })
     );
+  });
+
+  it('rejects a frozen store preset missing a published required attribute before materialization', async () => {
+    const sku = '0000152';
+    const presetId = randomUUID();
+    const repository = {
+      getListing: vi.fn(async () => ({
+        sku,
+        productName: '测试运动鞋',
+        rowVersion: 1,
+        revision: 1,
+        contentPolicyVersion: 'merchroute-ozon-content-v3',
+        data: { offers: [] }
+      })),
+      getCategory: vi.fn(async () => ({
+        publishedVersion: {
+          id: randomUUID(),
+          snapshot: {
+            sizing: { sizeMode: 'sizeless' },
+            attributes: [{
+              id: 9163, complexId: 0, name: 'Пол', nameRu: 'Пол', nameZh: '性别',
+              type: 'String', required: true, dictionaryId: 320
+            }]
+          }
+        }
+      }))
+    } as unknown as OzonRepository;
+    const purchases = { getPurchase: vi.fn(async () => ({})) } as unknown as PurchaseRepository;
+    const service = new OzonPublishingService(
+      repository,
+      purchases,
+      {} as FastifyBaseLogger,
+      {} as any,
+      undefined,
+      { configured: true } as any
+    );
+
+    await expect(service.buildStorePresetProduct(sku, 1, {
+      name: 'OZON-运动鞋预设',
+      categoryKey: 'ozon_15621048_91248',
+      pricingTemplateId: randomUUID(),
+      shippingTemplateId: randomUUID(),
+      shippingServiceCode: 'CEL_RFBS_ECONOMY',
+      defaultStock: 1,
+      dimensions: { length: 30, width: 20, height: 12, dimensionUnit: 'cm', weight: 700, weightUnit: 'g' },
+      sharedAttributes: [],
+      variantAttributes: [],
+      sizes: [{ value: '', stock: 1 }]
+    }, 'CNY', { id: presetId, name: 'OZON-运动鞋预设', rowVersion: 6 })).rejects.toMatchObject({
+      code: 'CONFIG_INVALID',
+      message: expect.stringContaining('性别 / Пол · #9163'),
+      details: expect.objectContaining({ presetId })
+    });
+  });
+});
+
+describe('OZON canonical preset-size expansion', () => {
+  const variants = [
+    {
+      variantId: '10000000-0000-4000-8000-000000000001',
+      productVariantId: '10000000-0000-4000-8000-000000000001',
+      productVariantName: '咖啡色',
+      media: []
+    },
+    {
+      variantId: '10000000-0000-4000-8000-000000000002',
+      productVariantId: '10000000-0000-4000-8000-000000000002',
+      productVariantName: '黑色',
+      media: []
+    }
+  ];
+  const sizeIds = [
+    '20000000-0000-4000-8000-000000000040',
+    '20000000-0000-4000-8000-000000000041'
+  ];
+
+  it('uses the production Cartesian expansion with stable unique identities and per-size stock', () => {
+    const preset = {
+      defaultStock: 1,
+      sizeAttributeKey: '20:100',
+      sizes: [
+        { sizeId: sizeIds[0], value: 'dict:40', stock: 8 },
+        { sizeId: sizeIds[1], value: '41', stock: 5 }
+      ]
+    } as any;
+
+    const first = expandOzonStorePresetSeeds(variants, preset);
+    const stockChanged = expandOzonStorePresetSeeds(variants, {
+      ...preset,
+      sizes: preset.sizes.map((size: any, index: number) => ({ ...size, stock: index === 0 ? 3 : 2 }))
+    });
+
+    expect(first).toHaveLength(4);
+    expect(first.map((seed) => seed.productVariantId)).toEqual([
+      variants[0]!.productVariantId,
+      variants[0]!.productVariantId,
+      variants[1]!.productVariantId,
+      variants[1]!.productVariantId
+    ]);
+    expect(first.map((seed) => seed.stock)).toEqual([8, 5, 8, 5]);
+    expect(first.map((seed) => seed.sizeAttribute)).toEqual([
+      { attributeId: 20, complexId: 100, values: [{ dictionaryValueId: 40 }] },
+      { attributeId: 20, complexId: 100, values: [{ value: '41' }] },
+      { attributeId: 20, complexId: 100, values: [{ dictionaryValueId: 40 }] },
+      { attributeId: 20, complexId: 100, values: [{ value: '41' }] }
+    ]);
+    expect(new Set(first.map((seed) => seed.variantId)).size).toBe(4);
+    expect(stockChanged.map((seed) => seed.variantId)).toEqual(first.map((seed) => seed.variantId));
+    expect(stockChanged.map((seed) => seed.stock)).toEqual([3, 2, 3, 2]);
+  });
+
+  it('keeps source identities and one configured stock when the preset has no size attribute', () => {
+    const seeds = expandOzonStorePresetSeeds(variants, {
+      defaultStock: 9,
+      sizeAttributeKey: undefined,
+      sizes: [{ value: '', stock: 3 }]
+    } as any);
+
+    expect(seeds).toHaveLength(2);
+    expect(seeds.map((seed) => seed.variantId)).toEqual(variants.map((variant) => variant.variantId));
+    expect(seeds.map((seed) => seed.stock)).toEqual([3, 3]);
+    expect(seeds.every((seed) => seed.sizeAttribute === undefined)).toBe(true);
+  });
+
+  it('fails closed before creating duplicate size identities', () => {
+    expect(() => expandOzonStorePresetSeeds(variants, {
+      defaultStock: 1,
+      sizeAttributeKey: '20:100',
+      sizes: [
+        { sizeId: sizeIds[0], value: 'dict:40', stock: 1 },
+        { sizeId: sizeIds[1], value: 'dict:40', stock: 1 }
+      ]
+    } as any)).toThrowError(expect.objectContaining({ code: 'CONFIG_INVALID' }));
   });
 });
 

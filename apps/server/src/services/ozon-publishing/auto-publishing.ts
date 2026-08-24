@@ -8,6 +8,7 @@ import {
   OZON_CONTENT_POLICY_VERSION,
   ozonPreparationRecheckInputSchema,
   ozonPreparationRecheckPlanInputSchema,
+  projectOzonPresetRequiredAttributeCoverage,
   validateOzonDescription,
   validateOzonTitle,
   type OzonAttributeValueInput,
@@ -21,8 +22,11 @@ import {
   type ProductVariant
 } from '@n8n-media-review/shared';
 import type { StateStore } from '../../repositories/store.js';
-import type { OzonRepository } from '../../repositories/ozon.js';
-import type { OzonStoreRepository } from '../../repositories/ozon-stores.js';
+import type {
+  OzonAutomaticPreparationReplanTarget,
+  OzonRepository
+} from '../../repositories/ozon.js';
+import type { OzonEligibleAutoStore, OzonStoreRepository } from '../../repositories/ozon-stores.js';
 import type { PurchaseRepository } from '../../repositories/purchases.js';
 import type { PricingRepository } from '../../repositories/pricing.js';
 import type { E003DescriptionSourceService, E003VariantDescriptionsResult } from '../wb-presets/e003-description.js';
@@ -40,6 +44,7 @@ import {
 } from './material-preparation.js';
 import { resolveManifestMediaOrder } from '../manifest-media-order.js';
 import {
+  stableMaterial,
   stablePresetMaterial,
   type OzonAutomaticDeliveryIdentity,
   type OzonStoreService
@@ -107,7 +112,7 @@ type OzonMultistoreAutoDependencies = {
   storeService: Pick<OzonStoreService,
     'automaticPublicationPlan' | 'createAutomaticPublications' | 'createAutomaticPublicationsFromFrozenPlan'>;
   /** Narrow, read-only dependency used only by PRE_PLAN recovery evidence. */
-  storeGateway?: Pick<OzonStoreGatewayService, 'proveStoreOfferAbsence'>;
+  storeGateway?: Pick<OzonStoreGatewayService, 'proveStoreOfferAbsence' | 'proveExactNoBrandDictionaryValue'>;
 };
 const RETRY_DELAYS_MS = [60_000, 5 * 60_000, 15 * 60_000];
 export class OzonAutoPublishingCoordinator {
@@ -227,7 +232,10 @@ export class OzonAutoPublishingCoordinator {
     const mediaReady = await this.inspectDeliveredMediaReadiness(input.sku);
     let multistoreAdmission: { storeId: string; presetId: string; activatedAt: string; autoPublishMode: OzonAutoMode } | undefined;
     if (this.multistore) {
-      const eligible = await this.multistore.storeRepository.listEligibleAutoStores(input.deliveredAt);
+      const eligible = await this.filterStoresByExactNoBrandDictionary(
+        await this.multistore.storeRepository.listEligibleAutoStores(input.deliveredAt),
+        'ENQUEUE'
+      );
       const admissionCarrier = eligible[0];
       if (admissionCarrier?.defaultPresetId && admissionCarrier.autoPublishActivatedAt) {
         multistoreAdmission = {
@@ -248,6 +256,52 @@ export class OzonAutoPublishingCoordinator {
     });
     if (result.becameRunnable && kickWorker) void this.runWorkerNow();
     return result;
+  }
+
+  private async filterStoresByExactNoBrandDictionary(
+    stores: OzonEligibleAutoStore[],
+    phase: 'ENQUEUE' | 'REPLAN' | 'FREEZE'
+  ): Promise<OzonEligibleAutoStore[]> {
+    return (await Promise.all(stores.map(async (store) => {
+      const requirement = store.noBrandDictionaryRequirement;
+      if (!requirement) return store;
+      const credentialVersionId = store.credential?.activeVersionId;
+      const gateway = this.multistore?.storeGateway;
+      if (!gateway || !credentialVersionId || !store.presetRowVersion) {
+        this.logger.warn({
+          storeId: store.id,
+          storeAlias: store.storeAlias,
+          phase,
+          attributeId: requirement.attributeId,
+          code: 'OZON_NO_BRAND_DICTIONARY_GATE_UNAVAILABLE'
+        }, 'OZON 无品牌字典硬门不可用，店铺不进入自动上品任务');
+        return undefined;
+      }
+      try {
+        await gateway.proveExactNoBrandDictionaryValue({
+          storeId: store.id,
+          expectedStoreConfigVersion: store.configVersion,
+          expectedCredentialVersionId: credentialVersionId,
+          categoryVersionId: requirement.categoryVersionId,
+          presetRowVersion: store.presetRowVersion,
+          descriptionCategoryId: requirement.descriptionCategoryId,
+          typeId: requirement.typeId,
+          attributeId: requirement.attributeId,
+          dictionaryId: requirement.dictionaryId
+        });
+        return store;
+      } catch (error) {
+        this.logger.warn({
+          storeId: store.id,
+          storeAlias: store.storeAlias,
+          phase,
+          attributeId: requirement.attributeId,
+          code: error instanceof AppError ? error.code : 'OZON_NO_BRAND_DICTIONARY_GATE_FAILED',
+          message: error instanceof Error ? error.message : String(error)
+        }, 'OZON 无品牌字典唯一性未通过，店铺不进入自动上品任务');
+        return undefined;
+      }
+    }))).filter((store): store is OzonEligibleAutoStore => Boolean(store));
   }
 
   private async inspectDeliveredMediaReadiness(sku: string): Promise<boolean> {
@@ -310,14 +364,32 @@ export class OzonAutoPublishingCoordinator {
       throw new AppError('CONFIG_INVALID', '任务不是 OZON 共享准备协调任务', { id, taskKind: job.taskKind }, 409);
     }
     const fanoutPlan = asJsonRecord(job.payload?.fanoutPlan);
-    const recovery = Object.keys(fanoutPlan).length
-      ? preparationRecoveryCapability(job, true)
+    const supersession = asJsonRecord(job.payload?.replanReplacement);
+    const recovery = String(supersession.replacementPreparationJobId || '')
+      ? {
+          canRecheck: false,
+          canManualTakeover: false,
+          recoveryMode: 'NONE' as const,
+          blockedReason: 'SUPERSEDED_BY_REPLAN_WITH_CURRENT_PRESET'
+        }
+      : Object.keys(fanoutPlan).length
+      ? frozenFanoutRequiresCurrentPresetReplan(fanoutPlan)
+        ? {
+            canRecheck: false,
+            canManualTakeover: false,
+            recoveryMode: 'REPLAN_WITH_CURRENT_PRESET' as const,
+            blockedReason: 'REPLAN_DRY_RUN_REQUIRED'
+          }
+        : preparationRecoveryCapability(job, true)
       : (await this.buildPrePlanRecoveryEvidence(job, { proveRemote: false })).capability;
     const fanoutSummary = job.fanoutSummary || asJsonRecord(job.payload?.fanoutSummary);
     return {
       job,
       events: job.events || [],
-      fanoutSummary: Object.keys(fanoutSummary).length ? fanoutSummary : {
+      fanoutSummary: Object.keys(fanoutSummary).length ? {
+        ...fanoutSummary,
+        ...(String(supersession.replacementPreparationJobId || '') ? recovery : {})
+      } : {
         phase: 'NOT_STARTED',
         targetStoreCount: 0,
         publicationCount: 0,
@@ -325,7 +397,8 @@ export class OzonAutoPublishingCoordinator {
         ...recovery
       },
       frozenContract: fanoutPlan,
-      recovery
+      recovery,
+      ...(String(supersession.replacementPreparationJobId || '') ? { supersession } : {})
     };
   }
 
@@ -359,6 +432,30 @@ export class OzonAutoPublishingCoordinator {
       throw new AppError('TASK_LOCKED', 'OZON 共享准备任务已变化', { id }, 409);
     }
     const frozen = asJsonRecord(job.payload?.fanoutPlan);
+    const supersession = asJsonRecord(job.payload?.replanReplacement);
+    if (String(supersession.replacementPreparationJobId || '')) {
+      const planHash = String(supersession.planHash || '');
+      const requestId = String(supersession.requestId || '');
+      if (!/^sha256:[a-f0-9]{64}$/.test(planHash) || !/^[0-9a-f-]{36}$/i.test(requestId)) {
+        throw new AppError('VERSION_CONFLICT', 'OZON 旧任务的替代标记不完整', {
+          id,
+          replacementPreparationJobId: supersession.replacementPreparationJobId
+        }, 409);
+      }
+      return {
+        plan: {
+          rowVersion: job.rowVersion,
+          planHash,
+          requestId,
+          frozen,
+          canRecheck: false,
+          canManualTakeover: false,
+          recoveryMode: 'NONE' as const,
+          blockedReason: 'SUPERSEDED_BY_REPLAN_WITH_CURRENT_PRESET',
+          supersession
+        }
+      };
+    }
     if (!Object.keys(frozen).length) {
       const prePlan = await this.buildPrePlanRecoveryEvidence(job);
       return {
@@ -368,6 +465,18 @@ export class OzonAutoPublishingCoordinator {
           requestId: deterministicPreparationRequestId(id, prePlan.planHash),
           frozen: prePlan.frozen,
           ...prePlan.capability
+        }
+      };
+    }
+    if (frozenFanoutRequiresCurrentPresetReplan(frozen)) {
+      const replan = await this.buildFrozenFanoutReplanEvidence(job, frozen);
+      return {
+        plan: {
+          rowVersion: job.rowVersion,
+          planHash: replan.planHash,
+          requestId: deterministicPreparationRequestId(id, replan.planHash),
+          frozen: replan.frozen,
+          ...replan.capability
         }
       };
     }
@@ -391,6 +500,19 @@ export class OzonAutoPublishingCoordinator {
     const parsed = ozonPreparationRecheckInputSchema.safeParse(input);
     if (!parsed.success) throw new AppError('CONFIG_INVALID', 'OZON 共享准备重检合同无效', { issues: parsed.error.issues }, 400);
     const job = await this.repository.getJob(id, 'AUTO');
+    const priorReplacement = asJsonRecord(job.payload?.replanReplacement);
+    if (String(priorReplacement.requestId || '') === parsed.data.requestId
+      && String(priorReplacement.planHash || '') === parsed.data.planHash
+      && String(priorReplacement.replacementPreparationJobId || '')) {
+      const replacement = await this.repository.getJob(String(priorReplacement.replacementPreparationJobId), 'AUTO');
+      return {
+        job: replacement,
+        supersededJob: job,
+        requestId: parsed.data.requestId,
+        recoveryMode: 'REPLAN_WITH_CURRENT_PRESET' as const,
+        idempotent: true
+      };
+    }
     const frozen = asJsonRecord(job.payload?.fanoutPlan);
     if (!Object.keys(frozen).length) {
       if (job.taskKind !== 'SHARED_PREPARATION' || job.rowVersion !== parsed.data.rowVersion) {
@@ -499,6 +621,50 @@ export class OzonAutoPublishingCoordinator {
       void this.runWorkerNow();
       return { job: next, requestId: parsed.data.requestId };
     }
+    if (frozenFanoutRequiresCurrentPresetReplan(frozen)) {
+      if (job.taskKind !== 'SHARED_PREPARATION' || job.rowVersion !== parsed.data.rowVersion) {
+        throw new AppError('VERSION_CONFLICT', 'OZON 当前预设重建任务身份或行版本已变化', { id }, 409);
+      }
+      const replan = await this.buildFrozenFanoutReplanEvidence(job, frozen);
+      if (replan.planHash !== parsed.data.planHash
+        || deterministicPreparationRequestId(id, replan.planHash) !== parsed.data.requestId) {
+        throw new AppError('VERSION_CONFLICT', 'OZON 当前预设重建证据已变化，请重新 dry-run', { id }, 409);
+      }
+      if (!replan.capability.canRecheck
+        || replan.capability.recoveryMode !== 'REPLAN_WITH_CURRENT_PRESET') {
+        throw new AppError('OZON_READBACK_REQUIRED', 'OZON 当前预设重建未通过纯本地证据校验', {
+          id,
+          blockedReason: replan.capability.blockedReason,
+          evidence: replan.frozen.evidence,
+          preview: replan.frozen.preview
+        }, 409);
+      }
+      const applied = await this.repository.replaceAutomaticPreparationWithCurrentPreset({
+        jobId: id,
+        expectedJobRowVersion: job.rowVersion,
+        requestId: parsed.data.requestId,
+        planHash: replan.planHash,
+        expectedEvidenceHash: String(asJsonRecord(replan.frozen.evidence).evidenceHash || ''),
+        expectedFanoutPlanHash: String(frozen.planHash || ''),
+        expectedListingRowVersion: Number(replan.frozen.currentListingRowVersion),
+        expectedListingRevision: Number(replan.frozen.currentListingRevision),
+        expectedGeneratedVersionId: String(replan.frozen.currentGeneratedVersionId || ''),
+        expectedMaterialHash: String(replan.frozen.currentMaterialHash || ''),
+        expectedDataSignature: String(replan.frozen.currentDataSignature || ''),
+        expectedCurrentPlanHash: String(replan.frozen.currentPlanHash || ''),
+        expectedPlanContractHash: String(replan.frozen.currentPlanContractHash || ''),
+        expectedSettingsRowVersion: Number(replan.frozen.settingsRowVersion),
+        expectedRootDirectoryHash: String(replan.frozen.rootDirectoryHash || ''),
+        expectedVariantColorAuthorityHash: String(replan.frozen.variantColorAuthorityHash || ''),
+        targetStores: replan.targets
+      });
+      void this.runWorkerNow();
+      return {
+        ...applied,
+        requestId: parsed.data.requestId,
+        recoveryMode: 'REPLAN_WITH_CURRENT_PRESET' as const
+      };
+    }
     if (job.taskKind !== 'SHARED_PREPARATION'
       || job.rowVersion !== parsed.data.rowVersion
       || String(frozen.planHash || '') !== parsed.data.planHash
@@ -522,6 +688,255 @@ export class OzonAutoPublishingCoordinator {
     const next = await this.repository.recheck(id, 'AUTO', job.rowVersion);
     void this.runWorkerNow();
     return { job: next, requestId: parsed.data.requestId };
+  }
+
+  private async buildFrozenFanoutReplanEvidence(
+    job: OzonPublishJob,
+    originalFrozenPlan: JsonRecord
+  ): Promise<{
+    planHash: string;
+    frozen: JsonRecord;
+    targets: OzonAutomaticPreparationReplanTarget[];
+    capability: OzonPreparationRecoveryCapability;
+  }> {
+    const blockers: string[] = [];
+    const evidence = await this.repository.getAutomaticPreparationReplanEvidence(job.id);
+    blockers.push(...evidence.blockers);
+    if (!this.multistore) blockers.push('MULTISTORE_SERVICE_UNAVAILABLE');
+    const originalStoreIds = frozenFanoutStoreIds(originalFrozenPlan);
+    if (!originalStoreIds.length) blockers.push('FROZEN_FANOUT_STORE_SET_MISSING');
+    if (evidence.storeIds.length
+      && stableJson([...evidence.storeIds].sort()) !== stableJson([...originalStoreIds].sort())) {
+      blockers.push('LOCAL_VALIDATION_STORE_SET_DRIFT');
+    }
+
+    const listing = await this.repository.getListing(job.sku);
+    const currentDataSignature = sharedMaterialDataSignature(listing);
+    if (!listing.generatedVersionId || !listing.materialHash || !currentDataSignature) {
+      blockers.push('CURRENT_SHARED_MATERIAL_CONTRACT_INCOMPLETE');
+    }
+    let freshPlan: JsonRecord = {};
+    let targetStoresPassedAdmission = false;
+    if (this.multistore && originalStoreIds.length) {
+      const deliveredAt = automaticDeliveryIdentities(job).map((delivery) => delivery.deliveredAt).sort().at(-1);
+      try {
+        if (!deliveredAt) {
+          blockers.push('CURRENT_PRESET_TARGET_DELIVERY_TIME_MISSING');
+        } else {
+          const targetIds = new Set(originalStoreIds);
+          const eligibleTargets = (await this.multistore.storeRepository.listEligibleAutoStores(deliveredAt))
+            .filter((store) => targetIds.has(store.id));
+          if (eligibleTargets.length !== originalStoreIds.length
+            || stableJson(eligibleTargets.map((store) => store.id).sort()) !== stableJson([...originalStoreIds].sort())) {
+            blockers.push('CURRENT_PRESET_TARGET_STORE_NOT_ELIGIBLE');
+          } else {
+            const dictionaryVerified = await this.filterStoresByExactNoBrandDictionary(eligibleTargets, 'REPLAN');
+            if (dictionaryVerified.length !== originalStoreIds.length
+              || stableJson(dictionaryVerified.map((store) => store.id).sort()) !== stableJson([...originalStoreIds].sort())) {
+              blockers.push('CURRENT_PRESET_NO_BRAND_DICTIONARY_UNPROVEN');
+            } else {
+              targetStoresPassedAdmission = true;
+            }
+          }
+        }
+      } catch (error) {
+        blockers.push(`CURRENT_PRESET_STORE_ADMISSION_FAILED:${error instanceof AppError ? error.code : 'UNKNOWN'}`);
+      }
+    }
+    if (this.multistore && originalStoreIds.length && targetStoresPassedAdmission) {
+      try {
+        freshPlan = asJsonRecord(await this.multistore.storeService.automaticPublicationPlan(
+          listing.sku,
+          listing.rowVersion,
+          originalStoreIds,
+          { prepareSharedSource: false, readOnly: true }
+        ));
+      } catch (error) {
+        blockers.push(`CURRENT_PRESET_PLAN_FAILED:${error instanceof AppError ? error.code : 'UNKNOWN'}`);
+      }
+    }
+
+    const planItems = Array.isArray(freshPlan.items) ? freshPlan.items.map(asJsonRecord) : [];
+    const planStores = Array.isArray(freshPlan.stores) ? freshPlan.stores.map(asJsonRecord) : [];
+    if (planItems.length !== originalStoreIds.length || planStores.length !== originalStoreIds.length) {
+      blockers.push('CURRENT_PRESET_PLAN_STORE_SET_INCOMPLETE');
+    }
+    for (const item of planItems) {
+      if (item.ready !== true) {
+        const itemBlockers = Array.isArray(item.blockers) ? item.blockers.map(String).filter(Boolean) : [];
+        blockers.push(`CURRENT_PRESET_STORE_NOT_READY:${String(item.storeAlias || item.storeId || 'unknown')}:${itemBlockers.join('|')}`);
+      }
+      const offerIds = Array.isArray(item.offerIds) ? item.offerIds.map(String).filter(Boolean) : [];
+      if (!offerIds.length || new Set(offerIds).size !== offerIds.length) {
+        blockers.push(`CURRENT_PRESET_OFFER_SET_INVALID:${String(item.storeAlias || item.storeId || 'unknown')}`);
+      }
+    }
+
+    const categoryKeys = [...new Set(planStores.map((storeEntry) => {
+      const storeSnapshot = asJsonRecord(storeEntry.storeSnapshot);
+      return String(asJsonRecord(storeSnapshot.presetSnapshot).categoryKey || '');
+    }).filter(Boolean))];
+    const publishedCategories = new Map(await Promise.all(categoryKeys.map(async (categoryKey) => {
+      const category = await this.repository.getCategory(categoryKey).catch(() => undefined);
+      return [categoryKey, category?.publishedVersion] as const;
+    })));
+    const coverageByStore = planStores.map((storeEntry) => {
+      const storeId = String(storeEntry.storeId || '');
+      const storeSnapshot = asJsonRecord(storeEntry.storeSnapshot);
+      const preset = asJsonRecord(storeSnapshot.presetSnapshot);
+      const categoryKey = String(preset.categoryKey || '');
+      const categoryVersion = publishedCategories.get(categoryKey);
+      const product = asJsonRecord(storeEntry.productSnapshot);
+      const offers = Array.isArray(product.offers) ? product.offers.map(asJsonRecord) : [];
+      const sharedKeys = new Set((Array.isArray(product.sharedAttributes) ? product.sharedAttributes : [])
+        .map(asJsonRecord)
+        .map((attribute) => `${Number(attribute.attributeId)}:${Number(attribute.complexId)}`));
+      const offerKeys = offers.map((offer) => new Set((Array.isArray(offer.attributes) ? offer.attributes : [])
+        .map(asJsonRecord)
+        .map((attribute) => `${Number(attribute.attributeId)}:${Number(attribute.complexId)}`)));
+      let attributes: Array<Record<string, unknown>> = [];
+      if (categoryVersion) {
+        try {
+          attributes = projectOzonPresetRequiredAttributeCoverage(categoryVersion.snapshot, preset as any).map((attribute) => {
+            const materialized = sharedKeys.has(attribute.attributeKey)
+              || (offerKeys.length > 0 && offerKeys.every((keys) => keys.has(attribute.attributeKey)));
+            if (!materialized) {
+              blockers.push(`REQUIRED_ATTRIBUTE_NOT_MATERIALIZED:${storeId}:${attribute.attributeId}:${attribute.complexId}`);
+            }
+            return { ...attribute, materialized };
+          });
+        } catch {
+          blockers.push(`REQUIRED_ATTRIBUTE_COVERAGE_INVALID:${storeId}`);
+        }
+      } else {
+        blockers.push(`PUBLISHED_CATEGORY_SNAPSHOT_MISSING:${storeId}:${categoryKey || 'missing'}`);
+      }
+      return {
+        storeId,
+        storeAlias: String(storeSnapshot.storeAlias || ''),
+        categoryKey,
+        publishedCategoryVersionId: categoryVersion?.id || '',
+        complete: Boolean(categoryVersion)
+          && attributes.every((attribute) => attribute.covered === true && attribute.materialized === true),
+        attributes
+      };
+    });
+    if (coverageByStore.some((coverage) => !coverage.complete)) blockers.push('REQUIRED_ATTRIBUTE_COVERAGE_INCOMPLETE');
+
+    const targets: OzonAutomaticPreparationReplanTarget[] = planItems.flatMap((item) => {
+      const storeEntry = planStores.find((entry) => String(entry.storeId || '') === String(item.storeId || ''));
+      const storeSnapshot = asJsonRecord(storeEntry?.storeSnapshot);
+      const presetSnapshot = asJsonRecord(storeSnapshot.presetSnapshot);
+      const coverage = coverageByStore.find((entry) => entry.storeId === String(item.storeId || ''));
+      const modeEvidence = asJsonRecord(storeEntry?.modeEvidence);
+      const target = {
+        id: String(item.storeId || ''),
+        rowVersion: Number(item.storeRowVersion),
+        configVersion: Number(item.storeConfigVersion),
+        credentialVersionId: String(item.credentialVersionId || ''),
+        presetId: String(item.presetId || ''),
+        presetRowVersion: Number(item.presetRowVersion),
+        presetDefinitionHash: String(item.presetDefinitionHash || ''),
+        presetSnapshotHash: Object.keys(presetSnapshot).length
+          ? `sha256:${createHash('sha256').update(stableJson(presetSnapshot)).digest('hex')}`
+          : '',
+        publicationMode: String(item.publicationMode || '') as OzonAutomaticPreparationReplanTarget['publicationMode'],
+        warehouseId: String(item.warehouseId || ''),
+        fulfillmentMode: String(item.fulfillmentMode || '') as OzonAutomaticPreparationReplanTarget['fulfillmentMode'],
+        accountCurrency: String(item.accountCurrency || '') as OzonAutomaticPreparationReplanTarget['accountCurrency'],
+        expectedOfferIds: Array.isArray(item.offerIds) ? item.offerIds.map(String).filter(Boolean) : [],
+        categoryKey: String(coverage?.categoryKey || ''),
+        expectedPublishedCategoryVersionId: String(coverage?.publishedCategoryVersionId || ''),
+        expectedProductSnapshotHash: String(storeEntry?.productSnapshotHash || ''),
+        expectedProductContractHash: replacementIdentityNeutralHash(storeEntry?.productSnapshot),
+        expectedModeEvidenceHash: String(modeEvidence.evidenceHash || '')
+      };
+      return target.id ? [target] : [];
+    }).sort((left, right) => left.id.localeCompare(right.id));
+    if (targets.length !== originalStoreIds.length) blockers.push('CURRENT_PRESET_TARGET_CONTRACT_INCOMPLETE');
+
+    const offerPreview = planStores.flatMap((storeEntry) => {
+      const product = asJsonRecord(storeEntry.productSnapshot);
+      return (Array.isArray(product.offers) ? product.offers : []).map(asJsonRecord).map((offer) => ({
+        storeId: String(storeEntry.storeId || ''),
+        offerId: String(offer.offerId || ''),
+        stock: Number(offer.stock),
+        attributeKeys: [
+          ...(Array.isArray(product.sharedAttributes) ? product.sharedAttributes : []),
+          ...(Array.isArray(offer.attributes) ? offer.attributes : [])
+        ].map(asJsonRecord).map((attribute) => `${Number(attribute.attributeId)}:${Number(attribute.complexId)}`)
+          .filter((value, index, values) => values.indexOf(value) === index)
+      }));
+    });
+    if (!offerPreview.length || offerPreview.some((offer) => !offer.offerId || !Number.isInteger(offer.stock) || offer.stock < 0)) {
+      blockers.push('CURRENT_PRESET_OFFER_PREVIEW_INVALID');
+    }
+    let planContract = {
+      hash: '',
+      settingsRowVersion: 0,
+      rootDirectoryHash: '',
+      variantColorAuthorityHash: ''
+    };
+    try {
+      planContract = currentPresetReplanPlanContract(freshPlan, targets);
+    } catch (error) {
+      blockers.push(`CURRENT_PRESET_PLAN_CONTRACT_INVALID:${error instanceof AppError ? error.code : 'UNKNOWN'}`);
+    }
+    const currentPlanHash = String(freshPlan.planHash || '');
+    if (!/^sha256:[a-f0-9]{64}$/.test(currentPlanHash)) blockers.push('CURRENT_PRESET_PLAN_HASH_INVALID');
+    const canonical = {
+      schemaVersion: 1,
+      recoveryMode: 'REPLAN_WITH_CURRENT_PRESET',
+      originalJobId: job.id,
+      originalJobRowVersion: job.rowVersion,
+      originalFanoutPlanHash: String(originalFrozenPlan.planHash || ''),
+      evidenceHash: evidence.evidenceHash,
+      listing: {
+        sku: listing.sku,
+        rowVersion: listing.rowVersion,
+        revision: listing.revision,
+        generatedVersionId: listing.generatedVersionId || '',
+        materialHash: listing.materialHash || '',
+        dataSignature: currentDataSignature
+      },
+      currentPlanHash,
+      currentPlanContractHash: planContract.hash,
+      settingsRowVersion: planContract.settingsRowVersion,
+      rootDirectoryHash: planContract.rootDirectoryHash,
+      variantColorAuthorityHash: planContract.variantColorAuthorityHash,
+      targets,
+      requiredAttributeCoverage: coverageByStore,
+      offerPreview,
+      blockers: [...new Set(blockers)].sort()
+    };
+    const planHash = `sha256:${createHash('sha256').update(stableJson(canonical)).digest('hex')}`;
+    const uniqueBlockers = [...new Set(blockers)];
+    return {
+      planHash,
+      targets,
+      frozen: {
+        ...canonical,
+        checkedAt: new Date().toISOString(),
+        currentListingRowVersion: listing.rowVersion,
+        currentListingRevision: listing.revision,
+        currentGeneratedVersionId: listing.generatedVersionId || '',
+        currentMaterialHash: listing.materialHash || '',
+        currentDataSignature,
+        evidence,
+        preview: {
+          storeCount: planStores.length,
+          offerCount: offerPreview.length,
+          offers: offerPreview,
+          requiredAttributeCoverage: coverageByStore
+        }
+      },
+      capability: {
+        canRecheck: uniqueBlockers.length === 0,
+        canManualTakeover: false,
+        recoveryMode: 'REPLAN_WITH_CURRENT_PRESET',
+        ...(uniqueBlockers.length ? { blockedReason: uniqueBlockers.join(',') } : {})
+      }
+    };
   }
 
   private async buildPrePlanRecoveryEvidence(
@@ -1090,12 +1505,30 @@ export class OzonAutoPublishingCoordinator {
     let eligibleStoreIds = frozenFanoutStoreIds(existingFanoutPlan);
     if (!eligibleStoreIds.length) {
       const prePlanTargets = prePlanRecoveryTargets(job);
+      const currentPresetReplanTargets = replanRecoveryTargets(job);
       if (prePlanTargets.length) {
         eligibleStoreIds = prePlanTargets.map((store) => String(store.id || '')).filter(Boolean);
-        const currentEligible = await this.multistore.storeRepository.listEligibleAutoStores(completionDelivery.deliveredAt);
+        const currentEligible = await this.filterStoresByExactNoBrandDictionary(
+          await this.multistore.storeRepository.listEligibleAutoStores(completionDelivery.deliveredAt),
+          'FREEZE'
+        );
         assertPrePlanCurrentStores(currentEligible, prePlanTargets);
+      } else if (currentPresetReplanTargets.length) {
+        eligibleStoreIds = currentPresetReplanTargets.map((store) => String(store.id || '')).filter(Boolean);
+        const targetIds = new Set(eligibleStoreIds);
+        const currentEligible = await this.filterStoresByExactNoBrandDictionary(
+          await this.multistore.storeRepository.listEligibleAutoStores(completionDelivery.deliveredAt),
+          'FREEZE'
+        );
+        assertPrePlanCurrentStores(
+          currentEligible.filter((store) => targetIds.has(store.id)),
+          currentPresetReplanTargets
+        );
       } else {
-        const eligibleStores = await this.multistore.storeRepository.listEligibleAutoStores(completionDelivery.deliveredAt);
+        const eligibleStores = await this.filterStoresByExactNoBrandDictionary(
+          await this.multistore.storeRepository.listEligibleAutoStores(completionDelivery.deliveredAt),
+          'FREEZE'
+        );
         eligibleStoreIds = eligibleStores.map((store) => store.id);
       }
       if (eligibleStoreIds.length) {
@@ -1104,7 +1537,12 @@ export class OzonAutoPublishingCoordinator {
           listing.rowVersion,
           eligibleStoreIds
         );
-        if (prePlanTargets.length) assertPrePlanFanoutTargets(plan, prePlanTargets);
+        const frozenRecoveryTargets = prePlanTargets.length ? prePlanTargets : currentPresetReplanTargets;
+        if (frozenRecoveryTargets.length) assertPrePlanFanoutTargets(plan, frozenRecoveryTargets);
+        if (currentPresetReplanTargets.length) {
+          await assertCurrentPresetReplanCategoryVersions(this.repository, currentPresetReplanTargets);
+          assertCurrentPresetReplanPlanContract(job, plan, currentPresetReplanTargets);
+        }
         const frozen = await this.multistore.storeRepository.freezePreparationFanoutPlan(job.id, job.rowVersion, plan);
         eligibleStoreIds = frozenFanoutStoreIds(frozen);
       }
@@ -1841,61 +2279,6 @@ export function buildSharedAttributes(
   }), categoryAttributes);
 }
 
-export function expandOzonOfferSeeds(
-  mediaVariants: OzonMediaVariant[],
-  preset: Pick<OzonPreset, 'defaultStock' | 'sizeAttributeKey' | 'sizes'>
-): Array<{ variantId: string; mediaVariant: OzonMediaVariant; stock: number; sizeAttribute?: OzonAttributeValueInput }> {
-  const sizeAttributeKey = String(preset.sizeAttributeKey || '').trim();
-  const configuredSizes = Array.isArray(preset.sizes) && preset.sizes.length
-    ? preset.sizes
-    : [{ value: '', stock: preset.defaultStock }];
-  if (!sizeAttributeKey) {
-    const stock = Number(configuredSizes[0]?.stock ?? preset.defaultStock ?? 0);
-    return mediaVariants.map((mediaVariant) => ({ variantId: mediaVariant.variantId, mediaVariant, stock }));
-  }
-  const parts = sizeAttributeKey.split(':');
-  const attributeId = Number(parts[0]);
-  const complexId = Number(parts[1]);
-  if (!attributeId || !Number.isInteger(complexId) || complexId < 0) {
-    throw new StopAutoJob('OZON_SIZE_ATTRIBUTE_INVALID', 'OZON 尺码属性配置无效');
-  }
-  const seen = new Set<string>();
-  const sizes = configuredSizes.map((size, index) => {
-    const value = String(size.value || '').trim();
-    if (!value) throw new StopAutoJob('OZON_SIZE_VALUE_REQUIRED', `OZON 尺码第 ${index + 1} 行未填写尺码值`);
-    if (seen.has(value)) throw new StopAutoJob('OZON_SIZE_VALUE_DUPLICATED', `OZON 尺码值重复：${value}`);
-    seen.add(value);
-    return {
-      identity: String(size.sizeId || value),
-      stock: Number(size.stock || 0),
-      attribute: {
-        attributeId,
-        complexId,
-        values: value.startsWith('dict:') ? [{ dictionaryValueId: Number(value.slice(5)) }] : [{ value }]
-      } satisfies OzonAttributeValueInput
-    };
-  });
-  if (mediaVariants.length * sizes.length > 99) {
-    throw new StopAutoJob('OZON_VARIANT_LIMIT_EXCEEDED', 'OZON 颜色与尺码组合最多生成 99 个变体');
-  }
-  return mediaVariants.flatMap((mediaVariant) => sizes.map((size) => ({
-    variantId: deterministicOzonVariantId(mediaVariant.variantId, size.identity),
-    mediaVariant,
-    stock: size.stock,
-    sizeAttribute: size.attribute
-  })));
-}
-
-function deterministicOzonVariantId(mediaVariantId: string, sizeIdentity: string): string {
-  const hash = createHash('sha256').update(`${mediaVariantId}\u0000${sizeIdentity}`).digest('hex').slice(0, 32).split('');
-  hash[12] = '5';
-  hash[16] = ['8', '9', 'a', 'b'][Number.parseInt(hash[16] || '0', 16) % 4]!;
-  const value = hash.join('');
-  return `${value.slice(0, 8)}-${value.slice(8, 12)}-${value.slice(12, 16)}-${value.slice(16, 20)}-${value.slice(20)}`;
-}
-
-
-
 export function buildOzonVariantIdentities(
   variantIds: string[],
   existingOffers: Array<{ variantId: string; variantCode: string; offerId: string }>,
@@ -2201,6 +2584,169 @@ function prePlanRecoveryTargets(job: OzonPublishJob): JsonRecord[] {
   return Array.isArray(recovery.targetStores) ? recovery.targetStores.map(asJsonRecord) : [];
 }
 
+function replanRecoveryTargets(job: OzonPublishJob): JsonRecord[] {
+  const recovery = asJsonRecord(job.payload?.replanRecovery);
+  if (recovery.recoveryMode !== 'REPLAN_WITH_CURRENT_PRESET') return [];
+  return Array.isArray(recovery.targetStores) ? recovery.targetStores.map(asJsonRecord) : [];
+}
+
+const REPLAN_PRODUCT_TOP_LEVEL_IDENTITY_FIELDS = new Set([
+  'materialHash', 'generatedVersionId', 'revision', 'rowVersion', 'materialRevision',
+  'listingRevision', 'draftVersion'
+]);
+
+function replacementIdentityNeutralHash(value: unknown): string {
+  const product = asJsonRecord(value);
+  const normalized = Object.fromEntries(Object.entries(product)
+    .filter(([key]) => !REPLAN_PRODUCT_TOP_LEVEL_IDENTITY_FIELDS.has(key)));
+  return `sha256:${createHash('sha256').update(stableJson(normalized)).digest('hex')}`;
+}
+
+export function currentPresetReplanPlanContract(
+  planInput: unknown,
+  targetsInput: unknown[]
+): {
+  hash: string;
+  settingsRowVersion: number;
+  rootDirectoryHash: string;
+  variantColorAuthorityHash: string;
+} {
+  const plan = asJsonRecord(planInput);
+  const items = Array.isArray(plan.items) ? plan.items.map(asJsonRecord) : [];
+  const stores = Array.isArray(plan.stores) ? plan.stores.map(asJsonRecord) : [];
+  const targets = targetsInput.map(asJsonRecord);
+  const settingsRowVersion = Number(plan.settingsRowVersion);
+  const rootDirectoryHash = String(plan.rootDirectoryHash || '');
+  const variantColorAuthorityHash = String(asJsonRecord(plan.variantColorAuthority).hash || '');
+  const requiredHashes = [
+    rootDirectoryHash,
+    variantColorAuthorityHash,
+    String(plan.sourceMediaIdentityHash || '')
+  ];
+  if (!Number.isSafeInteger(settingsRowVersion) || settingsRowVersion < 1
+    || requiredHashes.some((value) => !/^sha256:[a-f0-9]{64}$/.test(value))
+    || !items.length || items.length !== stores.length || items.length !== targets.length) {
+    throw new AppError('VERSION_CONFLICT', 'OZON 当前预设语义计划合同不完整', undefined, 409);
+  }
+  const storesById = new Map(stores.map((entry) => [String(entry.storeId || ''), entry]));
+  const targetsById = new Map(targets.map((entry) => [String(entry.id || ''), entry]));
+  if (storesById.size !== stores.length || targetsById.size !== targets.length) {
+    throw new AppError('VERSION_CONFLICT', 'OZON 当前预设语义计划店铺集合重复', undefined, 409);
+  }
+  const storeContracts = items.map((item) => {
+    const storeId = String(item.storeId || '');
+    const store = storesById.get(storeId);
+    const target = targetsById.get(storeId);
+    const productSnapshotHash = String(store?.productSnapshotHash || '');
+    const calculatedProductSnapshotHash = store
+      ? `sha256:${createHash('sha256').update(stableJson(stableMaterial(store.productSnapshot))).digest('hex')}`
+      : '';
+    const productContractHash = replacementIdentityNeutralHash(store?.productSnapshot);
+    const modeEvidenceHash = String(asJsonRecord(store?.modeEvidence).evidenceHash || '');
+    if (!store || !target
+      || !/^sha256:[a-f0-9]{64}$/.test(productSnapshotHash)
+      || calculatedProductSnapshotHash !== productSnapshotHash
+      || !/^sha256:[a-f0-9]{64}$/.test(modeEvidenceHash)
+      || !/^sha256:[a-f0-9]{64}$/.test(String(target.expectedProductSnapshotHash || ''))
+      || productContractHash !== String(target.expectedProductContractHash || '')
+      || modeEvidenceHash !== String(target.expectedModeEvidenceHash || '')
+      || !String(target.categoryKey || '')
+      || !/^[0-9a-f-]{36}$/i.test(String(target.expectedPublishedCategoryVersionId || ''))) {
+      throw new AppError('VERSION_CONFLICT', 'OZON 当前预设逐店语义计划合同不完整', { storeId }, 409);
+    }
+    return {
+      storeId,
+      storeRowVersion: Number(item.storeRowVersion),
+      storeConfigVersion: Number(item.storeConfigVersion),
+      credentialVersionId: String(item.credentialVersionId || ''),
+      presetId: String(item.presetId || ''),
+      presetRowVersion: Number(item.presetRowVersion),
+      presetDefinitionHash: String(item.presetDefinitionHash || ''),
+      presetSnapshotHash: String(target.presetSnapshotHash || ''),
+      categoryKey: String(target.categoryKey),
+      publishedCategoryVersionId: String(target.expectedPublishedCategoryVersionId),
+      publicationMode: String(item.publicationMode || ''),
+      warehouseId: String(item.warehouseId || ''),
+      fulfillmentMode: String(item.fulfillmentMode || ''),
+      accountCurrency: String(item.accountCurrency || ''),
+      ready: item.ready === true,
+      blockers: Array.isArray(item.blockers) ? item.blockers.map(String) : [],
+      errorCode: String(item.errorCode || ''),
+      errorDetails: item.errorDetails ?? null,
+      offerIds: Array.isArray(item.offerIds) ? item.offerIds.map(String) : [],
+      productContractHash,
+      modeEvidenceHash
+    };
+  }).sort((left, right) => left.storeId.localeCompare(right.storeId));
+  const canonical = {
+    schemaVersion: 1,
+    sku: String(plan.sku || ''),
+    contentPolicyVersion: String(plan.contentPolicyVersion || ''),
+    materialHashVersion: String(plan.materialHashVersion || ''),
+    sourceMediaIdentityHash: String(plan.sourceMediaIdentityHash || ''),
+    settingsRowVersion,
+    rootDirectoryHash,
+    variantColorAuthorityHash,
+    stores: storeContracts
+  };
+  return {
+    hash: `sha256:${createHash('sha256').update(stableJson(canonical)).digest('hex')}`,
+    settingsRowVersion,
+    rootDirectoryHash,
+    variantColorAuthorityHash
+  };
+}
+
+async function assertCurrentPresetReplanCategoryVersions(
+  repository: OzonRepository,
+  targets: JsonRecord[]
+): Promise<void> {
+  const categories = await Promise.all([...new Set(targets.map((target) => String(target.categoryKey || '')))]
+    .filter(Boolean)
+    .map(async (categoryKey) => ({ categoryKey, category: await repository.getCategory(categoryKey) })));
+  for (const target of targets) {
+    const current = categories.find((entry) => entry.categoryKey === String(target.categoryKey || ''))?.category;
+    if (!current?.publishedVersion
+      || current.publishedVersion.id !== String(target.expectedPublishedCategoryVersionId || '')) {
+      throw new StopAutoJob(
+        'OZON_CURRENT_PRESET_CATEGORY_VERSION_DRIFT',
+        'OZON 当前预设重建后的已发布类目版本已变化'
+      );
+    }
+  }
+}
+
+function assertCurrentPresetReplanPlanContract(
+  job: OzonPublishJob,
+  plan: unknown,
+  targets: JsonRecord[]
+): void {
+  const recovery = asJsonRecord(job.payload?.replanRecovery);
+  // expectedCurrentPlanHash is retained as the dry-run audit source. The raw
+  // hash cannot be equal after replacement because r2 deliberately receives a
+  // new generatedVersionId/revision. The identity-neutral semantic hash below
+  // is the actual worker CAS before fan-out freeze.
+  const auditSourcePlanHash = String(recovery.expectedCurrentPlanHash || '');
+  const expected = String(recovery.expectedPlanContractHash || '');
+  let current: ReturnType<typeof currentPresetReplanPlanContract>;
+  try {
+    current = currentPresetReplanPlanContract(plan, targets);
+  } catch {
+    throw new StopAutoJob('OZON_CURRENT_PRESET_PLAN_DRIFT', 'OZON 当前预设重建后的语义计划合同无效');
+  }
+  if (!/^sha256:[a-f0-9]{64}$/.test(auditSourcePlanHash)
+    || !/^sha256:[a-f0-9]{64}$/.test(expected)
+    || current.hash !== expected
+    || current.settingsRowVersion !== Number(recovery.expectedSettingsRowVersion)
+    || current.rootDirectoryHash !== String(recovery.expectedRootDirectoryHash || '')
+    || current.variantColorAuthorityHash !== String(recovery.expectedVariantColorAuthorityHash || '')) {
+    throw new StopAutoJob(
+      'OZON_CURRENT_PRESET_PLAN_DRIFT',
+      'OZON 当前预设重建后的类目、定价、系统设置或属性物化已变化'
+    );
+  }
+}
+
 function assertPrePlanWorkerProductIdentity(
   job: OzonPublishJob,
   identity: { sku: string; productName: string; variants: ProductVariant[] }
@@ -2349,7 +2895,7 @@ function frozenFanoutStoreIds(plan: JsonRecord): string[] {
 function preparationRecoveryCapability(job: OzonPublishJob, hasFrozenPlan: boolean): {
   canRecheck: boolean;
   canManualTakeover: boolean;
-  recoveryMode: 'NONE' | 'RECHECK' | 'MANUAL_TAKEOVER' | 'READBACK_REQUIRED';
+  recoveryMode: 'NONE' | 'RECHECK' | 'REPLAN_WITH_CURRENT_PRESET' | 'MANUAL_TAKEOVER' | 'READBACK_REQUIRED';
   blockedReason?: string;
 } {
   const recoverableState = ['NEEDS_ATTENTION', 'FAILED', 'CANCELLED'].includes(job.state);
@@ -2382,6 +2928,11 @@ function preparationRecoveryCapability(job: OzonPublishJob, hasFrozenPlan: boole
     recoveryMode: hasFrozenPlan ? 'RECHECK' : 'MANUAL_TAKEOVER',
     ...(!hasFrozenPlan ? { blockedReason: 'FANOUT_PLAN_NOT_FROZEN' } : {})
   };
+}
+
+function frozenFanoutRequiresCurrentPresetReplan(plan: JsonRecord): boolean {
+  const items = Array.isArray(plan.items) ? plan.items.map(asJsonRecord) : [];
+  return items.length > 0 && items.some((item) => item.ready !== true);
 }
 
 function mediaReconciliationKey(input: DeliveryNotification): string {

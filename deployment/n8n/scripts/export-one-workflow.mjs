@@ -2,7 +2,7 @@ import { access, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WORKFLOWS } from '../catalog.mjs';
-import { collectWorkflowDependencies, sanitizeWorkflow, sha256, validateWorkflowShape } from '../security.mjs';
+import { applyWorkflowDeploymentContract, collectWorkflowDependencies, sanitizeWorkflow, sha256, validateWorkflowShape } from '../security.mjs';
 import { makeWorkflowPortable } from '../portable-workflow.mjs';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -31,7 +31,7 @@ const response = await fetch(`${apiBaseUrl}/api/v1/workflows/${encodeURIComponen
 if (!response.ok) throw new Error(`读取工作流 ${entry.id} 失败: HTTP ${response.status}`);
 const raw = await response.json();
 const { workflow: sanitized, report } = sanitizeWorkflow(raw, entry);
-const workflow = makeWorkflowPortable(sanitized);
+const workflow = applyWorkflowDeploymentContract(makeWorkflowPortable(sanitized), entry);
 const findings = validateWorkflowShape(workflow, entry.id);
 if (findings.length) throw new Error(`${entry.id} 验证失败: ${findings.join('; ')}`);
 

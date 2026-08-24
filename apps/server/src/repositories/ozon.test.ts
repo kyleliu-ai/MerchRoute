@@ -1,10 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
+import { ozonCategoryTemplateInputSchema, ozonPresetInputSchema } from '@n8n-media-review/shared';
 import {
   assertCompatibleAppendRemoteAbsenceEvidence,
   assertFrozenOzonPublicationRuntimeInput,
   assertOzonOfferContractTransition,
   assertOzonGrossWeightLinkage,
+  assertOzonPresetDefinitionMatchesCategory,
   createOzonTargetedRecoveryLedgerAudit,
   isBoundDurablyAcceptedAutomaticMediaReplay,
   markChangedOzonDescriptionsManual,
@@ -15,6 +17,111 @@ import {
   normalizeOzonRfbsStockMismatchCallback,
   OZON_RFBS_STOCK_READBACK_NORMALIZED_EVENT
 } from '../services/ozon-publishing/rfbs-stock-callback.js';
+import { ozonPreparationGatewayBoundaryLockKey } from '../ozon-preparation-gateway-boundary.js';
+
+const sizedCategorySnapshot = ozonCategoryTemplateInputSchema.parse({
+  categoryKey: 'ozon_15621048_91248',
+  nameRu: 'Кроссовки',
+  nameZh: '运动鞋',
+  descriptionCategoryId: 15621048,
+  typeId: 91248,
+  attributes: [{
+    id: 4298,
+    name: 'Российский размер',
+    nameRu: 'Российский размер',
+    nameZh: '俄罗斯尺码',
+    type: 'String',
+    required: true,
+    dictionaryId: 361,
+    complexId: 0
+  }],
+  dictionarySnapshot: {
+    '4298': [
+      { id: 40, value: '40 中文 / 40 RU', valueRu: '40 RU', valueZh: '40 中文' },
+      { id: 41, value: '41 中文 / 41 RU', valueRu: '41 RU', valueZh: '41 中文' }
+    ]
+  },
+  sizing: { sizeMode: 'sized', sizeAttributeKey: '4298:0' }
+});
+
+const sizedPresetDefinition = ozonPresetInputSchema.parse({
+  name: 'OZON 运动鞋预设',
+  categoryKey: sizedCategorySnapshot.categoryKey,
+  pricingTemplateId: '10000000-0000-4000-8000-000000000001',
+  shippingTemplateId: '10000000-0000-4000-8000-000000000002',
+  shippingServiceCode: 'CEL_RFBS_ECONOMY',
+  dimensions: { length: 30, width: 20, height: 12, dimensionUnit: 'cm', weight: 700, weightUnit: 'g' },
+  sizeAttributeKey: '4298:0',
+  sizes: [
+    { sizeId: '10000000-0000-4000-8000-000000000040', value: 'dict:40', stock: 8 },
+    { sizeId: '10000000-0000-4000-8000-000000000041', value: 'dict:41', stock: 5 }
+  ]
+});
+
+describe('OZON preset published-category sizing guard', () => {
+  it('accepts valid #4298 dictionary-backed size rows', () => {
+    expect(() => assertOzonPresetDefinitionMatchesCategory(sizedPresetDefinition, sizedCategorySnapshot)).not.toThrow();
+  });
+
+  it('rejects a size key for a sizeless published category', () => {
+    expect(() => assertOzonPresetDefinitionMatchesCategory(sizedPresetDefinition, {
+      ...sizedCategorySnapshot,
+      sizing: { sizeMode: 'sizeless' }
+    })).toThrow('无尺码商品发布');
+  });
+
+  it('rejects a preset size key that differs from the published category rule', () => {
+    expect(() => assertOzonPresetDefinitionMatchesCategory({
+      ...sizedPresetDefinition,
+      sizeAttributeKey: '9533:0'
+    }, sizedCategorySnapshot)).toThrow('必须与已发布类目规则一致');
+  });
+
+  it('rejects a dictionary value outside the frozen size snapshot', () => {
+    expect(() => assertOzonPresetDefinitionMatchesCategory({
+      ...sizedPresetDefinition,
+      sizes: [{ ...sizedPresetDefinition.sizes[0]!, value: 'dict:99' }]
+    }, sizedCategorySnapshot)).toThrow('不是当前类目快照中的有效字典值');
+  });
+
+  it('rejects duplicating the selected size in ordinary category attributes', () => {
+    expect(() => assertOzonPresetDefinitionMatchesCategory({
+      ...sizedPresetDefinition,
+      sharedAttributes: [{ attributeId: 4298, complexId: 0, values: [{ dictionaryValueId: 40 }] }]
+    }, sizedCategorySnapshot)).toThrow('不能在普通目录属性中重复提交');
+  });
+});
+
+describe('OZON preset published-category required attribute guard', () => {
+  const category = ozonCategoryTemplateInputSchema.parse({
+    ...sizedCategorySnapshot,
+    attributes: [
+      ...sizedCategorySnapshot.attributes,
+      {
+        id: 31, name: 'Бренд в одежде и обуви', nameRu: 'Бренд в одежде и обуви', nameZh: '服装和鞋类品牌',
+        type: 'String', required: true, dictionaryId: 28732849, complexId: 0
+      },
+      {
+        id: 9163, name: 'Пол', nameRu: 'Пол', nameZh: '性别',
+        type: 'String', required: true, dictionaryId: 320, complexId: 0
+      },
+      {
+        id: 8292, name: 'Объединить на одной карточке', nameRu: 'Объединить на одной карточке', nameZh: '合并至一张卡片',
+        type: 'String', required: true, dictionaryId: 0, complexId: 0
+      }
+    ]
+  });
+
+  it('accepts system-managed #31/#8292 but requires explicit preset gender #9163', () => {
+    const withGender = {
+      ...sizedPresetDefinition,
+      sharedAttributes: [{ attributeId: 9163, complexId: 0, values: [{ dictionaryValueId: 22880 }] }]
+    };
+    expect(() => assertOzonPresetDefinitionMatchesCategory(withGender, category)).not.toThrow();
+    expect(() => assertOzonPresetDefinitionMatchesCategory(sizedPresetDefinition, category))
+      .toThrow('性别 / Пол · #9163');
+  });
+});
 
 describe('OZON PRE_PLAN timestamp identity', () => {
   it('compares the timestamp instant instead of PostgreSQL and JSON fractional formatting', () => {
@@ -2049,3 +2156,123 @@ function testStableJson(value: unknown): string {
   }
   return JSON.stringify(value);
 }
+
+describe('OZON current-preset recovery gateway serialization', () => {
+  it('takes the preparation advisory before evidence count and blocks a ledger committed by the earlier gateway owner', async () => {
+    const preparationJobId = '10000000-0000-4000-8000-000000000201';
+    const publicationId = '20000000-0000-4000-8000-000000000202';
+    const childJobId = '30000000-0000-4000-8000-000000000203';
+    const storeId = '40000000-0000-4000-8000-000000000204';
+    const originalFanoutPlanHash = `sha256:${'a'.repeat(64)}`;
+    const parent = {
+      id: preparationJobId,
+      sku: '0000152',
+      source: 'AUTO',
+      task_kind: 'SHARED_PREPARATION',
+      state: 'NEEDS_ATTENTION',
+      row_version: 7,
+      payload: { multistorePreparation: true, fanoutPlan: { planHash: originalFanoutPlanHash } },
+      product_links: [],
+      directory_stage: 'INBOX'
+    };
+    const publication = {
+      id: publicationId,
+      store_id: storeId,
+      source: 'AUTOMATION',
+      status: 'NEEDS_ATTENTION',
+      row_version: 3,
+      plan_hash: originalFanoutPlanHash,
+      planned_job_id: childJobId,
+      product_ids: [],
+      ozon_skus: [],
+      product_links: [],
+      materialized_product_snapshot: {},
+      error_code: 'CONFIG_INVALID'
+    };
+    const child = {
+      id: childJobId,
+      publication_id: publicationId,
+      task_kind: 'STORE_PUBLICATION',
+      state: 'NEEDS_ATTENTION',
+      row_version: 2,
+      task_id: 'serialized-child-task',
+      payload: { attemptPhase: 'LOCAL_VALIDATION' },
+      product_links: [],
+      directory_stage: 'INBOX',
+      last_error_code: 'CONFIG_INVALID'
+    };
+    const calls: Array<{ sql: string; params?: unknown[] }> = [];
+    const query = vi.fn(async (sqlInput: unknown, params?: unknown[]) => {
+      const sql = String(sqlInput);
+      calls.push({ sql, params });
+      if (sql.includes('pg_advisory_xact_lock')) return { rows: [], rowCount: 1 };
+      if (sql.includes('FROM ozon_publish_jobs WHERE id=$1')) return { rows: [parent], rowCount: 1 };
+      if (sql.includes('FROM ozon_gateway_requests')) return { rows: [{ count: '1' }], rowCount: 1 };
+      if (sql.includes('FROM ozon_store_publications')) return { rows: [publication], rowCount: 1 };
+      if (sql.includes('WHERE publication_id=ANY')) return { rows: [child], rowCount: 1 };
+      if (sql.includes('FROM ozon_media_deliveries')) {
+        return { rows: [{
+          source_stage_id: 'E005', submission_id: 'images', variant_id: 'brown',
+          payload: { autoPublishDecision: 'ACCEPTED' }
+        }], rowCount: 1 };
+      }
+      if (sql.includes('COUNT(*) count')) return { rows: [{ count: '0' }], rowCount: 1 };
+      throw new Error(`unexpected recovery serialization query: ${sql}`);
+    });
+    const repository = new OzonRepository('postgres://not-used');
+    vi.spyOn(repository, 'getJob').mockResolvedValue({ sku: '0000152' } as any);
+    Object.defineProperty(repository, 'transaction', {
+      value: async (operation: (client: unknown) => Promise<unknown>) => operation({ query })
+    });
+    const hash = (character: string) => `sha256:${character.repeat(64)}`;
+
+    await expect(repository.replaceAutomaticPreparationWithCurrentPreset({
+      jobId: preparationJobId,
+      expectedJobRowVersion: 7,
+      requestId: '50000000-0000-5000-8000-000000000205',
+      planHash: hash('b'),
+      expectedEvidenceHash: hash('c'),
+      expectedFanoutPlanHash: originalFanoutPlanHash,
+      expectedListingRowVersion: 8,
+      expectedListingRevision: 4,
+      expectedGeneratedVersionId: '60000000-0000-4000-8000-000000000206',
+      expectedMaterialHash: hash('d'),
+      expectedDataSignature: hash('e'),
+      expectedCurrentPlanHash: hash('f'),
+      expectedPlanContractHash: hash('1'),
+      expectedSettingsRowVersion: 6,
+      expectedRootDirectoryHash: hash('2'),
+      expectedVariantColorAuthorityHash: hash('3'),
+      targetStores: [{
+        id: storeId,
+        rowVersion: 3,
+        configVersion: 4,
+        credentialVersionId: '70000000-0000-4000-8000-000000000207',
+        presetId: '80000000-0000-4000-8000-000000000208',
+        presetRowVersion: 5,
+        presetDefinitionHash: hash('4'),
+        presetSnapshotHash: hash('5'),
+        publicationMode: 'CREATE_ONLY',
+        warehouseId: 'warehouse-1',
+        fulfillmentMode: 'FBS',
+        accountCurrency: 'RUB',
+        expectedOfferIds: ['0000152-01'],
+        categoryKey: 'ozon_shoes',
+        expectedPublishedCategoryVersionId: '90000000-0000-4000-8000-000000000209',
+        expectedProductSnapshotHash: hash('6'),
+        expectedProductContractHash: hash('7'),
+        expectedModeEvidenceHash: hash('8')
+      }]
+    })).rejects.toMatchObject({
+      code: 'OZON_READBACK_REQUIRED',
+      details: { blockers: expect.arrayContaining(['GATEWAY_EVIDENCE_PRESENT']) }
+    });
+
+    const boundaryIndex = calls.findIndex((entry) => entry.params?.[0]
+      === ozonPreparationGatewayBoundaryLockKey(preparationJobId));
+    const gatewayCountIndex = calls.findIndex((entry) => entry.sql.includes('FROM ozon_gateway_requests'));
+    expect(boundaryIndex).toBeGreaterThan(0);
+    expect(gatewayCountIndex).toBeGreaterThan(boundaryIndex);
+    expect(calls.some((entry) => /^\s*(INSERT|UPDATE|DELETE)\b/i.test(entry.sql))).toBe(false);
+  });
+});
