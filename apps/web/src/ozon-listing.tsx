@@ -3078,7 +3078,7 @@ function OzonPurchaseManagedFields({
       description={warning || projection?.source === 'SNAPSHOT'
         ? `最新采购信息暂时读取失败，页面显示草稿快照；保存和生成时仍由服务端重新读取。${warning}`
         : `以下属性不可在 OZON 工作台覆盖，保存和生成时读取采购管理最新采购版本${versionNo ? ` V${versionNo}` : ''}。`}
-      action={<Button type="link" href={`/purchases?query=${encodeURIComponent(sku)}`}>前往采购管理</Button>}
+      action={<Button type="link" href={`/purchases/url-download?query=${encodeURIComponent(sku)}`}>前往产品URL下载</Button>}
     />
     {loading && !projection ? <Skeleton active paragraph={{ rows: 1 }} /> : <div className="ozon-purchase-managed-grid">
       {attributes.map((attribute) => {

@@ -101,7 +101,7 @@ describe.sequential('review and submission integration', () => {
         payload: { ...basePayload, providerUrl: 'https://mobile.yangkeduo.com/goods.html?goods_id=123456789' }
       });
       expect(inferred.statusCode).toBe(200);
-      expect(createPurchase).toHaveBeenCalledWith(expect.objectContaining({ downloadWorkflowCode: 'E006' }));
+      expect(createPurchase).toHaveBeenCalledWith(expect.objectContaining({ downloadWorkflowCode: 'E006', retailPrice: null }));
 
       createPurchase.mockRejectedValueOnce(new AppError(
         'DOWNLOAD_WORKFLOW_UNAVAILABLE',
@@ -126,7 +126,7 @@ describe.sequential('review and submission integration', () => {
         payload: { ...basePayload, providerUrl: 'https://detail.1688.com/offer/987654321.html', downloadWorkflowCode: ' e007 ' }
       });
       expect(normalized.statusCode).toBe(200);
-      expect(updatePurchase).toHaveBeenCalledWith('0000001', expect.objectContaining({ downloadWorkflowCode: 'E007' }));
+      expect(updatePurchase).toHaveBeenCalledWith('0000001', expect.objectContaining({ downloadWorkflowCode: 'E007', retailPrice: null }));
 
       const mismatch = await app.inject({
         method: 'POST',

@@ -50,9 +50,9 @@ test.describe('消息中心统一展示 WB 上品消息', () => {
       return { unreadCount: 2, unresolvedErrorCount: summaryCalls === 1 ? 0 : 1 };
     });
 
-    await page.goto('/purchases');
+    await page.goto('/purchases/url-download');
 
-    await expect(page.getByRole('heading', { name: '采购管理' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '产品URL下载' })).toBeVisible();
     await expect.poll(() => summaryCalls, { timeout: 8000 }).toBeGreaterThanOrEqual(2);
     await expect(page.locator('.ant-notification-notice').filter({ hasText: '任务失败' })).toHaveCount(0);
     await expect(page.getByText('消息中心收到新的失败消息，请打开通知栏查看详情。')).toHaveCount(0);

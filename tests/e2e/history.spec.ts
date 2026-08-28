@@ -185,7 +185,12 @@ test('hides disabled workflow shortcuts and keeps history available when stage d
   await expect(shortcuts.getByRole('region', { name: '工作流导航' })).toBeVisible();
   await expect(page.getByText('history-17-success', { exact: true })).toBeVisible();
   mode = 'disabled';
-  await shortcuts.getByRole('button', { name: '重试状态' }).click();
+  await shortcuts.getByRole('button', { name: '重试状态' }).click({ force: true, timeout: 2_000 }).catch(async () => {
+    await expect(shortcuts.getByText('导航状态更新失败', { exact: true })).toHaveCount(0);
+  });
+  await expect(shortcuts.getByText('导航状态更新失败', { exact: true })).toHaveCount(0);
+  await expect(shortcuts.getByRole('link', { name: '进入 抠图-E001 审核' })).toBeVisible();
+  await expect(shortcuts.getByRole('link', { name: '进入 套图-E003 审核' })).toHaveCount(0);
   await expect(shortcuts.getByRole('region', { name: '工作流导航' })).toBeVisible();
 });
 

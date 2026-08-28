@@ -2,8 +2,8 @@ import { expect, test } from '@playwright/test';
 
 test('采购产品根据 URL 自动切换并锁定工作流，批量下载仍可二次选择', async ({ page }) => {
   test.setTimeout(60_000);
-  await page.goto('/purchases');
-  await expect(page.getByRole('heading', { name: '采购管理' })).toBeVisible();
+  await page.goto('/purchases/url-download');
+  await expect(page.getByRole('heading', { name: '产品URL下载' })).toBeVisible();
 
   await page.getByRole('button', { name: '新建采购产品' }).click();
   const drawer = page.getByRole('dialog', { name: '新建采购产品' });
@@ -76,7 +76,7 @@ test('采购产品根据 URL 自动切换并锁定工作流，批量下载仍可
 });
 
 test('空值、语法错误和不支持的 URL 给出对应提示且不发送保存请求', async ({ page }) => {
-  await page.goto('/purchases');
+  await page.goto('/purchases/url-download');
   let createRequests = 0;
   page.on('request', (request) => {
     const url = new URL(request.url());
@@ -111,7 +111,7 @@ test('空值、语法错误和不支持的 URL 给出对应提示且不发送保
 });
 
 test('编辑历史错配记录时按 URL 纠正，保存后创建新采购版本', async ({ page }) => {
-  await page.goto('/purchases?query=E2E-历史错配工作流');
+  await page.goto('/purchases/url-download?query=E2E-历史错配工作流');
   const row = page.getByRole('row').filter({ hasText: 'E2E-历史错配工作流' });
   await expect(row).toContainText('E006');
   await row.getByRole('button', { name: '编辑' }).click();

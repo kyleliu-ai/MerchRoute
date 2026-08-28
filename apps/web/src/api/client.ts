@@ -318,7 +318,7 @@ export type WbStorePublication = {
 export type WbAppConfig = AppConfig & { version: 'v002' | 'v003'; wbPublishing?: WbPublishingConfig };
 export type ConfigView = { config: WbAppConfig; readiness: { complete: boolean; paths: PathValidation[] }; downloadSync?: DownloadSyncState; wbPublishingReadiness?: WbPublishingReadiness; ozonPublishingReadiness?: OzonReadiness };
 export type ProcurementVersion = {
-  id: string; versionNo: number; downloadWorkflowCode?: string; purchasePrice: string; courierFee: string; currency: string;
+  id: string; versionNo: number; downloadWorkflowCode?: string; purchasePrice: string; retailPrice?: string | null; courierFee: string; currency: string;
   grossWeightGrams?: string | null; lengthCm?: string | null; widthCm?: string | null; heightCm?: string | null;
   netWeightGrams?: string | null; productHeightCm?: string | null; productDepthCm?: string | null; productWidthCm?: string | null;
   transportMode?: string; providerUrl: string; createdAt: string;
@@ -353,10 +353,39 @@ export type PurchaseSummary = {
 };
 export type PurchaseDetail = { sku: string; productName: string; variants: string[]; createdAt: string; updatedAt: string; procurementVersions: ProcurementVersion[]; downloadJobs: PurchaseDownloadJob[] };
 export type PurchaseInput = {
-  productName: string; downloadWorkflowCode?: string; purchasePrice: string; courierFee?: string | null; currency?: string; grossWeightGrams?: string | null;
+  productName: string; downloadWorkflowCode?: string; purchasePrice: string; retailPrice?: string | null; courierFee?: string | null; currency?: string; grossWeightGrams?: string | null;
   lengthCm?: string | null; widthCm?: string | null; heightCm?: string | null; netWeightGrams?: string | null;
   productHeightCm?: string | null; productDepthCm?: string | null; productWidthCm?: string | null; providerUrl: string;
 };
+export type LocalImportDirectory = { name: string; relativePath: string; platform: string; hasChildren: boolean; createdAt: string };
+export type LocalImportPreview = {
+  token: string; previewHash: string; sourceConfigHash: string; targetConfigHash: string; expiresAt: string;
+  sourcePlatform: string; importWorkflowLabel: string;
+  priceConversion: {
+    sourceCurrency: 'CNY' | 'RUB'; exchangeRate?: string; status: 'NOT_REQUIRED' | 'CALCULATED' | 'MANUAL_REQUIRED';
+    issue?: 'MISSING' | 'INVALID'; calculatedPurchasePrice?: string;
+  };
+  fileCount: number; imageCount: number; fields: Omit<PurchaseInput, 'downloadWorkflowCode'>;
+  sources: Array<{
+    platform: string; relativePath: string; normalizedPathKey: string; directoryName: string; isPrimary: boolean;
+    externalSku?: string; informationFileRelativePath?: string; informationFileSha256?: string; providerUrls: string[];
+    files: Array<{ relativePath: string; sha256: string; sizeBytes: number }>;
+  }>;
+};
+export type LocalImportRecord = {
+  id: string; idempotencyKey: string; sku?: string; duplicateSku?: string;
+  status: 'COPYING' | 'IMPORTED' | 'SKIPPED_DUPLICATE' | 'COPY_FAILED_RETRYABLE';
+  sourcePlatform?: string; importWorkflowLabel?: string;
+  previewHash: string; retryCount: number; errorCode?: string; errorMessage?: string; targetFolder?: string;
+  createdAt: string; updatedAt: string; completedAt?: string;
+  sources: Array<{
+    id: string; platform: string; relativePath: string; normalizedPathKey: string; isPrimary: boolean;
+    externalSku?: string; informationFileRelativePath?: string; informationFileSha256?: string;
+    providerUrl?: string; targetSubdirectory: string; copyManifest: Record<string, unknown>;
+  }>;
+  purchase?: { sku: string; productName: string; variants: string[]; createdAt: string; updatedAt: string; procurement: ProcurementVersion };
+};
+export type LocalImportListItem = Omit<LocalImportRecord, 'sources'> & { sourceDirectoryCount: number };
 export type ShippingCarrier = { code: string; displayName: string; active: boolean; createdAt: string; updatedAt: string };
 export type ShippingTemplateVersion = {
   id: string; versionNo: number; status: ShippingVersionStatus; definition: ShippingTemplateDefinitionV1;
@@ -854,7 +883,7 @@ export const api = {
   saveWorkflowGroups: (groups: AppConfig['workflowGroups'], assignments: Record<string, string>) => request<{ config: AppConfig }>('/api/v1/workflow-groups', { method: 'PUT', body: JSON.stringify({ groups, assignments }) }),
   workflowParameters: (stageId: string) => request<WorkflowParameterTemplateView>(`/api/v1/workflow-parameters/${stageId}`),
   saveWorkflowParameters: (stageId: string, parameters: WorkflowParameters, parameterOptions: WorkflowParameterOptions) => request<WorkflowParameterTemplateView>(`/api/v1/workflow-parameters/${stageId}`, { method: 'PUT', body: JSON.stringify({ parameters, parameterOptions }) }),
-  validatePath: (path: string) => request<PathValidation>('/api/v1/config/validate', { method: 'POST', body: JSON.stringify({ path }) }),
+  validatePath: (path: string, localImportRole?: 'source' | 'candidate') => request<PathValidation>('/api/v1/config/validate', { method: 'POST', body: JSON.stringify({ path, localImportRole }) }),
   createDirectory: (path: string) => request<PathValidation>('/api/v1/config/create-directory', { method: 'POST', body: JSON.stringify({ path }) }),
   stages: async () => {
     const response = await request<{ stages: StageViewWire[] }>('/api/v1/stages');
@@ -889,6 +918,13 @@ export const api = {
   clearStaging: (path: string) => request('/api/v1/settings/staging', { method: 'DELETE', body: JSON.stringify({ path }) }),
   thumbnailUrl: (taskId: string, path: string) => `/api/v1/tasks/${taskId}/images/thumbnail?path=${encodeURIComponent(path)}`,
   originalUrl: (taskId: string, path: string) => `/api/v1/tasks/${taskId}/images/original?path=${encodeURIComponent(path)}`,
+  localImportDirectories: (relativePath = '') => request<{ path: string; configHash: string; directories: LocalImportDirectory[] }>(`/api/v1/local-import/directories?path=${encodeURIComponent(relativePath)}`),
+  previewLocalImport: (directories: string[], primaryDirectory: string) => request<LocalImportPreview>('/api/v1/local-import/preview', { method: 'POST', body: JSON.stringify({ directories, primaryDirectory }) }),
+  localImports: (params: URLSearchParams) => request<{ items: LocalImportListItem[]; total: number; page: number; pageSize: number; facets: { platforms: Array<{ value: string; count: number }> } }>(`/api/v1/local-import/imports?${params}`),
+  createLocalImport: (previewToken: string, idempotencyKey: string, fields: LocalImportPreview['fields']) => request<{ import: LocalImportRecord }>('/api/v1/local-import/imports', { method: 'POST', body: JSON.stringify({ previewToken, idempotencyKey, fields }) }),
+  localImport: (id: string) => request<{ import: LocalImportRecord }>(`/api/v1/local-import/imports/${id}`),
+  updateLocalImportPurchase: (id: string, input: Omit<PurchaseInput, 'downloadWorkflowCode'>) => request<{ import: LocalImportRecord }>(`/api/v1/local-import/imports/${id}/purchase`, { method: 'PATCH', body: JSON.stringify(input) }),
+  retryLocalImport: (id: string) => request<{ import: LocalImportRecord }>(`/api/v1/local-import/imports/${id}/retry`, { method: 'POST' }),
   purchases: (params: URLSearchParams) => request<{ items: PurchaseSummary[]; total: number; page: number; pageSize: number }>(`/api/v1/purchases?${params}`),
   purchase: (sku: string) => request<{ purchase: PurchaseDetail }>(`/api/v1/purchases/${sku}`),
   createPurchase: (input: PurchaseInput) => request<{ purchase: PurchaseDetail }>('/api/v1/purchases', { method: 'POST', body: JSON.stringify(input) }),

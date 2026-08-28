@@ -2366,7 +2366,7 @@ test.describe('OZON 独立上品工作区', () => {
     for (const attributeId of [5299, 6573, 5355, 4383]) {
       await expect(drawer.locator('.ant-form-item').filter({ hasText: `#${attributeId}` })).toHaveCount(0);
     }
-    await expect(managed.getByRole('link', { name: '前往采购管理' })).toHaveAttribute('href', '/purchases?query=0000049');
+    await expect(managed.getByRole('link', { name: '前往产品URL下载' })).toHaveAttribute('href', '/purchases/url-download?query=0000049');
 
     await drawer.getByRole('button', { name: '显示所有' }).click();
     const quantityField = drawer.locator('.ant-form-item').filter({ hasText: '统一计量单位中的商品数量' }).first();

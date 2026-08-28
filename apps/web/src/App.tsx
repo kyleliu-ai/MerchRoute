@@ -17,7 +17,7 @@ import type {
 } from '@n8n-media-review/shared';
 import { classifyPurchaseProductUrl, DEPRECATED_OUTPUT_ROOT_STAGE_IDS, E001_VARIANT_MAX_IMAGE_COUNT, WORKFLOW_RUNTIME_PARAMETER_NAMES } from '@n8n-media-review/shared';
 import dayjs, { type Dayjs } from 'dayjs';
-import { api, ApiError, type DownloadWorkflow, type PathValidation, type PendingView, type PurchaseDetail, type PurchaseDownloadBatch, type PurchaseInput, type PurchaseSummary, type SubmissionHistoryQuery, type TaskNotification } from './api/client';
+import { api, ApiError, type DownloadWorkflow, type LocalImportPreview, type LocalImportRecord, type LocalImportListItem, type PathValidation, type PendingView, type PurchaseDetail, type PurchaseDownloadBatch, type PurchaseInput, type PurchaseSummary, type SubmissionHistoryQuery, type TaskNotification } from './api/client';
 import { CopyValueButton } from './copy-value';
 import { ShippingCalculatorPage, ShippingTemplatesPage } from './shipping';
 import { PricingCalculatorPage, PricingQueryPage, PricingTemplatesPage } from './pricing';
@@ -40,9 +40,18 @@ import {
 const { Header, Sider, Content } = Layout;
 const { Title, Text, Paragraph } = Typography;
 
-const navigationGroupKeys = ['review-menu', 'listing-menu', 'pricing-menu', 'shipping-menu'];
+const navigationGroupKeys = ['purchase-menu', 'review-menu', 'listing-menu', 'pricing-menu', 'shipping-menu'];
 const navigationItems: MenuProps['items'] = [
-  { key: '/purchases', icon: <DatabaseOutlined />, label: '采购管理' },
+  {
+    key: 'purchase-menu',
+    icon: <DatabaseOutlined />,
+    label: '采购管理',
+    popupClassName: 'primary-navigation-popup',
+    children: [
+      { key: '/purchases/local-import', label: '本地导入图片' },
+      { key: '/purchases/url-download', label: '产品URL下载' }
+    ]
+  },
   {
     key: 'review-menu',
     icon: <PictureOutlined />,
@@ -90,6 +99,8 @@ const navigationItems: MenuProps['items'] = [
 ];
 
 function resolveMenuKey(pathname: string): string {
+  if (pathname.startsWith('/purchases/local-import')) return '/purchases/local-import';
+  if (pathname.startsWith('/purchases/url-download')) return '/purchases/url-download';
   if (pathname.startsWith('/listing/ozon')) return '/listing/ozon';
   if (pathname.startsWith('/listing/wb')) return '/listing/wb';
   if (pathname.startsWith('/pricing/query')) return '/pricing/query';
@@ -97,7 +108,7 @@ function resolveMenuKey(pathname: string): string {
   if (pathname.startsWith('/pricing')) return '/pricing';
   if (pathname.startsWith('/shipping/templates')) return '/shipping/templates';
   if (pathname.startsWith('/shipping')) return '/shipping';
-  if (pathname.startsWith('/purchases')) return '/purchases';
+  if (pathname.startsWith('/purchases')) return '/purchases/url-download';
   if (pathname.startsWith('/notifications')) return '/notifications';
   if (pathname.startsWith('/pending')) return '/pending';
   if (pathname.startsWith('/history')) return '/history';
@@ -106,6 +117,7 @@ function resolveMenuKey(pathname: string): string {
 }
 
 function resolveMenuGroup(menuKey: string): string | undefined {
+  if (menuKey.startsWith('/purchases/')) return 'purchase-menu';
   if (['/', '/pending', '/history'].includes(menuKey)) return 'review-menu';
   if (menuKey.startsWith('/listing')) return 'listing-menu';
   if (menuKey.startsWith('/pricing')) return 'pricing-menu';
@@ -565,7 +577,9 @@ export function App() {
             <Route path="/review/downloads" element={<DownloadCenter />} />
             <Route path="/review/:stageId" element={<TaskList />} />
             <Route path="/task/:taskId" element={<ReviewDetail />} />
-            <Route path="/purchases" element={<PurchasePage />} />
+            <Route path="/purchases" element={<LegacyPurchaseRedirect />} />
+            <Route path="/purchases/local-import" element={<PurchaseLocalImportPage />} />
+            <Route path="/purchases/url-download" element={<PurchasePage />} />
             <Route path="/notifications" element={<NotificationsPage />} />
             <Route path="/listing/wb" element={<WbListingPage />} />
             <Route path="/listing/ozon" element={<OzonListingPage />} />
@@ -584,6 +598,11 @@ export function App() {
       </Layout>
     </Layout>
   );
+}
+
+function LegacyPurchaseRedirect() {
+  const location = useLocation();
+  return <Navigate to={{ pathname: '/purchases/url-download', search: location.search, hash: location.hash }} replace />;
 }
 
 function DisabledStageNotice({ stageId, description, returnTo = '/', returnLabel = '返回流程工作台' }: { stageId?: string; description?: string; returnTo?: string; returnLabel?: string }) {
@@ -844,7 +863,7 @@ export function moveSelectedRelativePath(paths: readonly string[], path: string,
   return next;
 }
 
-const DEFAULT_TABLE_REVIEW_STAGE_IDS = new Set(['E001', 'E002', 'E003', 'E005', 'E006', 'E007']);
+const DEFAULT_TABLE_REVIEW_STAGE_IDS = new Set(['E000', 'E001', 'E002', 'E003', 'E005', 'E006', 'E007']);
 
 function defaultReviewListView(stageId: string): ReviewListView {
   return DEFAULT_TABLE_REVIEW_STAGE_IDS.has(stageId) ? 'table' : 'cards';
@@ -987,7 +1006,7 @@ function ReviewDetail() {
   }, [ozonColors.data?.items, task?.stageId, task?.productIdentity.variantDetails]);
   const images = useMemo(() => task?.images.filter((item) => item.directory === folder) || [], [task, folder]);
   const isVariantSplit = task?.stageId === 'E001';
-  const isE003OrderedSelection = task?.stageId === 'E003';
+  const isE003OrderedSelection = task?.stageId === 'E003' || task?.stageId === 'E000';
   const isTerminalDelivery = task?.stageId === 'E004' || task?.stageId === 'E005';
   const activeVariantGroup = variantGroups.find((group) => group.groupId === activeVariantGroupId) || variantGroups[0];
   const activeSelectedRelativePaths = isVariantSplit ? activeVariantGroup?.selectedRelativePaths || [] : selectedRelativePaths;
@@ -1407,8 +1426,10 @@ function SettingsPage() {
   useEffect(() => { if (query.data?.config) setDraft(structuredClone(query.data.config)); }, [query.data?.config]);
   useEffect(() => {
     if (!draft || initialSelectionDone.current) return;
-    const downloadRequested = new URLSearchParams(location.search).get('section') === 'download';
-    setSelectedStageId((downloadRequested ? draft.stages.find((stage) => stage.download)?.id : undefined) || draft.stages[0]?.id);
+    const params = new URLSearchParams(location.search);
+    const requestedStageId = params.get('stage');
+    const downloadRequested = params.get('section') === 'download';
+    setSelectedStageId(draft.stages.find((stage) => stage.id === requestedStageId)?.id || (downloadRequested ? draft.stages.find((stage) => stage.download)?.id : undefined) || draft.stages[0]?.id);
     initialSelectionDone.current = true;
   }, [draft, location.search]);
   useEffect(() => { if (draft && selectedStageId && !draft.stages.some((stage) => stage.id === selectedStageId)) setSelectedStageId(draft.stages[0]?.id); }, [draft, selectedStageId]);
@@ -1519,7 +1540,7 @@ function SettingsPage() {
 
 function StageSettings({ stage, allStages, groups, pathMap, update, activeSection, onSectionChange }: { stage: StageConfig; allStages: StageConfig[]; groups: WorkflowGroup[]; pathMap: Map<string, any>; update: (patch: Partial<StageConfig>) => void; activeSection: StageSettingsSection; onSectionChange: (section: StageSettingsSection) => void }) {
   const isWbMediaTerminal = isWbMediaTerminalStage(stage);
-  const hidesDeprecatedOutputRoot = DEPRECATED_OUTPUT_ROOT_STAGE_IDS.includes(stage.id);
+  const hidesDeprecatedOutputRoot = stage.id === 'E000' || DEPRECATED_OUTPUT_ROOT_STAGE_IDS.includes(stage.id);
   const pathField = (label: string, key: 'candidateRoot' | 'approvedArchiveRoot' | 'inputQueueRoot' | 'outputRoot' | 'ozonOutputRoot') => {
     const value = stage[key] || '';
     if (isWbMediaTerminal && key === 'outputRoot') {
@@ -1532,7 +1553,8 @@ function StageSettings({ stage, allStages, groups, pathMap, update, activeSectio
       return <Form.Item validateStatus={error ? 'error' : undefined} help={error || (example ? `示例 SKU 解析结果：${example}` : undefined)} label="OZON 共享媒体输出目录模板"><Input aria-label={`${stage.id} OZON 共享媒体输出目录模板`} status={error ? 'error' : undefined} value={value} placeholder="G:\\01_MerchRoute\\OZON-Auto-Publish\\inbox\\<SKU>\\variants" onChange={(event) => update({ ozonOutputRoot: event.target.value })} suffix={<Tag color="blue">E004 / E005 同步</Tag>} /></Form.Item>;
     }
     const state = pathMap.get(value);
-    return <Form.Item label={<Space>{label}{state && <Badge status={state.exists && state.readable ? (state.writable ? 'success' : 'warning') : 'error'} text={state.exists ? `${state.readable ? '可读' : '不可读'} / ${state.writable ? '可写' : '只读'}` : '不存在'} />}</Space>}><Input value={value} onChange={(event) => update({ [key]: event.target.value })} suffix={<Button type="text" size="small" disabled={!value} onClick={async () => { const result = await api.validatePath(value); message[result.exists ? 'success' : 'error'](result.exists ? '路径验证通过' : result.error || '路径不存在'); }}>验证</Button>} /></Form.Item>;
+    const localImportRole = stage.id === 'E000' && key === 'inputQueueRoot' ? 'source' : stage.id === 'E000' && key === 'candidateRoot' ? 'candidate' : undefined;
+    return <Form.Item label={<Space>{label}{state && <Badge status={state.exists && state.readable ? (state.writable ? 'success' : 'warning') : 'error'} text={state.exists ? `${state.readable ? '可读' : '不可读'} / ${state.writable ? '可写' : '只读'}` : '不存在'} />}</Space>} help={localImportRole === 'source' ? '必须是当前系统的真实绝对目录；只要求可读，不能是卷根、符号链接或 reparse point。' : undefined}><Input value={value} onChange={(event) => update({ [key]: event.target.value })} suffix={<Button type="text" size="small" disabled={!value} onClick={async () => { try { const result = await api.validatePath(value, localImportRole); message.success(localImportRole === 'source' && !result.writable ? '只读来源目录验证通过' : '路径验证通过'); } catch (error) { message.error(error instanceof ApiError ? error.userMessage : '路径验证失败'); } }}>验证</Button>} /></Form.Item>;
   };
   const setTargets = (targets: StageConfig['targets']) => update({ targets });
   const generalSettings = <div className="settings-subpage"><Card className="settings-stage" title="工作流身份与审核投递" extra={<Space>启用 <Switch aria-label={`${stage.id} 启用流程`} checked={stage.enabled} onChange={(value) => update({ enabled: value })} /></Space>}>
@@ -1541,7 +1563,7 @@ function StageSettings({ stage, allStages, groups, pathMap, update, activeSectio
       <Form.Item label="n8n 工作流名称"><Input aria-label="n8n 工作流名称" value={stage.workflowName} onChange={(event) => update({ workflowName: event.target.value })} /></Form.Item>
       <Form.Item label="功能说明"><Input aria-label="功能说明" value={stage.description} onChange={(event) => update({ description: event.target.value })} /></Form.Item>
       <Row gutter={14}><Col xs={24} md={8}><Form.Item label="人工审核"><Switch checked={stage.reviewEnabled} onChange={(reviewEnabled) => update({ reviewEnabled })} checkedChildren="需要审核" unCheckedChildren="终端流程" /></Form.Item></Col><Col xs={24} md={8}><Form.Item label="媒体类型"><Checkbox.Group value={stage.mediaTypes} options={[{ value: 'image', label: '图片' }, { value: 'video', label: '视频' }]} onChange={(values) => values.length && update({ mediaTypes: values as StageConfig['mediaTypes'] })} /></Form.Item></Col><Col xs={24} md={8}><Form.Item label="下载调用"><Switch checked={Boolean(stage.download)} onChange={(checked) => update({ download: checked ? { webhookUrl: 'http://localhost:5678/webhook/', timeoutMs: 900000, isDefault: !allStages.some((item) => item.enabled && item.download?.isDefault), recoveryMode: 'MANUAL' } : undefined })} checkedChildren="已配置" unCheckedChildren="未配置" /></Form.Item></Col></Row>
-      {pathField('输入监听目录', 'inputQueueRoot')}
+      {pathField(stage.id === 'E000' ? '本地导入来源根目录' : '输入监听目录', 'inputQueueRoot')}
       {pathField(stage.download ? '下载与候选图片目录' : '候选图片目录', 'candidateRoot')}
       {pathField('已审核归档目录', 'approvedArchiveRoot')}
       {!hidesDeprecatedOutputRoot && pathField(isWbMediaTerminal ? 'WB 共享媒体输出目录模板' : '输出目录', 'outputRoot')}
@@ -1800,7 +1822,7 @@ function notificationEventLabel(item: TaskNotification): { color: string; label:
 
 function notificationTarget(item: TaskNotification): string {
   if (isWbNotification(item)) return '/listing/wb';
-  return item.sku ? `/purchases?query=${encodeURIComponent(item.sku)}` : '/notifications';
+  return item.sku ? `/purchases/url-download?query=${encodeURIComponent(item.sku)}` : '/notifications';
 }
 
 function NotificationHub() {
@@ -1895,6 +1917,310 @@ function readPurchaseBatchDraft(): PurchaseBatchDraftItem[] {
   } catch { return []; }
 }
 
+const localImportStatusMeta: Record<LocalImportRecord['status'], { label: string; color: string }> = {
+  COPYING: { label: '复制中', color: 'processing' },
+  IMPORTED: { label: '已导入', color: 'green' },
+  SKIPPED_DUPLICATE: { label: 'URL 重复已跳过', color: 'gold' },
+  COPY_FAILED_RETRYABLE: { label: '复制失败可重试', color: 'red' }
+};
+
+const localImportDirectoryDateFormatter = new Intl.DateTimeFormat('zh-CN', {
+  year: 'numeric', month: 'long', day: 'numeric'
+});
+
+function formatLocalImportDirectoryDate(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '—' : localImportDirectoryDateFormatter.format(date);
+}
+
+function PurchaseLocalImportPage() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const view = new URLSearchParams(location.search).get('view') === 'history' ? 'history' : 'import';
+  const setView = (nextView: string, sku?: string) => {
+    const params = new URLSearchParams(location.search);
+    params.set('view', nextView);
+    if (nextView === 'history') {
+      if (sku) params.set('query', sku);
+      params.set('page', '1');
+    } else {
+      for (const key of ['query', 'platform', 'status', 'datePreset', 'createdFrom', 'createdTo', 'page']) params.delete(key);
+    }
+    navigate({ pathname: location.pathname, search: `?${params.toString()}` });
+  };
+  return <div className="page-stack purchase-local-import-page">
+    <div className="page-title local-import-title">
+      <div className="page-title-copy"><Title level={1}>本地导入图片</Title><Paragraph>登记本地产品媒体与采购信息，查询导入结果并送入 E000 审核。</Paragraph></div>
+      <div className="local-import-contract"><span>来源目录</span><ArrowRightOutlined /><strong>内部 SKU</strong><ArrowRightOutlined /><span>E000 审核</span></div>
+    </div>
+    <Tabs className="local-import-view-tabs" activeKey={view} onChange={setView} items={[
+      { key: 'import', label: '导入产品', children: <LocalImportCreateView onViewImported={(sku) => setView('history', sku)} /> },
+      { key: 'history', label: '已导入产品清单', children: <LocalImportHistoryView active={view === 'history'} /> }
+    ]} />
+  </div>;
+}
+
+function LocalImportCreateView({ onViewImported }: { onViewImported: (sku: string) => void }) {
+  const navigate = useNavigate();
+  const client = useQueryClient();
+  const [currentPath, setCurrentPath] = useState('');
+  const [selected, setSelected] = useState<string[]>([]);
+  const [primary, setPrimary] = useState('');
+  const [preview, setPreview] = useState<LocalImportPreview>();
+  const [fields, setFields] = useState<LocalImportPreview['fields']>();
+  const [result, setResult] = useState<LocalImportRecord>();
+  const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
+  const directories = useQuery({ queryKey: ['local-import-directories', currentPath], queryFn: () => api.localImportDirectories(currentPath), retry: false });
+  const previewMutation = useMutation({
+    mutationFn: () => api.previewLocalImport(selected, primary),
+    onSuccess: (value) => { setPreview(value); setFields(value.fields); setResult(undefined); },
+    onError: (error: Error) => message.error(error instanceof ApiError ? error.userMessage : error.message)
+  });
+  const importMutation = useMutation({
+    mutationFn: () => api.createLocalImport(preview!.token, idempotencyKey, fields!),
+    onSuccess: ({ import: value }) => {
+      setResult(value);
+      void client.invalidateQueries({ queryKey: ['local-import-history'] });
+      if (value.status === 'IMPORTED') message.success(`内部 SKU ${value.sku} 已导入 E000 候选目录`);
+      else if (value.status === 'SKIPPED_DUPLICATE') message.warning(`商品 URL 已归属 SKU ${value.duplicateSku}，整次导入已跳过`);
+      else if (value.status === 'COPY_FAILED_RETRYABLE') message.error('采购信息已登记，但媒体复制失败，可安全重试');
+    },
+    onError: (error: Error) => message.error(error instanceof ApiError ? error.userMessage : error.message)
+  });
+  const retryMutation = useMutation({
+    mutationFn: () => api.retryLocalImport(result!.id),
+    onSuccess: ({ import: value }) => { setResult(value); void client.invalidateQueries({ queryKey: ['local-import-history'] }); if (value.status === 'IMPORTED') message.success(`SKU ${value.sku} 的媒体复制已恢复`); },
+    onError: (error: Error) => message.error(error instanceof ApiError ? error.userMessage : error.message)
+  });
+  const resetPreview = () => { setPreview(undefined); setFields(undefined); setResult(undefined); setIdempotencyKey(crypto.randomUUID()); };
+  const toggleDirectory = (relativePath: string, checked: boolean) => {
+    const platform = relativePath.split('/')[0]!.toLocaleLowerCase('en-US');
+    if (checked && selected.some((item) => item.split('/')[0]!.toLocaleLowerCase('en-US') !== platform)) return void message.warning('一次导入只能选择同一平台的媒体目录');
+    const next = checked ? [...selected, relativePath] : selected.filter((item) => item !== relativePath);
+    setSelected(next);
+    setPrimary(next.includes(primary) ? primary : next[0] || '');
+    resetPreview();
+  };
+  const pathParts = currentPath ? currentPath.split('/') : [];
+  const isPlatformDirectory = pathParts.length === 1;
+  const error = directories.error instanceof ApiError ? directories.error : undefined;
+  return <div className="page-stack local-import-create-view">
+    {error ? <Alert className="local-import-blocker" type="error" showIcon message="本地导入当前不可用" description={error.userMessage} action={<Button onClick={() => navigate('/settings/workflows?stage=E000')}>前往系统设置</Button>} /> : <>
+      <div className="local-import-steps" aria-label="本地导入步骤"><span className={!preview ? 'active' : 'done'}>01 选择媒体目录</span><span className={preview && !result ? 'active' : preview ? 'done' : ''}>02 预览编辑</span><span className={result ? 'active' : ''}>03 确认导入</span></div>
+      <Card className="local-import-card" title="选择媒体目录" extra={<Tag color="cyan">最多 20 个 · 同一平台</Tag>}>
+        <div className="local-import-browser-layout">
+          <div className="local-import-browser">
+            <Breadcrumb items={[{ title: <button className="path-crumb" onClick={() => setCurrentPath('')}>来源根目录</button> }, ...pathParts.map((part, index) => ({ title: <button className="path-crumb" onClick={() => setCurrentPath(pathParts.slice(0, index + 1).join('/'))}>{part}</button> }))]} />
+            <div className={`local-directory-list${isPlatformDirectory ? ' is-product-media-list' : ''}`}>
+              {isPlatformDirectory && !directories.isLoading && Boolean(directories.data?.directories.length) && <div className="local-directory-header" aria-hidden="true">
+                <span /><span>变体目录</span><span className="creation-date-heading">创建日期 <ArrowDownOutlined /></span><span>平台来源</span><span>操作</span>
+              </div>}
+              {directories.isLoading ? <Skeleton active paragraph={{ rows: 3 }} /> : directories.data?.directories.length ? directories.data.directories.map((directory) => <div className={`local-directory-row${isPlatformDirectory ? ' is-product-media-row' : ''}`} key={directory.relativePath}>
+                <Checkbox checked={selected.includes(directory.relativePath)} onChange={(event) => toggleDirectory(directory.relativePath, event.target.checked)} aria-label={`选择 ${directory.relativePath}`} />
+                <div className="local-directory-identity"><FolderOpenOutlined /><button className="directory-name" onClick={() => directory.hasChildren ? setCurrentPath(directory.relativePath) : undefined}>{directory.name}</button></div>
+                {isPlatformDirectory && <time className="local-directory-created-at" dateTime={directory.createdAt} data-label="创建日期">{formatLocalImportDirectoryDate(directory.createdAt)}</time>}
+                <div className="local-directory-platform" data-label="平台来源"><Tag>{directory.platform}</Tag></div>
+                <div className="local-directory-action" data-label="操作">{directory.hasChildren && <Button type="link" size="small" onClick={() => setCurrentPath(directory.relativePath)}>打开</Button>}</div>
+              </div>) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前目录没有可选子目录" />}
+            </div>
+          </div>
+          <aside className="local-import-selection-panel">
+            <div><Text strong>已选 {selected.length} 个目录</Text><Paragraph type="secondary">同一产品的多个颜色媒体目录可一起导入。</Paragraph></div>
+            <div className="selection-tags">{selected.length ? selected.map((item) => <Tag closable key={item} onClose={(event) => { event.preventDefault(); toggleDirectory(item, false); }}>{item}</Tag>) : <Text type="secondary">尚未选择媒体目录</Text>}</div>
+            <div className="primary-directory"><Text>采购信息主目录</Text><Select aria-label="采购信息主目录" value={primary || undefined} placeholder="请选择主目录" options={selected.map((value) => ({ value, label: value }))} onChange={(value) => { setPrimary(value); resetPreview(); }} /></div>
+            <Button block type="primary" disabled={!selected.length || !primary} loading={previewMutation.isPending} onClick={() => previewMutation.mutate()}>预览并编辑</Button>
+          </aside>
+        </div>
+      </Card>
+      {preview && fields && <Card className="local-import-card" title="预览采购与媒体信息" extra={<Space><Tag color="blue">{preview.sources.length} 个目录</Tag><Tag color="geekblue">{preview.imageCount} 张图片</Tag><Tag>{preview.fileCount} 个业务文件</Tag></Space>}>
+        <div className="local-source-summary">{preview.sources.map((source) => <div key={source.relativePath}><strong>{source.directoryName}</strong><span>{source.platform}</span>{source.isPrimary && <Tag color="cyan">主目录</Tag>}<small>{source.informationFileRelativePath || '无产品信息文件'} · {source.files.length} 个文件</small></div>)}</div>
+        <div className="local-import-workflow-label"><Text>本次下载工作流</Text><Tooltip title="仅表示本地导入来源，不会启动 n8n"><Tag color="cyan">{preview.importWorkflowLabel}</Tag></Tooltip><Text type="secondary">来源标签 · 不创建下载任务</Text></div>
+        <Form layout="vertical" className="local-import-form">
+          <Form.Item label="产品名称" required><Input aria-label="产品名称" value={fields.productName} onChange={(event) => setFields({ ...fields, productName: event.target.value })} /></Form.Item>
+          <div className={`local-import-price-flow is-${preview.priceConversion.status.toLowerCase()}`}>
+            <Form.Item label="零售价格(RUB)" extra={preview.priceConversion.sourceCurrency === 'RUB' ? '来自产品信息文件，首次导入不可修改' : 'CNY 来源没有 RUB 零售价'}><Input aria-label="零售价格(RUB)" value={fields.retailPrice ?? ''} placeholder="—" addonAfter="RUB" readOnly /></Form.Item>
+            <Form.Item label="汇率" extra="产品信息文件中的 Exchange"><Input aria-label="汇率" value={preview.priceConversion.exchangeRate ? `1 CNY = ${preview.priceConversion.exchangeRate} RUB` : '不适用或未提供'} readOnly /></Form.Item>
+            <Form.Item label="国内采购价(CNY)" required extra={preview.priceConversion.status === 'CALCULATED' ? `自动计算值 ${preview.priceConversion.calculatedPurchasePrice}，可手动覆盖` : preview.priceConversion.status === 'NOT_REQUIRED' ? '直接使用来源 CNY 价格' : '请手动填写后再确认导入'}><Input aria-label="国内采购价(CNY)" value={fields.purchasePrice} addonAfter="CNY" status={isValidPurchasePrice(fields.purchasePrice) ? undefined : 'error'} onChange={(event) => setFields({ ...fields, purchasePrice: event.target.value })} /></Form.Item>
+          </div>
+          {preview.priceConversion.status === 'MANUAL_REQUIRED' && <Alert className="local-import-exchange-alert" type="warning" showIcon message={preview.priceConversion.issue === 'INVALID' ? 'Exchange 无效，无法自动换算' : '缺少 Exchange，无法自动换算'} description="系统不会使用默认汇率。请手动填写国内采购价(CNY)，有效后才能确认导入。" />}
+          <Form.Item label="商品 URL" required><Input aria-label="商品 URL" value={fields.providerUrl} onChange={(event) => setFields({ ...fields, providerUrl: event.target.value })} /></Form.Item>
+          <Row gutter={12}>{([['courierFee','快递费'],['productHeightCm','产品高(cm)'],['productDepthCm','产品深(cm)'],['productWidthCm','产品宽(cm)'],['netWeightGrams','净重(g)'],['grossWeightGrams','毛重(g)'],['lengthCm','包装长(cm)'],['widthCm','包装宽(cm)'],['heightCm','包装高(cm)']] as const).map(([key, label]) => <Col xs={12} md={8} lg={4} key={key}><Form.Item label={label}><Input value={fields[key] ?? ''} onChange={(event) => setFields({ ...fields, [key]: event.target.value })} /></Form.Item></Col>)}</Row>
+        </Form>
+        <Alert type="info" showIcon message="外部 SKU 仅留作来源记录" description="系统将在确认时自动生成新的 7 位内部 SKU；本期不会创建下载任务，也不会关联 WB/OZON 上品流程。" />
+        <Flex justify="end" gap={10} className="local-import-confirm"><Button onClick={() => { setPreview(undefined); setFields(undefined); }}>返回选择</Button><Button type="primary" loading={importMutation.isPending} disabled={Boolean(result) || !isValidPurchasePrice(fields.purchasePrice)} onClick={() => importMutation.mutate()}>确认导入</Button></Flex>
+      </Card>}
+      {result && <Result className="local-import-result" status={result.status === 'IMPORTED' ? 'success' : result.status === 'SKIPPED_DUPLICATE' ? 'warning' : 'error'} title={localImportStatusMeta[result.status].label} subTitle={result.status === 'SKIPPED_DUPLICATE' ? `该商品 URL 已归属内部 SKU ${result.duplicateSku}，未创建新记录或复制媒体。` : result.status === 'IMPORTED' ? `内部 SKU ${result.sku} 已进入 E000 审核候选目录。` : result.errorMessage} extra={<Space wrap>{result.status === 'COPY_FAILED_RETRYABLE' && <Button type="primary" loading={retryMutation.isPending} onClick={() => retryMutation.mutate()}>重试媒体复制</Button>}{result.sku && <Button onClick={() => onViewImported(result.sku!)}>查看该产品</Button>}{result.status === 'IMPORTED' && <Button type="primary" onClick={() => navigate('/review/E000')}>前往 E000 审核</Button>}<Button onClick={() => { setSelected([]); setPrimary(''); resetPreview(); }}>开始下一次导入</Button></Space>} />}
+    </>}
+  </div>;
+}
+
+function LocalImportHistoryView({ active }: { active: boolean }) {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const client = useQueryClient();
+  const params = useMemo(() => new URLSearchParams(location.search), [location.search]);
+  const page = Math.max(1, Number(params.get('page') || 1));
+  const search = params.get('query') || '';
+  const platform = params.get('platform') || undefined;
+  const status = params.get('status') || undefined;
+  const datePreset = (params.get('datePreset') || 'ALL') as PurchaseDatePreset;
+  const createdFrom = params.get('createdFrom') || '';
+  const createdTo = params.get('createdTo') || '';
+  const [detailId, setDetailId] = useState<string>();
+  const [editor, setEditor] = useState<LocalImportListItem>();
+  const updateParams = (patch: Record<string, string | undefined>, resetPage = true) => {
+    const next = new URLSearchParams(location.search);
+    next.set('view', 'history');
+    for (const [key, value] of Object.entries(patch)) {
+      if (value) next.set(key, value);
+      else next.delete(key);
+    }
+    if (resetPage) next.set('page', '1');
+    navigate({ pathname: location.pathname, search: `?${next.toString()}` }, { replace: true });
+  };
+  const queryParams = useMemo(() => {
+    const value = new URLSearchParams({ page: String(page), pageSize: '50' });
+    if (search.trim()) value.set('query', search.trim());
+    if (platform) value.set('platform', platform);
+    if (status) value.set('status', status);
+    if (createdFrom) value.set('createdFrom', createdFrom);
+    if (createdTo) value.set('createdTo', createdTo);
+    return value;
+  }, [createdFrom, createdTo, page, platform, search, status]);
+  const imports = useQuery({
+    queryKey: ['local-import-history', queryParams.toString()], queryFn: () => api.localImports(queryParams), enabled: active, retry: false,
+    refetchInterval: (query) => query.state.data?.items.some((item) => item.status === 'COPYING') ? 3000 : false
+  });
+  const detail = useQuery({ queryKey: ['local-import-detail', detailId], queryFn: () => api.localImport(detailId!), enabled: Boolean(detailId), retry: false });
+  const retry = useMutation({
+    mutationFn: (id: string) => api.retryLocalImport(id),
+    onSuccess: ({ import: value }) => { message.success(value.status === 'IMPORTED' ? `SKU ${value.sku} 的媒体复制已恢复` : '已提交重试'); void client.invalidateQueries({ queryKey: ['local-import-history'] }); void client.invalidateQueries({ queryKey: ['local-import-detail', value.id] }); },
+    onError: (error: Error) => message.error(error instanceof ApiError ? error.userMessage : error.message)
+  });
+  const setDatePreset = (value: PurchaseDatePreset) => {
+    const today = dayjs().startOf('day');
+    if (value === 'ALL') return updateParams({ datePreset: undefined, createdFrom: undefined, createdTo: undefined });
+    if (value === 'CUSTOM') return updateParams({ datePreset: value, createdFrom: undefined, createdTo: undefined });
+    const range = value === 'TODAY' ? [today, today.add(1, 'day')] : value === 'YESTERDAY' ? [today.subtract(1, 'day'), today] : [today.subtract(6, 'day'), today.add(1, 'day')];
+    updateParams({ datePreset: value, createdFrom: range[0]!.toISOString(), createdTo: range[1]!.toISOString() });
+  };
+  const customRange: [Dayjs, Dayjs] | null = createdFrom && createdTo ? [dayjs(createdFrom), dayjs(createdTo).subtract(1, 'day')] : null;
+  const reset = () => updateParams({ query: undefined, platform: undefined, status: undefined, datePreset: undefined, createdFrom: undefined, createdTo: undefined });
+  if (imports.isError) return <Result status="warning" title="已导入产品清单暂不可用" subTitle={imports.error instanceof ApiError ? imports.error.userMessage : imports.error.message} extra={<Button type="primary" onClick={() => void imports.refetch()}>重新检测</Button>} />;
+  const data = imports.data;
+  return <div className="page-stack local-import-history-view">
+    <Card className="filter-bar"><Flex wrap gap={10} align="center">
+      <Input className="search-input" prefix={<SearchOutlined />} value={search} placeholder="搜索 SKU 或产品名" onChange={(event) => updateParams({ query: event.target.value || undefined })} allowClear />
+      <Select value={datePreset} aria-label="导入日期" onChange={setDatePreset} style={{ width: 140 }} options={[{ value: 'ALL', label: '全部日期' }, { value: 'TODAY', label: '当天' }, { value: 'YESTERDAY', label: '昨天' }, { value: 'LAST_7_DAYS', label: '近 7 天' }, { value: 'CUSTOM', label: '时间段查询' }]} />
+      {datePreset === 'CUSTOM' && <DatePicker.RangePicker value={customRange} onChange={(value) => updateParams({ createdFrom: value?.[0]?.startOf('day').toISOString(), createdTo: value?.[1]?.add(1, 'day').startOf('day').toISOString() })} allowClear placeholder={['开始日期', '结束日期']} />}
+      <Select allowClear aria-label="来源平台" placeholder="来源平台" value={platform} onChange={(value) => updateParams({ platform: value })} style={{ width: 150 }} options={(data?.facets.platforms || []).map((item) => ({ value: item.value, label: `${item.value} · ${item.count}` }))} />
+      <Select allowClear aria-label="导入状态" placeholder="导入状态" value={status} onChange={(value) => updateParams({ status: value })} style={{ width: 170 }} options={Object.entries(localImportStatusMeta).map(([value, item]) => ({ value, label: item.label }))} />
+      <Button onClick={reset}>重置</Button><Text type="secondary">共 {data?.total || 0} 条导入记录</Text>
+    </Flex></Card>
+    <Card className="purchase-table-card local-import-history-card" bodyStyle={{ padding: 0 }}>
+      <Table<LocalImportListItem> rowKey="id" loading={imports.isLoading} pagination={false} scroll={{ x: 1420 }} dataSource={data?.items || []} columns={[
+        { title: 'SKU', width: 125, render: (_: unknown, item) => { const sku = item.sku || item.duplicateSku; return sku ? <span className="copy-value-inline"><span className="mono-badge">{sku}</span><CopyValueButton label="SKU" value={sku} /></span> : <Text type="secondary">未创建</Text>; } },
+        { title: '产品与采购摘要', width: 350, render: (_: unknown, item) => item.purchase ? <div className="purchase-product-cell"><strong>{item.purchase.productName}</strong><LocalImportPriceSummary procurement={item.purchase.procurement} />{formatProductMeasurements(item.purchase.procurement) && <small>产品：{formatProductMeasurements(item.purchase.procurement)}</small>}<small>包装：{formatPackagingMeasurements(item.purchase.procurement)}</small></div> : <Text type="secondary">未创建采购产品</Text> },
+        { title: '本次下载工作流', width: 190, render: (_: unknown, item) => <Tooltip title="仅表示本地导入来源，不会启动 n8n"><Tag color="cyan">{item.importWorkflowLabel || '来源平台未知'}</Tag></Tooltip> },
+        { title: '来源目录', width: 170, render: (_: unknown, item) => <div className="local-import-source-cell"><Tag>{item.sourcePlatform || '未知平台'}</Tag><Text type="secondary">{item.sourceDirectoryCount} 个目录</Text></div> },
+        { title: '商品 URL', width: 205, render: (_: unknown, item) => item.purchase?.procurement.providerUrl ? <a className="provider-url" href={item.purchase.procurement.providerUrl} target="_blank" rel="noreferrer">{urlLabel(item.purchase.procurement.providerUrl)}</a> : <Text type="secondary">—</Text> },
+        { title: '导入状态', width: 165, render: (_: unknown, item) => <div className="local-import-status-cell"><Tag color={localImportStatusMeta[item.status].color}>{localImportStatusMeta[item.status].label}</Tag>{item.retryCount > 0 && <Text type="secondary">重试 {item.retryCount} 次</Text>}</div> },
+        { title: '导入日期', width: 165, render: (_: unknown, item) => <Text>{dayjs(item.createdAt).format('YYYY-MM-DD HH:mm')}</Text> },
+        { title: '操作', width: 250, fixed: 'right', render: (_: unknown, item) => <Space wrap size={4}><Button size="small" icon={<EyeOutlined />} onClick={() => setDetailId(item.id)}>详情</Button>{item.sku && <Button size="small" icon={<EditOutlined />} onClick={() => setEditor(item)}>编辑</Button>}{item.status === 'COPY_FAILED_RETRYABLE' && <Button size="small" type="primary" loading={retry.isPending && retry.variables === item.id} onClick={() => retry.mutate(item.id)}>重试</Button>}{item.status === 'IMPORTED' && <Link to="/review/E000"><Button size="small">E000 审核</Button></Link>}{item.status === 'SKIPPED_DUPLICATE' && item.duplicateSku && <Link to={`/purchases/url-download?query=${encodeURIComponent(item.duplicateSku)}`}><Button size="small">查看原 SKU</Button></Link>}</Space> }
+      ]} />
+      <div className="purchase-pagination"><Pagination current={page} pageSize={50} total={data?.total || 0} showSizeChanger={false} onChange={(value) => updateParams({ page: String(value) }, false)} /></div>
+    </Card>
+    <Drawer open={Boolean(detailId)} width={760} onClose={() => setDetailId(undefined)} title={detail.data?.import ? `本地导入详情 · ${detail.data.import.sku || detail.data.import.duplicateSku || detail.data.import.id}` : '本地导入详情'}>{detail.isLoading ? <Skeleton active /> : detail.data?.import && <LocalImportDetailView record={detail.data.import} onRetry={(id) => retry.mutate(id)} onEdit={() => { const item = data?.items.find((candidate) => candidate.id === detail.data?.import.id); if (item?.sku) setEditor(item); }} />}</Drawer>
+    <LocalImportPurchaseEditor record={editor} onClose={() => setEditor(undefined)} onSaved={(value) => { setEditor(undefined); void client.invalidateQueries({ queryKey: ['local-import-history'] }); void client.invalidateQueries({ queryKey: ['local-import-detail', value.id] }); }} />
+  </div>;
+}
+
+function isLegacyLocalImportProcurement(procurement: PurchaseSummary['procurement']) {
+  return procurement.currency.trim().toUpperCase() !== 'CNY';
+}
+
+function LocalImportPriceSummary({ procurement }: { procurement: PurchaseSummary['procurement'] }) {
+  const legacy = isLegacyLocalImportProcurement(procurement);
+  return <>
+    <span>{legacy ? '历史采购价' : '国内采购价'} {formatPurchaseMoney(procurement.purchasePrice, procurement.currency)} · 快递 {formatPurchaseMoney(procurement.courierFee, procurement.currency)}</span>
+    {procurement.retailPrice != null && procurement.retailPrice !== '' && <small className="local-import-retail-price">零售价格 RUB {Number(procurement.retailPrice).toFixed(2)}</small>}
+    {legacy && <small className="local-import-legacy-price">旧版本保留原币种；编辑时需登记 CNY 国内采购价</small>}
+  </>;
+}
+
+function LocalImportDetailView({ record, onRetry, onEdit }: { record: LocalImportRecord; onRetry: (id: string) => void; onEdit: () => void }) {
+  const purchase = record.purchase;
+  const legacy = Boolean(purchase && isLegacyLocalImportProcurement(purchase.procurement));
+  return <div className="page-stack local-import-detail">
+    {legacy && <Alert type="warning" showIcon message="这是旧版 RUB 采购数据" description="历史采购版本不会被自动改写。编辑时系统会把旧采购价带入零售价格，并要求填写新的国内采购价(CNY)。" />}
+    <Descriptions title="当前采购信息" bordered size="small" column={2} items={purchase ? [
+      { key: 'sku', label: '内部 SKU', children: <span className="copy-value-inline"><span className="mono-badge">{purchase.sku}</span><CopyValueButton label="SKU" value={purchase.sku} /></span> },
+      { key: 'name', label: '产品名', children: purchase.productName },
+      { key: 'price', label: legacy ? '历史采购价' : '国内采购价(CNY)', children: formatPurchaseMoney(purchase.procurement.purchasePrice, purchase.procurement.currency) },
+      { key: 'retail', label: '零售价格(RUB)', children: purchase.procurement.retailPrice != null && purchase.procurement.retailPrice !== '' ? `RUB ${Number(purchase.procurement.retailPrice).toFixed(2)}` : '—' },
+      { key: 'courier', label: '快递费', children: formatPurchaseMoney(purchase.procurement.courierFee, purchase.procurement.currency) },
+      { key: 'product', label: '产品尺寸/净重', children: formatProductMeasurements(purchase.procurement) || '—' },
+      { key: 'package', label: '包装尺寸/毛重', children: formatPackagingMeasurements(purchase.procurement) || '—' },
+      { key: 'url', label: '当前商品 URL', span: 2, children: <a href={purchase.procurement.providerUrl} target="_blank" rel="noreferrer">{purchase.procurement.providerUrl}</a> }
+    ] : [{ key: 'none', label: '采购产品', span: 2, children: '本次 URL 重复已跳过，未创建新产品' }]} />
+    <Descriptions title="导入来源信息" bordered size="small" column={2} items={[
+      { key: 'workflow', label: '本次下载工作流', children: <Tooltip title="仅表示本地导入来源，不会启动 n8n"><Tag color="cyan">{record.importWorkflowLabel || '来源平台未知'}</Tag></Tooltip> },
+      { key: 'platform', label: '来源平台', children: record.sourcePlatform || '未知平台' },
+      { key: 'status', label: '导入状态', children: <Tag color={localImportStatusMeta[record.status].color}>{localImportStatusMeta[record.status].label}</Tag> },
+      { key: 'date', label: '导入日期', children: dayjs(record.createdAt).format('YYYY-MM-DD HH:mm:ss') },
+      { key: 'target', label: '目标目录', span: 2, children: record.targetFolder ? <span className="copy-value-inline"><Text>{record.targetFolder}</Text><CopyValueButton label="目标目录" value={record.targetFolder} /></span> : '—' },
+      ...(record.errorMessage ? [{ key: 'error', label: '错误信息', span: 2, children: <Text type="danger">{record.errorMessage}</Text> }] : [])
+    ]} />
+    <Card size="small" title={`来源目录 · ${record.sources.length}`}><List dataSource={record.sources} locale={{ emptyText: record.status === 'SKIPPED_DUPLICATE' ? '重复跳过记录未登记新的媒体来源' : '没有来源目录' }} renderItem={(source) => <List.Item><div className="local-import-source-detail"><Space wrap><strong>{source.relativePath}</strong>{source.isPrimary && <Tag color="cyan">主目录</Tag>}<Tag>{source.platform}</Tag></Space><Text type="secondary">外部 SKU：{source.externalSku || '—'} · 信息文件：{source.informationFileRelativePath || '—'}</Text>{source.informationFileSha256 && <Text className="mono-text" type="secondary">SHA-256：{source.informationFileSha256}</Text>}{source.providerUrl && <a href={source.providerUrl} target="_blank" rel="noreferrer">{source.providerUrl}</a>}<Text type="secondary">目标子目录：{source.targetSubdirectory}</Text></div></List.Item>} /></Card>
+    <Flex justify="end" gap={8}>{record.status === 'COPY_FAILED_RETRYABLE' && <Button type="primary" onClick={() => onRetry(record.id)}>重试媒体复制</Button>}{record.sku && <Button icon={<EditOutlined />} onClick={onEdit}>编辑采购信息</Button>}</Flex>
+  </div>;
+}
+
+function LocalImportPurchaseEditor({ record, onClose, onSaved }: { record?: LocalImportListItem; onClose: () => void; onSaved: (value: LocalImportRecord) => void }) {
+  const [form] = Form.useForm<Omit<PurchaseInput, 'downloadWorkflowCode'>>();
+  useEffect(() => {
+    if (!record?.purchase) return;
+    const procurement = record.purchase.procurement;
+    const legacy = isLegacyLocalImportProcurement(procurement);
+    form.resetFields();
+    form.setFieldsValue({
+      productName: record.purchase.productName, purchasePrice: legacy ? '' : procurement.purchasePrice,
+      retailPrice: legacy ? procurement.purchasePrice : procurement.retailPrice, courierFee: procurement.courierFee,
+      currency: 'CNY', providerUrl: procurement.providerUrl, grossWeightGrams: procurement.grossWeightGrams,
+      lengthCm: procurement.lengthCm, widthCm: procurement.widthCm, heightCm: procurement.heightCm,
+      netWeightGrams: procurement.netWeightGrams, productHeightCm: procurement.productHeightCm,
+      productDepthCm: procurement.productDepthCm, productWidthCm: procurement.productWidthCm
+    });
+  }, [form, record]);
+  const save = useMutation({
+    mutationFn: (input: Omit<PurchaseInput, 'downloadWorkflowCode'>) => api.updateLocalImportPurchase(record!.id, { ...input, currency: 'CNY' }),
+    onSuccess: ({ import: value }) => { message.success('采购信息已保存，新版本已创建'); onSaved(value); },
+    onError: (error: Error) => {
+      if (error instanceof ApiError && error.code === 'PRODUCT_URL_ALREADY_EXISTS') {
+        const sku = typeof error.details === 'object' && error.details && 'sku' in error.details ? String(error.details.sku) : '';
+        form.setFields([{ name: 'providerUrl', errors: [sku ? `产品 URL 已归属 SKU ${sku}` : '产品 URL 已被使用'] }]);
+      }
+      message.error(error instanceof ApiError ? error.userMessage : error.message);
+    }
+  });
+  const legacy = Boolean(record?.purchase && isLegacyLocalImportProcurement(record.purchase.procurement));
+  return <Drawer open={Boolean(record)} width={720} onClose={onClose} title={record?.purchase ? `编辑采购信息 · ${record.purchase.sku}` : '编辑采购信息'} destroyOnHidden>
+    {record?.purchase && <Form form={form} layout="vertical" onFinish={(value) => save.mutate(value)}>
+      <Alert type="info" showIcon message={`本次下载工作流：${record.importWorkflowLabel || '来源平台未知'}`} description="该值是不可变的本地导入来源标签；保存采购信息不会重新复制媒体或启动 n8n。" />
+      {legacy && <Alert className="local-import-legacy-editor-alert" type="warning" showIcon message="旧 RUB 版本将转换为新的 CNY 采购版本" description="零售价格已从旧采购价带入；请填写国内采购价后保存。旧版本不会被修改。" />}
+      <Form.Item label="产品名称" name="productName" rules={[{ required: true, message: '请输入产品名称' }]}><Input /></Form.Item>
+      <div className="local-import-editor-price-grid">
+        <Form.Item label="零售价格(RUB)" name="retailPrice" rules={[{ pattern: /^\d+(?:\.\d+)?$/, message: '请输入非负数字' }]}><Input addonAfter="RUB" /></Form.Item>
+        <Form.Item label="国内采购价(CNY)" name="purchasePrice" rules={[{ required: true, message: '请输入国内采购价' }, { pattern: /^\d+(?:\.\d+)?$/, message: '请输入非负数字' }]}><Input addonAfter="CNY" /></Form.Item>
+      </div>
+      <Form.Item name="currency" hidden><Input /></Form.Item>
+      <Form.Item label="商品 URL" name="providerUrl" rules={[{ required: true, message: '请输入商品 URL' }, { type: 'url', message: '请输入有效 URL' }]}><Input /></Form.Item>
+      <Row gutter={12}>{([['courierFee','快递费'],['productHeightCm','产品高(cm)'],['productDepthCm','产品深(cm)'],['productWidthCm','产品宽(cm)'],['netWeightGrams','净重(g)'],['grossWeightGrams','毛重(g)'],['lengthCm','包装长(cm)'],['widthCm','包装宽(cm)'],['heightCm','包装高(cm)']] as const).map(([key, label]) => <Col xs={12} md={8} lg={4} key={key}><Form.Item label={label} name={key}><Input /></Form.Item></Col>)}</Row>
+      <Flex justify="end" gap={8}><Button onClick={onClose}>取消</Button><Button type="primary" htmlType="submit" loading={save.isPending}>保存采购信息</Button></Flex>
+    </Form>}
+  </Drawer>;
+}
+
 function PurchasePage() {
   const client = useQueryClient();
   const location = useLocation();
@@ -1911,7 +2237,7 @@ function PurchasePage() {
   const [bulkWorkflow, setBulkWorkflow] = useState<string>();
   const [activeBatchId, setActiveBatchId] = useState(() => sessionStorage.getItem(PURCHASE_BATCH_ACTIVE_KEY) || '');
   const params = useMemo(() => {
-    const value = new URLSearchParams({ page: String(page), pageSize: '50' });
+    const value = new URLSearchParams({ page: String(page), pageSize: '50', source: 'URL_DOWNLOAD' });
     if (search.trim()) value.set('query', search.trim());
     if (status) value.set('status', status);
     if (workflowCode) value.set('workflowCode', workflowCode);
@@ -1964,7 +2290,7 @@ function PurchasePage() {
 
   if (purchases.isError) {
     const databaseUnavailable = purchases.error.message.startsWith('DATABASE_UNAVAILABLE:');
-    return <Result status="warning" title={databaseUnavailable ? 'PostgreSQL 尚未连接' : '采购管理暂不可用'} subTitle={databaseUnavailable ? '请在项目根目录的 .env 中配置 DATABASE_URL，重启服务后再重新检测。页面已停止自动重试。' : purchases.error.message} extra={<Button type="primary" onClick={() => void purchases.refetch()}>重新检测</Button>} />;
+    return <Result status="warning" title={databaseUnavailable ? 'PostgreSQL 尚未连接' : '产品URL下载暂不可用'} subTitle={databaseUnavailable ? '请在项目根目录的 .env 中配置 DATABASE_URL，重启服务后再重新检测。页面已停止自动重试。' : purchases.error.message} extra={<Button type="primary" onClick={() => void purchases.refetch()}>重新检测</Button>} />;
   }
   const configuredStages = workflowConfig.data?.config.stages || [];
   const workflowLabelByCode = new Map((workflows.data?.items || []).map((item) => {
@@ -1977,7 +2303,7 @@ function PurchasePage() {
   const workflowOptions = activeWorkflows.map((item) => ({ value: item.code, label: workflowLabelByCode.get(item.code) || item.code }));
   const invalidDraftCount = draft.filter((item) => !activeWorkflowCodes.has(item.workflowCode)).length;
   return <div className="page-stack purchase-page">
-    <PageTitle eyebrow="PROCUREMENT LEDGER" title="采购管理" description="管理采购信息，批量调用工作流下载产品图片到本地。" extra={<Space wrap><Link to="/settings?section=download"><Button icon={<ApiOutlined />}>下载工作流配置</Button></Link><Button type="primary" icon={<PlusOutlined />} onClick={() => setEditor({} as PurchaseSummary)}>新建采购产品</Button></Space>} />
+    <PageTitle eyebrow="PROCUREMENT LEDGER" title="产品URL下载" description="管理采购信息，通过产品 URL 调用工作流下载产品图片到本地。" extra={<Space wrap><Link to="/settings?section=download"><Button icon={<ApiOutlined />}>下载工作流配置</Button></Link><Button type="primary" icon={<PlusOutlined />} onClick={() => setEditor({} as PurchaseSummary)}>新建采购产品</Button></Space>} />
     {batch.data?.batch && <BatchProgressCard batch={batch.data.batch} onDismiss={() => { setActiveBatchId(''); sessionStorage.removeItem(PURCHASE_BATCH_ACTIVE_KEY); }} />}
     <Card className="filter-bar"><Flex wrap gap={10} align="center"><Input className="search-input" prefix={<SearchOutlined />} value={search} placeholder="搜索 SKU 或产品名" onChange={(event) => { setPage(1); setSearch(event.target.value); }} allowClear /><Select value={datePreset} aria-label="新建日期" onChange={(value) => { setPage(1); setDatePreset(value); if (value !== 'CUSTOM') setCustomCreatedRange(null); }} style={{ width: 140 }} options={[{ value: 'ALL', label: '全部日期' }, { value: 'TODAY', label: '当天' }, { value: 'YESTERDAY', label: '昨天' }, { value: 'LAST_7_DAYS', label: '近 7 天' }, { value: 'CUSTOM', label: '时间段查询' }]} />{datePreset === 'CUSTOM' && <DatePicker.RangePicker value={customCreatedRange} onChange={(value) => { setPage(1); setCustomCreatedRange(value as [Dayjs, Dayjs] | null); }} allowClear placeholder={['开始日期', '结束日期']} />}<Select allowClear placeholder="下载状态" value={status} onChange={(value) => { setPage(1); setStatus(value); }} style={{ width: 130 }} options={Object.entries(purchaseJobMeta).map(([value, item]) => ({ value, label: item.label }))} /><Select allowClear placeholder="下载工作流" value={workflowCode} onChange={(value) => { setPage(1); setWorkflowCode(value); }} style={{ width: 180 }} options={workflowOptions} /><Button onClick={reset}>重置</Button><Text type="secondary">共 {purchases.data?.total || 0} 条采购记录</Text></Flex></Card>
     {draft.length > 0 && <Card className="batch-action-bar"><Flex align="center" justify="space-between" wrap gap={14}><div><span className="batch-count">{draft.length}</span><Text> 条采购信息已加入本次下载</Text><Text type="secondary"> · 按勾选顺序串行执行</Text>{invalidDraftCount > 0 && <div><Text type="danger">{invalidDraftCount} 条任务的工作流已停用，请重新选择</Text></div>}</div><Space wrap><Select placeholder="批量修改工作流" value={bulkWorkflow} onChange={(value) => { setBulkWorkflow(value); setDraft((items) => items.map((item) => ({ ...item, workflowCode: value }))); }} style={{ width: 210 }} options={workflowOptions} /><Button onClick={() => setDraft([])}>清空选择</Button><Button type="primary" icon={<CloudDownloadOutlined />} disabled={invalidDraftCount > 0} onClick={() => setConfirmOpen(true)}>批量执行下载</Button></Space></Flex></Card>}
@@ -2147,6 +2473,7 @@ function validatePurchaseProductUrl(value: unknown): Promise<void> {
   return error ? Promise.reject(new Error(error)) : Promise.resolve();
 }
 function formatPurchaseMoney(value?: string, currency = 'CNY') { return `${currency === 'CNY' ? '¥' : `${currency} `}${Number(value || 0).toFixed(2)}`; }
+function isValidPurchasePrice(value?: string | null) { const number = Number(value); return Boolean(value?.trim()) && Number.isFinite(number) && number >= 0; }
 function validatePositivePurchaseMeasurement(label: string, value: unknown): Promise<void> {
   if (value === undefined || value === null || value === '') return Promise.resolve();
   const number = Number(value);

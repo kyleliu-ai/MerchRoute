@@ -35,7 +35,7 @@ test('采购批量下载完成卡片紧凑显示且不改变进行中卡片', as
   });
 
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto('/purchases');
+  await page.goto('/purchases/url-download');
 
   const completeCard = page.locator('.batch-progress-card.is-complete');
   await expect(completeCard).toContainText('批量下载已结束');

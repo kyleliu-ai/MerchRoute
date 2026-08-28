@@ -16,7 +16,7 @@ test.describe('关键字段一键复制', () => {
     };
     await page.route('**/api/v1/purchases?*', async (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [purchase], total: 1, page: 1, pageSize: 50 }) }));
     await page.route('**/api/v1/download-workflows?*', async (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [] }) }));
-    await page.goto('/purchases');
+    await page.goto('/purchases/url-download');
 
     const row = page.locator('.purchase-table-card .ant-table-tbody tr').filter({ hasText: purchase.sku });
     const skuCopy = copyButton(row, 'SKU', purchase.sku);

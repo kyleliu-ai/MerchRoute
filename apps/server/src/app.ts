@@ -54,6 +54,7 @@ import { WbStoreService } from './services/wb-stores/index.js';
 import { WbStoreGatewayService } from './services/wb-stores/gateway.js';
 import { WbSourceMediaCleanupService } from './services/wb-source-media/index.js';
 import { WbSourceMediaFiles } from './services/wb-source-media/source-files.js';
+import { LocalImportService, assertStrictDirectory } from './services/local-import/index.js';
 
 type Services = {
   config: ConfigService;
@@ -63,6 +64,7 @@ type Services = {
   thumbnails: ThumbnailService;
   submissions: SubmissionService;
   purchases: PurchaseRepository;
+  localImports: LocalImportService;
   downloads: DownloadWorker;
   shipping: ShippingRepository;
   pricing: PricingRepository;
@@ -141,6 +143,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   await productIdentity.backfillLegacyPending();
   await productIdentity.backfillLegacyVariants();
   const submissions = new SubmissionService(config, store, scanner, productIdentity, app.log);
+  const localImports = new LocalImportService(config, purchases, () => mediaIndex.refreshStage('E000'));
   let downloadSync = await synchronizeDownloadProjection(config, purchases);
   if (!purchases.configured) app.log.warn('未配置 DATABASE_URL；采购管理暂不可用，下载工作流配置将在数据库连接后同步');
   const downloads = new DownloadWorker(purchases, app.log, () => downloadWorkflowInputs(config.get()));
@@ -231,7 +234,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const rootDirectory = parseOzonMediaOutputRootTemplate(configuredOzonTemplate).rootDirectory;
     await ozonPublishing.synchronizeRootDirectory(rootDirectory).catch((error) => app.log.warn({ err: error, rootDirectory }, 'OZON 共享媒体根目录启动同步失败'));
   }
-  app.decorate('services', { config, store, scanner, mediaIndex, thumbnails, submissions, purchases, downloads, shipping, pricing, pricingQuery, productIdentity, wb, wbPresetRepository, wbPresets, wbPublishing, wbTaskStatusSynchronizer, wbAutoPublishRepository, wbAutoPublishing, wbStoreRepository, wbStores, wbStoreGateway, wbSourceMediaCleanup, wbCatalog, ozon, ozonStoreRepository, ozonStores, ozonStoreGateway, ozonSourceMediaCleanup, ozonPublishing, ozonAutoPublishing, ozonCatalog, variantDelivery });
+  app.decorate('services', { config, store, scanner, mediaIndex, thumbnails, submissions, purchases, localImports, downloads, shipping, pricing, pricingQuery, productIdentity, wb, wbPresetRepository, wbPresets, wbPublishing, wbTaskStatusSynchronizer, wbAutoPublishRepository, wbAutoPublishing, wbStoreRepository, wbStores, wbStoreGateway, wbSourceMediaCleanup, wbCatalog, ozon, ozonStoreRepository, ozonStores, ozonStoreGateway, ozonSourceMediaCleanup, ozonPublishing, ozonAutoPublishing, ozonCatalog, variantDelivery });
   await app.register(cors, { origin: /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/ });
 
   app.setErrorHandler((error, _request, reply) => {
@@ -358,8 +361,9 @@ export async function buildApp(options: BuildAppOptions = {}) {
     return { stageId, fileName: workflowParameterFileName(stageId), optionsFileName: workflowParameterOptionsFileName(stageId), ...template };
   });
   app.post('/api/v1/config/validate', async (request) => {
-    const body = request.body as { path?: string };
+    const body = request.body as { path?: string; localImportRole?: 'source' | 'candidate' };
     if (!body?.path) throw new AppError('CONFIG_INVALID', '缺少需要验证的目录路径');
+    if (body.localImportRole) await assertStrictDirectory(body.path, body.localImportRole === 'candidate', body.localImportRole === 'source' ? '本地导入来源根目录' : 'E000 候选图片目录');
     return config.validatePath(body.path);
   });
   app.post('/api/v1/config/create-directory', async (request) => {
@@ -373,9 +377,28 @@ export async function buildApp(options: BuildAppOptions = {}) {
   await registerOzonRoutes(app, { ozon, ozonStores, ozonPublishing, ozonAutoPublishing, ozonCatalog, ozonSourceMediaCleanup, pricing, shipping, config });
   await registerOzonStoreRoutes(app, { stores: ozonStores, gateway: ozonStoreGateway, sourceMediaCleanup: ozonSourceMediaCleanup });
 
+  app.get('/api/v1/local-import/directories', async (request) => {
+    const query = request.query as { path?: string };
+    return localImports.listDirectories(query.path || '');
+  });
+  app.post('/api/v1/local-import/preview', async (request) => localImports.preview(request.body as any));
+  app.get('/api/v1/local-import/imports', async (request) => {
+    const query = request.query as { page?: string; pageSize?: string; query?: string; platform?: string; status?: string; createdFrom?: string; createdTo?: string };
+    return localImports.list({
+      page: Number(query.page), pageSize: Number(query.pageSize), query: query.query, platform: query.platform,
+      status: query.status, createdFrom: query.createdFrom, createdTo: query.createdTo
+    });
+  });
+  app.post('/api/v1/local-import/imports', async (request) => ({ import: await localImports.import(request.body as any) }));
+  app.get('/api/v1/local-import/imports/:id', async (request) => ({ import: await localImports.get((request.params as { id: string }).id) }));
+  app.patch('/api/v1/local-import/imports/:id/purchase', async (request) => ({
+    import: await localImports.updatePurchase((request.params as { id: string }).id, request.body as Omit<PurchaseInput, 'downloadWorkflowCode'>)
+  }));
+  app.post('/api/v1/local-import/imports/:id/retry', async (request) => ({ import: await localImports.retry((request.params as { id: string }).id) }));
+
   app.get('/api/v1/purchases', async (request) => {
-    const query = request.query as { page?: string; pageSize?: string; query?: string; status?: string; workflowCode?: string; createdFrom?: string; createdTo?: string };
-    return purchases.listPurchases({ page: Number(query.page), pageSize: Number(query.pageSize), query: query.query, status: query.status, workflowCode: query.workflowCode, createdFrom: query.createdFrom, createdTo: query.createdTo });
+    const query = request.query as { page?: string; pageSize?: string; query?: string; status?: string; workflowCode?: string; createdFrom?: string; createdTo?: string; source?: string };
+    return purchases.listPurchases({ page: Number(query.page), pageSize: Number(query.pageSize), query: query.query, status: query.status, workflowCode: query.workflowCode, createdFrom: query.createdFrom, createdTo: query.createdTo, source: query.source });
   });
   app.post('/api/v1/purchases', async (request) => ({
     purchase: await purchases.createPurchase(applyPurchaseUrlDownloadWorkflow(request.body as PurchaseInput))
@@ -1224,7 +1247,10 @@ function assertTaskContextIdentity(task: Awaited<ReturnType<ScannerService['getT
     throw new AppError('CONFIG_INVALID', `${task.stageId} 任务缺少 SKU、productName 或 variants 运行时身份`, { taskId: task.taskId }, 409);
   }
   if (task.taskContext?.SKU && task.taskContext.SKU !== product.sku) throw new AppError('CONFIG_INVALID', '任务上下文 SKU 与采购产品身份不一致', { taskSku: task.taskContext.SKU, productSku: product.sku }, 409);
-  if (task.taskContext?.productName && task.taskContext.productName !== product.productName) throw new AppError('CONFIG_INVALID', '任务上下文 productName 与采购产品身份不一致', { taskProductName: task.taskContext.productName, productName: product.productName }, 409);
+  const e000BoundSkuCanUseCurrentName = task.stageId === 'E000' && task.taskContext?.SKU === product.sku;
+  if (!e000BoundSkuCanUseCurrentName && task.taskContext?.productName && task.taskContext.productName !== product.productName) {
+    throw new AppError('CONFIG_INVALID', '任务上下文 productName 与采购产品身份不一致', { taskProductName: task.taskContext.productName, productName: product.productName }, 409);
+  }
 }
 
 async function configReadiness(config: ConfigService): Promise<{ complete: boolean; paths: Awaited<ReturnType<ConfigService['validatePath']>>[] }> {

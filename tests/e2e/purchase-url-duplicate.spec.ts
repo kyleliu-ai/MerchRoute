@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 
 test('新建采购产品时拦截已录入 URL 并显示原 SKU', async ({ page }) => {
-  await page.goto('/purchases');
+  await page.goto('/purchases/url-download');
   const before = await page.request.get('/api/v1/purchases?page=1&pageSize=100');
   const beforeBody = await before.json();
 
