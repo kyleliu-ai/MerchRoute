@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 
 test('采购产品规格分两行录入、允许独立留空并在列表和详情展示', async ({ page }) => {
   test.setTimeout(60_000);
-  await page.goto('/purchases');
+  await page.goto('/purchases/url-download');
   await page.getByRole('button', { name: '新建采购产品' }).click();
 
   const drawer = page.getByRole('dialog', { name: '新建采购产品' });

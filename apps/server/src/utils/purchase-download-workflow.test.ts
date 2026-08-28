@@ -11,7 +11,8 @@ describe('applyPurchaseUrlDownloadWorkflow', () => {
 
     expect(applyPurchaseUrlDownloadWorkflow(input)).toEqual({
       ...input,
-      downloadWorkflowCode: expected
+      downloadWorkflowCode: expected,
+      retailPrice: null
     });
     expect(input).not.toHaveProperty('downloadWorkflowCode');
   });
@@ -22,8 +23,16 @@ describe('applyPurchaseUrlDownloadWorkflow', () => {
       downloadWorkflowCode: ' e007 '
     })).toEqual({
       providerUrl: 'https://detail.1688.com/offer/987654321.html',
-      downloadWorkflowCode: 'E007'
+      downloadWorkflowCode: 'E007',
+      retailPrice: null
     });
+  });
+
+  it('产品 URL 下载的新版本始终清空本地导入零售价字段', () => {
+    expect(applyPurchaseUrlDownloadWorkflow({
+      providerUrl: 'https://mobile.yangkeduo.com/goods.html?goods_id=123456789',
+      retailPrice: '999'
+    })).toMatchObject({ downloadWorkflowCode: 'E006', retailPrice: null });
   });
 
   it('工作流与 URL 错配时返回 409 及分类详情', () => {

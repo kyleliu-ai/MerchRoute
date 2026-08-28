@@ -596,6 +596,19 @@ test.describe('WB 可视化上品管理', () => {
     await expect(drawer.getByText('最近一次任务失败', { exact: true })).toHaveCount(0);
   });
 
+  test('工作台采购自动取值入口指向产品URL下载', async ({ page }) => {
+    await mockWbApis(page);
+    await page.goto('/listing/wb?view=manual');
+    await page.getByRole('button', { name: '打开工作台' }).click();
+
+    const drawer = page.locator('.wb-listing-drawer');
+    const managed = drawer.locator('.wb-purchase-managed-workbench');
+    await expect(managed).toHaveCount(1);
+    const purchaseLink = managed.locator('a[href="/purchases/url-download?query=0000010"]');
+    await expect(purchaseLink).toHaveCount(1);
+    await expect(purchaseLink).toHaveText('前往产品URL下载');
+  });
+
   test('公共素材工作台不恢复全局预设字段，并保留历史资料兼容读取', async ({ page }) => {
     await mockWbApis(page);
     const legacyListing = {

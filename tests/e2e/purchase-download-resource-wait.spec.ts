@@ -37,7 +37,7 @@ test('采购页面显示 E007 资源等待状态并阻止重复入队', async ({
   await page.route('**/api/v1/purchases?**', async (route) => {
     await route.fulfill({ json: { items: [waitingPurchase], total: 1, page: 1, pageSize: 50 } });
   });
-  await page.goto('/purchases');
+  await page.goto('/purchases/url-download');
 
   const row = page.getByRole('row').filter({ hasText: waitingPurchase.productName });
   await expect(row).toContainText('等待下载浏览器释放');

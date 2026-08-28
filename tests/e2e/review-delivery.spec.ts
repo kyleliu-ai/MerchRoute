@@ -157,7 +157,7 @@ test.describe.serial('v002 review and delivery', () => {
   });
 
   test('defaults review stages to switchable tables and keeps E004 fixed to table', async ({ page }) => {
-    for (const stageId of ['E001', 'E002', 'E003', 'E005', 'E006', 'E007']) {
+    for (const stageId of ['E000', 'E001', 'E002', 'E003', 'E005', 'E006', 'E007']) {
       await page.goto(`/review/${stageId}`);
       await expect(page.getByRole('radio', { name: '表格' })).toBeChecked();
       await expect(page.locator('.filter-bar .ant-radio-button-wrapper').filter({ hasText: '卡片' })).toBeVisible();
@@ -246,13 +246,13 @@ test.describe.serial('v002 review and delivery', () => {
     await expect(page.getByText('投递与缩略图', { exact: true })).toBeVisible();
     await expect(page.getByText('残留暂存目录', { exact: true })).toBeVisible();
 
-    for (const stageId of ['E006', 'E007', 'E001', 'E002', 'E003', 'E004', 'E005']) {
+    for (const stageId of ['E000', 'E006', 'E007', 'E001', 'E002', 'E003', 'E004', 'E005']) {
       await page.locator('.workflow-settings-item').filter({ hasText: stageId }).click();
       const activeStageCard = page.locator('.settings-stage:visible');
       const enableSwitch = activeStageCard.getByRole('switch', { name: `${stageId} 启用流程` });
       await expect(enableSwitch).toBeVisible();
       await expect(page.getByRole('button', { name: '保存工作流' })).toBeVisible();
-      if (['E006', 'E007', 'E001', 'E002', 'E003'].includes(stageId)) {
+      if (['E000', 'E006', 'E007', 'E001', 'E002', 'E003'].includes(stageId)) {
         await expect(activeStageCard.getByText('输出目录', { exact: true })).toHaveCount(0);
       } else {
         await expect(page.getByLabel(`${stageId} WB 共享媒体输出目录模板`)).toBeVisible();
@@ -265,7 +265,7 @@ test.describe.serial('v002 review and delivery', () => {
       page.locator('.page-title').getByRole('button', { name: '导出配置' }).click()
     ]);
     const exportedConfig = JSON.parse(await readFile(await configDownload.path(), 'utf8'));
-    for (const stageId of ['E006', 'E007', 'E001', 'E002', 'E003']) {
+    for (const stageId of ['E000', 'E006', 'E007', 'E001', 'E002', 'E003']) {
       expect(exportedConfig.stages.find((stage: { id: string }) => stage.id === stageId)).not.toHaveProperty('outputRoot');
     }
 
@@ -337,7 +337,7 @@ test.describe.serial('v002 review and delivery', () => {
 
   test('shows type selectors for all stages and the exact typed E004 defaults', async ({ page }) => {
     await page.goto('/settings');
-    for (const stageId of ['E006', 'E007', 'E001', 'E002', 'E003', 'E004', 'E005']) {
+    for (const stageId of ['E000', 'E006', 'E007', 'E001', 'E002', 'E003', 'E004', 'E005']) {
       await page.locator('.workflow-settings-item').filter({ hasText: stageId }).click();
       await page.getByRole('tab', { name: '工作流参数' }).click();
       await expect(page.locator('.workflow-parameter-card:visible .parameter-type-select').first()).toBeVisible();

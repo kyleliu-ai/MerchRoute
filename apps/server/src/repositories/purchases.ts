@@ -18,6 +18,7 @@ export type PurchaseInput = {
   productName: string;
   downloadWorkflowCode?: string;
   purchasePrice: string;
+  retailPrice?: string | null;
   courierFee?: string | null;
   currency?: string;
   grossWeightGrams?: string | null;
@@ -30,6 +31,59 @@ export type PurchaseInput = {
   productWidthCm?: string | null;
   transportMode?: string;
   providerUrl: string;
+};
+export type LocalImportStatus = 'COPYING' | 'IMPORTED' | 'SKIPPED_DUPLICATE' | 'COPY_FAILED_RETRYABLE';
+export type LocalImportSourceInput = {
+  platform: string;
+  relativePath: string;
+  normalizedPathKey: string;
+  isPrimary: boolean;
+  externalSku?: string;
+  informationFileRelativePath?: string;
+  informationFileSha256?: string;
+  providerUrl?: string;
+  targetSubdirectory: string;
+  copyManifest: Record<string, unknown>;
+};
+export type ReserveLocalImportInput = {
+  idempotencyKey: string;
+  previewHash: string;
+  sourceConfigSnapshot: Record<string, unknown>;
+  targetConfigSnapshot: Record<string, unknown>;
+  purchase: PurchaseInput;
+  providerUrls: string[];
+  sources: LocalImportSourceInput[];
+};
+export type LocalImportRecord = {
+  id: string;
+  idempotencyKey: string;
+  sku?: string;
+  duplicateSku?: string;
+  status: LocalImportStatus;
+  sourcePlatform?: string;
+  importWorkflowLabel?: string;
+  sourceConfigSnapshot: Record<string, unknown>;
+  targetConfigSnapshot: Record<string, unknown>;
+  previewHash: string;
+  retryCount: number;
+  errorCode?: string;
+  errorMessage?: string;
+  targetFolder?: string;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+  sources: Array<LocalImportSourceInput & { id: string }>;
+  purchase?: ReturnType<typeof toLocalImportPurchase>;
+};
+export type LocalImportListItem = Omit<LocalImportRecord, 'sources'> & { sourceDirectoryCount: number };
+export type LocalImportQuery = {
+  page?: number;
+  pageSize?: number;
+  query?: string;
+  platform?: string;
+  status?: string;
+  createdFrom?: string;
+  createdTo?: string;
 };
 export type WorkflowInput = {
   code: string;
@@ -304,11 +358,13 @@ export class PurchaseRepository {
 
   async close(): Promise<void> { await this.pool?.end(); }
 
-  async listPurchases(input: { page?: number; pageSize?: number; query?: string; status?: string; workflowCode?: string; createdFrom?: string; createdTo?: string }) {
+  async listPurchases(input: { page?: number; pageSize?: number; query?: string; status?: string; workflowCode?: string; createdFrom?: string; createdTo?: string; source?: string }) {
     const page = Math.max(1, input.page || 1);
     const pageSize = Math.min(100, Math.max(10, input.pageSize || 50));
     const values: unknown[] = [];
     const where: string[] = [];
+    if (input.source && input.source !== 'URL_DOWNLOAD') throw new AppError('CONFIG_INVALID', '采购来源筛选无效');
+    if (input.source === 'URL_DOWNLOAD') where.push('NOT EXISTS (SELECT 1 FROM local_imports li WHERE li.sku = p.sku)');
     if (input.query?.trim()) {
       values.push(`%${input.query.trim()}%`);
       where.push(`(p.sku ILIKE $${values.length} OR p.product_name ILIKE $${values.length})`);
@@ -332,7 +388,7 @@ export class PurchaseRepository {
     const rows = await this.query<SqlRow>(`
       SELECT p.sku, p.product_name, p.created_at, p.updated_at,
         COALESCE((SELECT jsonb_agg(v.name ORDER BY v.sort_order ASC, v.created_at ASC) FROM product_variants v WHERE v.sku=p.sku),'[]'::jsonb) AS variants,
-        pv.id AS procurement_version_id, pv.download_workflow_code, pv.purchase_price, pv.courier_fee, pv.currency,
+        pv.id AS procurement_version_id, pv.download_workflow_code, pv.purchase_price, pv.retail_price, pv.courier_fee, pv.currency,
         pv.gross_weight_g, pv.length_cm, pv.width_cm, pv.height_cm,
         pv.net_weight_g, pv.product_height_cm, pv.product_depth_cm, pv.product_width_cm,
         pv.transport_mode, pv.provider_url,
@@ -377,7 +433,7 @@ export class PurchaseRepository {
     const product = await this.query<SqlRow>('SELECT sku, product_name, created_at, updated_at FROM products WHERE sku = $1', [sku]);
     if (!product.rows[0]) throw new AppError('NOT_FOUND', '采购产品不存在', { sku }, 404);
     const versions = await this.query<SqlRow>(`
-      SELECT id, version_no, download_workflow_code, purchase_price, courier_fee, currency,
+      SELECT id, version_no, download_workflow_code, purchase_price, retail_price, courier_fee, currency,
         gross_weight_g, length_cm, width_cm, height_cm,
         net_weight_g, product_height_cm, product_depth_cm, product_width_cm,
         transport_mode, provider_url, created_at
@@ -408,6 +464,179 @@ export class PurchaseRepository {
       await insertProcurementVersion(client, sku, input, 1, downloadWorkflowCode);
       return this.getPurchaseWithClient(client, sku);
     });
+  }
+
+  async reserveLocalImport(input: ReserveLocalImportInput): Promise<{ import: LocalImportRecord; created: boolean }> {
+    const purchase = { ...input.purchase, currency: 'CNY' };
+    validatePurchase(purchase);
+    const idempotencyKey = String(input.idempotencyKey || '').trim();
+    if (!idempotencyKey || idempotencyKey.length > 200) throw new AppError('CONFIG_INVALID', '幂等键长度必须在 1 到 200 个字符之间');
+    if (!/^[a-f0-9]{64}$/i.test(input.previewHash)) throw new AppError('CONFIG_INVALID', '预览哈希无效');
+    if (!input.sources.length) throw new AppError('CONFIG_INVALID', '至少需要一个媒体来源目录');
+    const sourcePlatforms = [...new Set(input.sources.map((source) => String(source.platform || '').trim()).filter(Boolean))];
+    const normalizedPlatforms = new Set(sourcePlatforms.map((platform) => platform.toLocaleLowerCase('en-US')));
+    if (sourcePlatforms.length === 0 || normalizedPlatforms.size !== 1) throw new AppError('LOCAL_IMPORT_CROSS_PLATFORM', '一次导入只能登记同一个来源平台', undefined, 409);
+    const sourcePlatform = sourcePlatforms[0]!;
+    if (sourcePlatform.length > 100) throw new AppError('CONFIG_INVALID', '来源平台名称不能超过 100 个字符');
+    const importWorkflowLabel = `本地导入-${sourcePlatform}`;
+    const providerUrls = [...new Set(input.providerUrls.map(normalizeProviderUrlKey).filter(Boolean))];
+    if (!providerUrls.length || !providerUrls.includes(normalizeProviderUrlKey(purchase.providerUrl))) {
+      throw new AppError('CONFIG_INVALID', '主目录商品 URL 必须包含在本次来源 URL 中');
+    }
+    return this.transaction(async (client) => {
+      await client.query(`SELECT pg_advisory_xact_lock(hashtext('merchroute_local_import:' || $1))`, [idempotencyKey]);
+      const existing = await client.query<{ id: string }>('SELECT id FROM local_imports WHERE idempotency_key=$1 FOR UPDATE', [idempotencyKey]);
+      if (existing.rows[0]) return { import: await getLocalImportWithClient(client, existing.rows[0].id), created: false };
+      await lockPurchaseUrlRegistry(client);
+      const conflicts = await client.query<{ sku: string; provider_url_key: string }>(
+        'SELECT sku,provider_url_key FROM purchase_provider_urls WHERE provider_url_key=ANY($1::text[]) ORDER BY sku,provider_url_key FOR UPDATE',
+        [providerUrls]
+      );
+      if (conflicts.rows[0]) {
+        const owners = [...new Set(conflicts.rows.map((row) => row.sku))];
+        const id = randomUUID();
+        await client.query(`INSERT INTO local_imports(
+          id,idempotency_key,duplicate_sku,status,source_platform,import_workflow_label,
+          source_config_snapshot,target_config_snapshot,preview_hash,completed_at
+        ) VALUES($1,$2,$3,'SKIPPED_DUPLICATE',$4,$5,$6::jsonb,$7::jsonb,$8,NOW())`, [
+          id, idempotencyKey, owners[0], sourcePlatform, importWorkflowLabel,
+          JSON.stringify(input.sourceConfigSnapshot), JSON.stringify(input.targetConfigSnapshot), input.previewHash.toLowerCase()
+        ]);
+        return { import: await getLocalImportWithClient(client, id), created: true };
+      }
+      await client.query('INSERT INTO purchase_sku_counter (singleton,last_value) VALUES(true,0) ON CONFLICT(singleton) DO NOTHING');
+      const counter = await client.query<{ last_value: number }>('SELECT last_value FROM purchase_sku_counter WHERE singleton=true FOR UPDATE');
+      const next = Number(counter.rows[0]?.last_value || 0) + 1;
+      if (next > 9_999_999) throw new AppError('SKU_EXHAUSTED', 'SKU 已达到 7 位编号上限', undefined, 409);
+      const sku = String(next).padStart(7, '0');
+      const id = randomUUID();
+      await client.query('UPDATE purchase_sku_counter SET last_value=$1 WHERE singleton=true', [next]);
+      await client.query('INSERT INTO products(sku,product_name) VALUES($1,$2)', [sku, purchase.productName.trim()]);
+      await client.query('INSERT INTO product_variants(id,sku,name,normalized_name,sort_order) VALUES($1,$2,$3,$4,0)', [randomUUID(), sku, '默认变体', normalizeProductVariantKey('默认变体')]);
+      for (const url of providerUrls) await registerPurchaseUrl(client, url, sku);
+      await insertProcurementVersion(client, sku, purchase, 1, null);
+      await client.query(`INSERT INTO local_imports(
+        id,idempotency_key,sku,status,source_platform,import_workflow_label,
+        source_config_snapshot,target_config_snapshot,preview_hash
+      ) VALUES($1,$2,$3,'COPYING',$4,$5,$6::jsonb,$7::jsonb,$8)`, [
+        id, idempotencyKey, sku, sourcePlatform, importWorkflowLabel,
+        JSON.stringify(input.sourceConfigSnapshot), JSON.stringify(input.targetConfigSnapshot), input.previewHash.toLowerCase()
+      ]);
+      for (const source of input.sources) {
+        await client.query(`INSERT INTO product_media_sources(
+          id,local_import_id,sku,platform,relative_path,normalized_path_key,is_primary,external_sku,
+          information_file_relative_path,information_file_sha256,provider_url,target_subdirectory,copy_manifest
+        ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb)`, [
+          randomUUID(), id, sku, source.platform, source.relativePath, source.normalizedPathKey, source.isPrimary,
+          source.externalSku || null, source.informationFileRelativePath || null, source.informationFileSha256 || null,
+          source.providerUrl || null, source.targetSubdirectory, JSON.stringify(source.copyManifest)
+        ]);
+      }
+      return { import: await getLocalImportWithClient(client, id), created: true };
+    });
+  }
+
+  async getLocalImport(id: string): Promise<LocalImportRecord> {
+    return getLocalImportWithClient(this.requirePool(), id);
+  }
+
+  async listLocalImports(input: LocalImportQuery) {
+    const page = Math.max(1, input.page || 1);
+    const pageSize = Math.min(100, Math.max(1, input.pageSize || 50));
+    const values: unknown[] = [];
+    const where: string[] = [];
+    const query = String(input.query || '').trim();
+    if (query) {
+      values.push(`%${query}%`);
+      where.push(`(COALESCE(li.sku,li.duplicate_sku)::text ILIKE $${values.length} OR p.product_name ILIKE $${values.length})`);
+    }
+    const platform = String(input.platform || '').trim();
+    if (platform) {
+      values.push(platform);
+      where.push(`LOWER(COALESCE(li.source_platform,''))=LOWER($${values.length})`);
+    }
+    const status = String(input.status || '').trim().toUpperCase();
+    if (status) {
+      if (!new Set<LocalImportStatus>(['COPYING', 'IMPORTED', 'SKIPPED_DUPLICATE', 'COPY_FAILED_RETRYABLE']).has(status as LocalImportStatus)) {
+        throw new AppError('CONFIG_INVALID', '本地导入状态筛选无效');
+      }
+      values.push(status);
+      where.push(`li.status=$${values.length}`);
+    }
+    const createdFrom = input.createdFrom ? normalizePurchaseDate(input.createdFrom, '导入日期起始时间') : undefined;
+    const createdTo = input.createdTo ? normalizePurchaseDate(input.createdTo, '导入日期结束时间') : undefined;
+    if (createdFrom && createdTo && createdFrom >= createdTo) throw new AppError('CONFIG_INVALID', '导入日期结束时间必须晚于起始时间');
+    if (createdFrom) { values.push(createdFrom); where.push(`li.created_at >= $${values.length}`); }
+    if (createdTo) { values.push(createdTo); where.push(`li.created_at < $${values.length}`); }
+    const filter = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const count = await this.query<{ total: string }>(`
+      SELECT COUNT(*)::text total FROM local_imports li
+      LEFT JOIN products p ON p.sku=COALESCE(li.sku,li.duplicate_sku)
+      ${filter}`, values);
+    const listValues = [...values, pageSize, (page - 1) * pageSize];
+    const rows = await this.query<SqlRow>(`
+      SELECT li.id,li.idempotency_key,li.sku,li.duplicate_sku,li.status,li.source_platform,li.import_workflow_label,
+        li.source_config_snapshot,li.target_config_snapshot,li.preview_hash,li.retry_count,li.error_code,li.error_message,
+        li.target_folder,li.created_at AS import_created_at,li.updated_at AS import_updated_at,li.completed_at,
+        (SELECT COUNT(*)::int FROM product_media_sources pms WHERE pms.local_import_id=li.id) AS source_directory_count,
+        p.sku AS product_sku,p.product_name,p.created_at AS product_created_at,p.updated_at AS product_updated_at,
+        COALESCE((SELECT jsonb_agg(v.name ORDER BY v.sort_order,v.created_at) FROM product_variants v WHERE v.sku=p.sku),'[]'::jsonb) AS variants,
+        pv.id AS procurement_version_id,pv.version_no,pv.download_workflow_code,pv.purchase_price,pv.retail_price,pv.courier_fee,pv.currency,
+        pv.gross_weight_g,pv.length_cm,pv.width_cm,pv.height_cm,pv.net_weight_g,pv.product_height_cm,pv.product_depth_cm,
+        pv.product_width_cm,pv.transport_mode,pv.provider_url,pv.created_at AS procurement_created_at
+      FROM local_imports li
+      LEFT JOIN products p ON p.sku=COALESCE(li.sku,li.duplicate_sku)
+      LEFT JOIN LATERAL (SELECT * FROM procurement_versions WHERE sku=p.sku ORDER BY version_no DESC LIMIT 1) pv ON true
+      ${filter}
+      ORDER BY li.created_at DESC,li.id DESC
+      LIMIT $${listValues.length - 1} OFFSET $${listValues.length}`, listValues);
+    const facets = await this.query<{ platform: string; total: string }>(`
+      SELECT source_platform platform,COUNT(*)::text total FROM local_imports
+      WHERE source_platform IS NOT NULL AND BTRIM(source_platform)<>''
+      GROUP BY source_platform ORDER BY LOWER(source_platform),source_platform`);
+    return {
+      items: rows.rows.map(toLocalImportListItem), total: Number(count.rows[0]?.total || 0), page, pageSize,
+      facets: { platforms: facets.rows.map((row) => ({ value: row.platform, count: Number(row.total) })) }
+    };
+  }
+
+  async updateLocalImportPurchase(id: string, input: Omit<PurchaseInput, 'downloadWorkflowCode'>): Promise<LocalImportRecord> {
+    const purchaseInput: PurchaseInput = { ...input, downloadWorkflowCode: undefined, currency: 'CNY' };
+    validatePurchase(purchaseInput);
+    return this.transaction(async (client) => {
+      await lockPurchaseUrlRegistry(client);
+      const record = await client.query<{ sku: string | null }>('SELECT sku FROM local_imports WHERE id=$1 FOR UPDATE', [id]);
+      if (!record.rows[0]) throw new AppError('NOT_FOUND', '本地导入记录不存在', { id }, 404);
+      const sku = record.rows[0].sku;
+      if (!sku) throw new AppError('LOCAL_IMPORT_NOT_EDITABLE', 'URL 重复跳过记录没有新建内部 SKU，不能编辑采购信息', { id }, 409);
+      const current = await client.query<{ version_no: number; download_workflow_code: string | null }>(
+        'SELECT version_no,download_workflow_code FROM procurement_versions WHERE sku=$1 ORDER BY version_no DESC LIMIT 1 FOR UPDATE', [sku]
+      );
+      if (!current.rows[0]) throw new AppError('NOT_FOUND', '采购产品不存在', { sku }, 404);
+      await assertPurchaseUrlAvailable(client, purchaseInput.providerUrl, sku);
+      await client.query('UPDATE products SET product_name=$2,updated_at=NOW() WHERE sku=$1', [sku, purchaseInput.productName.trim()]);
+      await registerPurchaseUrl(client, purchaseInput.providerUrl, sku);
+      await insertProcurementVersion(client, sku, purchaseInput, Number(current.rows[0].version_no) + 1, current.rows[0].download_workflow_code);
+      return getLocalImportWithClient(client, id);
+    });
+  }
+
+  async completeLocalImport(id: string, targetFolder: string): Promise<LocalImportRecord> {
+    await this.query(`UPDATE local_imports SET status='IMPORTED',target_folder=$2,error_code=NULL,error_message=NULL,
+      completed_at=NOW(),updated_at=NOW() WHERE id=$1`, [id, targetFolder]);
+    return this.getLocalImport(id);
+  }
+
+  async failLocalImport(id: string, errorCode: string, errorMessage: string): Promise<LocalImportRecord> {
+    await this.query(`UPDATE local_imports SET status='COPY_FAILED_RETRYABLE',retry_count=retry_count+1,
+      error_code=$2,error_message=$3,updated_at=NOW() WHERE id=$1`, [id, errorCode, errorMessage.slice(0, 4000)]);
+    return this.getLocalImport(id);
+  }
+
+  async markLocalImportCopying(id: string): Promise<LocalImportRecord> {
+    await this.query(`UPDATE local_imports SET status='COPYING',error_code=NULL,error_message=NULL,updated_at=NOW()
+      WHERE id=$1 AND status='COPY_FAILED_RETRYABLE'`, [id]);
+    return this.getLocalImport(id);
   }
 
   async updatePurchase(sku: string, input: PurchaseInput) {
@@ -856,7 +1085,7 @@ export class PurchaseRepository {
 
   private async getPurchaseWithClient(client: PoolClient, sku: string) {
     const product = await client.query<SqlRow>('SELECT sku, product_name, created_at, updated_at FROM products WHERE sku = $1', [sku]);
-    const versions = await client.query<SqlRow>(`SELECT id, version_no, download_workflow_code, purchase_price, courier_fee, currency,
+    const versions = await client.query<SqlRow>(`SELECT id, version_no, download_workflow_code, purchase_price, retail_price, courier_fee, currency,
       gross_weight_g, length_cm, width_cm, height_cm,
       net_weight_g, product_height_cm, product_depth_cm, product_width_cm,
       transport_mode, provider_url, created_at
@@ -1147,6 +1376,62 @@ export class PurchaseRepository {
         await client.query(`INSERT INTO purchase_schema_migrations(id) VALUES('013_download_job_leases')`);
       });
     }
+    const localImports = await this.query<{ id: string }>('SELECT id FROM purchase_schema_migrations WHERE id=$1', ['014_local_imports']);
+    if (!localImports.rows[0]) {
+      await this.transaction(async (client) => {
+        await client.query(`CREATE TABLE IF NOT EXISTS local_imports(
+          id UUID PRIMARY KEY,idempotency_key TEXT NOT NULL UNIQUE,sku CHAR(7) REFERENCES products(sku) ON DELETE RESTRICT,
+          duplicate_sku CHAR(7) REFERENCES products(sku) ON DELETE RESTRICT,
+          status TEXT NOT NULL CHECK(status IN('COPYING','IMPORTED','SKIPPED_DUPLICATE','COPY_FAILED_RETRYABLE')),
+          source_config_snapshot JSONB NOT NULL,target_config_snapshot JSONB NOT NULL,preview_hash CHAR(64) NOT NULL,
+          retry_count INTEGER NOT NULL DEFAULT 0 CHECK(retry_count>=0),error_code TEXT,error_message TEXT,target_folder TEXT,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),completed_at TIMESTAMPTZ,
+          CHECK((status='SKIPPED_DUPLICATE' AND sku IS NULL AND duplicate_sku IS NOT NULL) OR (status<>'SKIPPED_DUPLICATE' AND sku IS NOT NULL AND duplicate_sku IS NULL))
+        )`);
+        await client.query(`CREATE TABLE IF NOT EXISTS product_media_sources(
+          id UUID PRIMARY KEY,local_import_id UUID NOT NULL REFERENCES local_imports(id) ON DELETE CASCADE,
+          sku CHAR(7) NOT NULL REFERENCES products(sku) ON DELETE CASCADE,platform TEXT NOT NULL,relative_path TEXT NOT NULL,
+          normalized_path_key TEXT NOT NULL,is_primary BOOLEAN NOT NULL DEFAULT false,external_sku TEXT,
+          information_file_relative_path TEXT,information_file_sha256 CHAR(64),provider_url TEXT,target_subdirectory TEXT NOT NULL,
+          copy_manifest JSONB NOT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          UNIQUE(local_import_id,normalized_path_key)
+        )`);
+        await client.query('CREATE INDEX IF NOT EXISTS local_imports_sku ON local_imports(sku,created_at DESC)');
+        await client.query('CREATE INDEX IF NOT EXISTS product_media_sources_sku ON product_media_sources(sku,created_at)');
+        await client.query(`INSERT INTO purchase_schema_migrations(id) VALUES('014_local_imports')`);
+      });
+    }
+    const localImportQuery = await this.query<{ id: string }>('SELECT id FROM purchase_schema_migrations WHERE id=$1', ['015_local_import_query']);
+    if (!localImportQuery.rows[0]) {
+      await this.transaction(async (client) => {
+        await client.query('ALTER TABLE local_imports ADD COLUMN IF NOT EXISTS source_platform TEXT');
+        await client.query('ALTER TABLE local_imports ADD COLUMN IF NOT EXISTS import_workflow_label TEXT');
+        await client.query(`UPDATE local_imports li SET source_platform=source.platform
+          FROM (
+            SELECT DISTINCT ON (local_import_id) local_import_id,platform
+            FROM product_media_sources
+            ORDER BY local_import_id,is_primary DESC,created_at,id
+          ) source
+          WHERE source.local_import_id=li.id AND (li.source_platform IS NULL OR BTRIM(li.source_platform)='')`);
+        await client.query(`UPDATE local_imports SET import_workflow_label='本地导入-' || source_platform
+          WHERE source_platform IS NOT NULL AND BTRIM(source_platform)<>''
+            AND (import_workflow_label IS NULL OR BTRIM(import_workflow_label)='')`);
+        await client.query('CREATE INDEX IF NOT EXISTS local_imports_platform_created ON local_imports(source_platform,created_at DESC,id DESC)');
+        await client.query('CREATE INDEX IF NOT EXISTS local_imports_status_created ON local_imports(status,created_at DESC,id DESC)');
+        await client.query('CREATE INDEX IF NOT EXISTS local_imports_created ON local_imports(created_at DESC,id DESC)');
+        await client.query(`INSERT INTO purchase_schema_migrations(id) VALUES('015_local_import_query')`);
+      });
+    }
+    const procurementRetailPrice = await this.query<{ id: string }>('SELECT id FROM purchase_schema_migrations WHERE id=$1', ['016_procurement_retail_price']);
+    if (!procurementRetailPrice.rows[0]) {
+      await this.transaction(async (client) => {
+        await client.query('ALTER TABLE procurement_versions ADD COLUMN IF NOT EXISTS retail_price NUMERIC(14,4)');
+        await client.query('ALTER TABLE procurement_versions DROP CONSTRAINT IF EXISTS procurement_versions_retail_price_nonnegative');
+        await client.query(`ALTER TABLE procurement_versions ADD CONSTRAINT procurement_versions_retail_price_nonnegative
+          CHECK (retail_price IS NULL OR retail_price >= 0)`);
+        await client.query(`INSERT INTO purchase_schema_migrations(id) VALUES('016_procurement_retail_price')`);
+      });
+    }
   }
 
   private async seedDefaultWorkflow(input: WorkflowInput) {
@@ -1161,12 +1446,75 @@ export class PurchaseRepository {
     await this.query(`UPDATE procurement_versions SET download_workflow_code = COALESCE(
       (SELECT code FROM download_workflows WHERE code='E006' LIMIT 1),
       (SELECT code FROM download_workflows WHERE enabled=true AND is_default=true ORDER BY code LIMIT 1)
-    ) WHERE download_workflow_code IS NULL`);
+    ) WHERE download_workflow_code IS NULL
+      AND NOT EXISTS(SELECT 1 FROM local_imports li WHERE li.sku=procurement_versions.sku)`);
   }
 }
 
 async function lockDownloadEnqueue(client: PoolClient) {
   await lockDownloadProjection(client);
+}
+
+async function getLocalImportWithClient(client: Pick<PoolClient, 'query'>, id: string): Promise<LocalImportRecord> {
+  const result = await client.query<SqlRow>(`SELECT li.id,li.idempotency_key,li.sku,li.duplicate_sku,li.status,
+    li.source_platform,li.import_workflow_label,li.source_config_snapshot,li.target_config_snapshot,li.preview_hash,
+    li.retry_count,li.error_code,li.error_message,li.target_folder,li.created_at AS import_created_at,
+    li.updated_at AS import_updated_at,li.completed_at,
+    p.sku AS product_sku,p.product_name,p.created_at AS product_created_at,p.updated_at AS product_updated_at,
+    COALESCE((SELECT jsonb_agg(v.name ORDER BY v.sort_order,v.created_at) FROM product_variants v WHERE v.sku=p.sku),'[]'::jsonb) AS variants,
+    pv.id AS procurement_version_id,pv.version_no,pv.download_workflow_code,pv.purchase_price,pv.retail_price,pv.courier_fee,pv.currency,
+    pv.gross_weight_g,pv.length_cm,pv.width_cm,pv.height_cm,pv.net_weight_g,pv.product_height_cm,pv.product_depth_cm,
+    pv.product_width_cm,pv.transport_mode,pv.provider_url,pv.created_at AS procurement_created_at
+    FROM local_imports li
+    LEFT JOIN products p ON p.sku=COALESCE(li.sku,li.duplicate_sku)
+    LEFT JOIN LATERAL (SELECT * FROM procurement_versions WHERE sku=p.sku ORDER BY version_no DESC LIMIT 1) pv ON true
+    WHERE li.id=$1`, [id]);
+  const row = result.rows[0];
+  if (!row) throw new AppError('NOT_FOUND', '本地导入记录不存在', { id }, 404);
+  const sources = row.sku ? await client.query<SqlRow>(`SELECT id,platform,relative_path,normalized_path_key,is_primary,
+    external_sku,information_file_relative_path,information_file_sha256,provider_url,target_subdirectory,copy_manifest
+    FROM product_media_sources WHERE local_import_id=$1 ORDER BY is_primary DESC,created_at,id`, [id]) : { rows: [] };
+  return toLocalImportRecord(row, sources.rows.map((source) => ({
+      id: source.id, platform: source.platform, relativePath: source.relative_path, normalizedPathKey: source.normalized_path_key,
+      isPrimary: source.is_primary, externalSku: source.external_sku || undefined,
+      informationFileRelativePath: source.information_file_relative_path || undefined,
+      informationFileSha256: source.information_file_sha256 || undefined, providerUrl: source.provider_url || undefined,
+      targetSubdirectory: source.target_subdirectory, copyManifest: source.copy_manifest
+    })));
+}
+
+function toLocalImportRecord(row: SqlRow, sources: LocalImportRecord['sources']): LocalImportRecord {
+  return {
+    id: row.id, idempotencyKey: row.idempotency_key, sku: row.sku || undefined, duplicateSku: row.duplicate_sku || undefined,
+    status: row.status, sourcePlatform: row.source_platform || undefined, importWorkflowLabel: row.import_workflow_label || undefined,
+    sourceConfigSnapshot: row.source_config_snapshot, targetConfigSnapshot: row.target_config_snapshot,
+    previewHash: row.preview_hash, retryCount: Number(row.retry_count), errorCode: row.error_code || undefined,
+    errorMessage: row.error_message || undefined, targetFolder: row.target_folder || undefined,
+    createdAt: new Date(row.import_created_at).toISOString(), updatedAt: new Date(row.import_updated_at).toISOString(),
+    completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : undefined,
+    sources, purchase: row.product_sku ? toLocalImportPurchase(row) : undefined
+  };
+}
+
+function toLocalImportListItem(row: SqlRow): LocalImportListItem {
+  const item = toLocalImportRecord(row, []);
+  Reflect.deleteProperty(item, 'sources');
+  return { ...item, sourceDirectoryCount: Number(row.source_directory_count || 0) };
+}
+
+function toLocalImportPurchase(row: SqlRow) {
+  return {
+    sku: String(row.product_sku), productName: String(row.product_name), variants: Array.isArray(row.variants) ? row.variants : [],
+    createdAt: new Date(row.product_created_at).toISOString(), updatedAt: new Date(row.product_updated_at).toISOString(),
+    procurement: {
+      id: row.procurement_version_id, versionNo: Number(row.version_no), downloadWorkflowCode: row.download_workflow_code || undefined,
+      purchasePrice: row.purchase_price, retailPrice: row.retail_price, courierFee: row.courier_fee, currency: row.currency,
+      grossWeightGrams: row.gross_weight_g, lengthCm: row.length_cm, widthCm: row.width_cm, heightCm: row.height_cm,
+      netWeightGrams: row.net_weight_g, productHeightCm: row.product_height_cm, productDepthCm: row.product_depth_cm,
+      productWidthCm: row.product_width_cm, transportMode: row.transport_mode, providerUrl: row.provider_url,
+      createdAt: row.procurement_created_at ? new Date(row.procurement_created_at).toISOString() : undefined
+    }
+  };
 }
 
 async function lockDownloadProjection(client: PoolClient) {
@@ -1203,7 +1551,8 @@ async function backfillMissingPurchaseWorkflowsWithClient(client: PoolClient): P
   await client.query(`UPDATE procurement_versions SET download_workflow_code = COALESCE(
     (SELECT code FROM download_workflows WHERE code='E006' LIMIT 1),
     (SELECT code FROM download_workflows WHERE enabled=true AND is_default=true ORDER BY code LIMIT 1)
-  ) WHERE download_workflow_code IS NULL`);
+  ) WHERE download_workflow_code IS NULL
+    AND NOT EXISTS(SELECT 1 FROM local_imports li WHERE li.sku=procurement_versions.sku)`);
 }
 
 async function assertWorkflowProjection(client: PoolClient, inputs: WorkflowInput[]): Promise<void> {
@@ -1510,14 +1859,15 @@ async function finalizeBatchIfComplete(client: PoolClient, batchId: string) {
 
 function asRecord(value: unknown): JsonRecord { return value && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : {}; }
 
-async function insertProcurementVersion(client: PoolClient, sku: string, input: PurchaseInput, versionNo: number, downloadWorkflowCode: string) {
+async function insertProcurementVersion(client: PoolClient, sku: string, input: PurchaseInput, versionNo: number, downloadWorkflowCode: string | null) {
   await client.query(`INSERT INTO procurement_versions (
-    id, sku, version_no, download_workflow_code, purchase_price, courier_fee, currency,
+    id, sku, version_no, download_workflow_code, purchase_price, retail_price, courier_fee, currency,
     gross_weight_g, length_cm, width_cm, height_cm,
     net_weight_g, product_height_cm, product_depth_cm, product_width_cm,
     transport_mode, provider_url
-  ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`, [
-    randomUUID(), sku, versionNo, downloadWorkflowCode, input.purchasePrice.trim(), (input.courierFee || '0').trim(), (input.currency || 'CNY').trim().toUpperCase(),
+  ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`, [
+    randomUUID(), sku, versionNo, downloadWorkflowCode, input.purchasePrice.trim(), nullableDecimal(input.retailPrice),
+    (input.courierFee || '0').trim(), (input.currency || 'CNY').trim().toUpperCase(),
     nullableDecimal(input.grossWeightGrams), nullableDecimal(input.lengthCm), nullableDecimal(input.widthCm), nullableDecimal(input.heightCm),
     nullableDecimal(input.netWeightGrams), nullableDecimal(input.productHeightCm), nullableDecimal(input.productDepthCm), nullableDecimal(input.productWidthCm),
     input.transportMode?.trim() || null, input.providerUrl.trim()
@@ -1528,6 +1878,7 @@ function validatePurchase(input: PurchaseInput) {
   if (!input.productName?.trim()) throw new AppError('CONFIG_INVALID', '产品名称不能为空');
   if (input.downloadWorkflowCode !== undefined && !/^E\d{3}$/.test(input.downloadWorkflowCode.trim().toUpperCase())) throw new AppError('CONFIG_INVALID', '下载工作流代码格式无效');
   if (!isDecimal(input.purchasePrice)) throw new AppError('CONFIG_INVALID', '采购价必须是有效数字');
+  if (input.retailPrice != null && input.retailPrice !== '' && !isDecimal(input.retailPrice)) throw new AppError('CONFIG_INVALID', '零售价格必须是有效数字');
   if (input.courierFee != null && input.courierFee !== '' && !isDecimal(input.courierFee)) throw new AppError('CONFIG_INVALID', '快递费必须是有效数字');
   for (const [field, value] of Object.entries({ grossWeightGrams: input.grossWeightGrams, lengthCm: input.lengthCm, widthCm: input.widthCm, heightCm: input.heightCm })) {
     if (value != null && value !== '' && (!isDecimal(value) || Number(value) < 0)) throw new AppError('CONFIG_INVALID', `${field} 必须是非负数字`);
@@ -1648,7 +1999,7 @@ function toProductVariant(row: SqlRow): ProductVariant {
 }
 function toProduct(row: SqlRow) { return { sku: row.sku, productName: row.product_name, variants: Array.isArray(row.variants) ? row.variants : undefined, createdAt: row.created_at, updatedAt: row.updated_at }; }
 function toProcurementVersion(row: SqlRow) { return {
-  id: row.id || row.procurement_version_id, versionNo: Number(row.version_no), downloadWorkflowCode: row.download_workflow_code, purchasePrice: row.purchase_price, courierFee: row.courier_fee, currency: row.currency,
+  id: row.id || row.procurement_version_id, versionNo: Number(row.version_no), downloadWorkflowCode: row.download_workflow_code, purchasePrice: row.purchase_price, retailPrice: row.retail_price, courierFee: row.courier_fee, currency: row.currency,
   grossWeightGrams: row.gross_weight_g, lengthCm: row.length_cm, widthCm: row.width_cm, heightCm: row.height_cm,
   netWeightGrams: row.net_weight_g, productHeightCm: row.product_height_cm, productDepthCm: row.product_depth_cm, productWidthCm: row.product_width_cm,
   transportMode: row.transport_mode, providerUrl: row.provider_url, createdAt: row.created_at

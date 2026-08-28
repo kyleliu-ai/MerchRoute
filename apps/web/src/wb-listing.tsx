@@ -841,7 +841,7 @@ function PurchaseManagedWorkbenchFields({
       description={error
         ? `最新采购信息暂时读取失败，页面显示草稿快照；保存和生成时仍由服务端重新读取。${error.message}`
         : `以下属性不可在 WB 工作台覆盖，保存和生成时读取采购管理最新采购版本${versionNo ? ` V${versionNo}` : ''}。`}
-      action={<Button type="link" href={`/purchases?query=${encodeURIComponent(sku)}`}>前往采购管理</Button>}
+      action={<Button type="link" href={`/purchases/url-download?query=${encodeURIComponent(sku)}`}>前往产品URL下载</Button>}
     />
     {loading ? <Skeleton active paragraph={{ rows: 1 }} /> : <div className="wb-purchase-managed-grid">
       {fields.map((field) => {

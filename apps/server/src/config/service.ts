@@ -26,6 +26,7 @@ import {
   type WorkflowParameters,
   AppError
 } from '@n8n-media-review/shared';
+import { assertStrictDirectory } from '../services/local-import/index.js';
 
 export const getAppDataDir = (): string => {
   if (process.env.APP_DATA_DIR) return path.resolve(process.env.APP_DATA_DIR);
@@ -102,6 +103,9 @@ export class ConfigService {
   async save(input: unknown): Promise<AppConfig> {
     const parsed = appConfigSchema.safeParse(input);
     if (!parsed.success) throw new AppError('CONFIG_INVALID', '配置格式无效', { issues: parsed.error.issues });
+    const localImport = parsed.data.stages.find((stage) => stage.id === 'E000');
+    if (localImport?.inputQueueRoot?.trim()) await assertStrictDirectory(localImport.inputQueueRoot, false, '本地导入来源根目录');
+    if (localImport?.candidateRoot?.trim()) await assertStrictDirectory(localImport.candidateRoot, true, 'E000 候选图片目录');
     await mkdir(this.appDataDir, { recursive: true });
     await this.backupConfigFiles('before-save', false);
     const linked = linkOzonMediaOutputConfig(linkWbMediaOutputConfig(parsed.data));

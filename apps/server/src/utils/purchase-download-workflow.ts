@@ -3,11 +3,12 @@ import { AppError, classifyPurchaseProductUrl, type PurchaseProductUrlClassifica
 type PurchaseDownloadWorkflowInput = {
   providerUrl: string;
   downloadWorkflowCode?: string;
+  retailPrice?: string | null;
 };
 
 export function applyPurchaseUrlDownloadWorkflow<T extends PurchaseDownloadWorkflowInput>(
   input: T
-): T & { downloadWorkflowCode: PurchaseProductUrlClassification['workflowCode'] } {
+): T & { downloadWorkflowCode: PurchaseProductUrlClassification['workflowCode']; retailPrice: null } {
   const providerUrl = typeof input?.providerUrl === 'string' ? input.providerUrl : '';
   const classification = classifyPurchaseProductUrl(providerUrl);
   if (!classification) {
@@ -15,7 +16,7 @@ export function applyPurchaseUrlDownloadWorkflow<T extends PurchaseDownloadWorkf
   }
 
   if (input.downloadWorkflowCode === undefined) {
-    return { ...input, downloadWorkflowCode: classification.workflowCode };
+    return { ...input, downloadWorkflowCode: classification.workflowCode, retailPrice: null };
   }
 
   const actualWorkflowCode = String(input.downloadWorkflowCode).trim().toUpperCase();
@@ -28,5 +29,5 @@ export function applyPurchaseUrlDownloadWorkflow<T extends PurchaseDownloadWorkf
     }, 409);
   }
 
-  return { ...input, downloadWorkflowCode: classification.workflowCode };
+  return { ...input, downloadWorkflowCode: classification.workflowCode, retailPrice: null };
 }
