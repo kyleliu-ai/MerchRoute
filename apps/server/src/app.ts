@@ -55,8 +55,10 @@ import { WbStoreGatewayService } from './services/wb-stores/gateway.js';
 import { WbSourceMediaCleanupService } from './services/wb-source-media/index.js';
 import { WbSourceMediaFiles } from './services/wb-source-media/source-files.js';
 import { LocalImportService, assertStrictDirectory } from './services/local-import/index.js';
+import { createAboutVersionService, type AboutVersionService } from './services/about-version.js';
 
 type Services = {
+  aboutVersion: AboutVersionService;
   config: ConfigService;
   store: StateStore;
   scanner: ScannerService;
@@ -99,6 +101,7 @@ declare module 'fastify' {
 
 export type BuildAppOptions = {
   databaseUrl?: string | null;
+  aboutVersion?: AboutVersionService;
 };
 
 export async function buildApp(options: BuildAppOptions = {}) {
@@ -109,6 +112,10 @@ export async function buildApp(options: BuildAppOptions = {}) {
   const databaseUrl = options.databaseUrl === null ? '' : options.databaseUrl ?? process.env.DATABASE_URL;
   const config = new ConfigService();
   await config.initialize();
+  const aboutVersion = options.aboutVersion ?? createAboutVersionService({
+    repoRoot: path.resolve(import.meta.dirname, '../../..'),
+    configVersion: APP_VERSION
+  });
   const store = new StateStore(config.appDataDir);
   await store.initialize();
   const scanner = new ScannerService(config, store);
@@ -234,7 +241,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const rootDirectory = parseOzonMediaOutputRootTemplate(configuredOzonTemplate).rootDirectory;
     await ozonPublishing.synchronizeRootDirectory(rootDirectory).catch((error) => app.log.warn({ err: error, rootDirectory }, 'OZON 共享媒体根目录启动同步失败'));
   }
-  app.decorate('services', { config, store, scanner, mediaIndex, thumbnails, submissions, purchases, localImports, downloads, shipping, pricing, pricingQuery, productIdentity, wb, wbPresetRepository, wbPresets, wbPublishing, wbTaskStatusSynchronizer, wbAutoPublishRepository, wbAutoPublishing, wbStoreRepository, wbStores, wbStoreGateway, wbSourceMediaCleanup, wbCatalog, ozon, ozonStoreRepository, ozonStores, ozonStoreGateway, ozonSourceMediaCleanup, ozonPublishing, ozonAutoPublishing, ozonCatalog, variantDelivery });
+  app.decorate('services', { aboutVersion, config, store, scanner, mediaIndex, thumbnails, submissions, purchases, localImports, downloads, shipping, pricing, pricingQuery, productIdentity, wb, wbPresetRepository, wbPresets, wbPublishing, wbTaskStatusSynchronizer, wbAutoPublishRepository, wbAutoPublishing, wbStoreRepository, wbStores, wbStoreGateway, wbSourceMediaCleanup, wbCatalog, ozon, ozonStoreRepository, ozonStores, ozonStoreGateway, ozonSourceMediaCleanup, ozonPublishing, ozonAutoPublishing, ozonCatalog, variantDelivery });
   await app.register(cors, { origin: /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/ });
 
   app.setErrorHandler((error, _request, reply) => {
@@ -244,6 +251,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   });
 
   app.get('/api/v1/health', async () => ({ status: 'ok', version: APP_VERSION, appDataDir: config.appDataDir, now: new Date().toISOString() }));
+  app.get('/api/v1/about/version', async () => await aboutVersion.check());
   app.get('/api/v1/config', async () => ({
     config: config.get(),
     readiness: await configReadiness(config),

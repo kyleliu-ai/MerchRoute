@@ -14,8 +14,34 @@ test.describe.serial('E000 local import and E001 delivery', () => {
     await expect(page.getByRole('tab', { name: '导入产品', exact: true })).toHaveAttribute('aria-selected', 'true');
     await expect(page.getByRole('tab', { name: '已导入产品清单' })).toBeVisible();
     await expect(page.locator('.local-import-contract')).toContainText('来源目录');
-    await page.locator('.local-directory-row').filter({ hasText: 'PDD' }).getByRole('button', { name: '打开' }).click();
-    const directoryHeader = page.locator('.local-directory-header');
+    const rootDirectoryResponse = await page.request.get('/api/v1/local-import/directories?path=');
+    expect(rootDirectoryResponse.ok()).toBeTruthy();
+    const rootDirectoryPayload = await rootDirectoryResponse.json() as { directories: Array<{ name: string; childDirectoryCount: number; modifiedAt: string }> };
+    expect(rootDirectoryPayload.directories.map((item) => item.name)).toEqual(['WB', 'PDD']);
+    expect(rootDirectoryPayload.directories.map((item) => item.childDirectoryCount)).toEqual([2, 2]);
+    expect(Date.parse(rootDirectoryPayload.directories[0]!.modifiedAt)).toBeGreaterThan(Date.parse(rootDirectoryPayload.directories[1]!.modifiedAt));
+    await expect(page.locator('.local-directory-row').filter({ hasText: 'adaptation-diagnostics' })).toHaveCount(0);
+    await expect(page.locator('.local-directory-row').filter({ hasText: 'EMPTY-PLATFORM' })).toHaveCount(0);
+    const platformHeader = page.locator('.local-directory-header.is-platform-root-header');
+    await expect(platformHeader).toContainText('平台文件夹');
+    await expect(platformHeader).toContainText('子目录数');
+    await expect(platformHeader).toContainText('最后修改时间');
+    await expect(platformHeader).toContainText('操作');
+    const platformRows = page.locator('.local-directory-row.is-platform-root-row');
+    await expect(platformRows.locator('.directory-name')).toHaveText(['WB', 'PDD']);
+    await expect(platformRows.locator('.local-directory-child-count')).toHaveText(['2', '2']);
+    await expect(platformRows.locator('.local-directory-modified-at').first()).toHaveText(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+    await expect(platformRows.getByRole('checkbox')).toHaveCount(0);
+    await expect(platformRows.getByRole('button', { name: '导入产品媒体' })).toHaveCount(2);
+    await page.setViewportSize({ width: 320, height: 760 });
+    await expect(platformHeader).toBeHidden();
+    await expect(platformRows.first().locator('.local-directory-child-count')).toHaveAttribute('data-label', '子目录数');
+    await expect(platformRows.first().locator('.local-directory-modified-at')).toHaveAttribute('data-label', '最后修改时间');
+    await expect(platformRows.first().getByRole('button', { name: '导入产品媒体' })).toBeVisible();
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await platformRows.filter({ hasText: 'PDD' }).getByRole('button', { name: '导入产品媒体' }).click();
+    const directoryHeader = page.locator('.local-directory-header.is-product-media-header');
     await expect(directoryHeader).toContainText('变体目录');
     await expect(directoryHeader).toContainText('创建日期');
     await expect(directoryHeader).toContainText('平台来源');
@@ -27,7 +53,7 @@ test.describe.serial('E000 local import and E001 delivery', () => {
     expect(directoryPayload.directories.every((item) => !Number.isNaN(Date.parse(item.createdAt)))).toBe(true);
     const mediaRows = page.locator('.local-directory-row.is-product-media-row');
     await expect(mediaRows.locator('.directory-name')).toHaveText(['E2E蓝色', 'E2E红色']);
-    await expect(mediaRows.locator('.local-directory-created-at').first()).toHaveText(/^\d{4}年\d{1,2}月\d{1,2}日$/);
+    await expect(mediaRows.locator('.local-directory-created-at').first()).toHaveText(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
     await expect(mediaRows.locator('.local-directory-platform').first()).toContainText('PDD');
     await page.setViewportSize({ width: 320, height: 760 });
     await expect(directoryHeader).toBeHidden();
@@ -129,7 +155,7 @@ test.describe.serial('E000 local import and E001 delivery', () => {
 
   test('converts RUB retail price with Exchange and requires manual CNY price when Exchange is missing', async ({ page }) => {
     await page.goto('/purchases/local-import');
-    await page.locator('.local-directory-row').filter({ hasText: 'WB' }).getByRole('button', { name: '打开' }).click();
+    await page.locator('.local-directory-row.is-platform-root-row').filter({ hasText: 'WB' }).getByRole('button', { name: '导入产品媒体' }).click();
     await page.getByRole('checkbox', { name: '选择 WB/E2E汇率' }).check();
     await page.getByRole('button', { name: '预览并编辑' }).click();
     await expect(page.getByLabel('零售价格(RUB)')).toHaveValue('1384');

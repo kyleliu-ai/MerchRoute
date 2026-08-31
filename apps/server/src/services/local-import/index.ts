@@ -46,8 +46,11 @@ export type LocalImportDirectoryEntry = {
   relativePath: string;
   platform: string;
   hasChildren: boolean;
+  childDirectoryCount: number;
   createdAt: string;
+  modifiedAt: string;
 };
+type LocalImportDirectorySortMode = 'platform-root' | 'product-media' | 'name';
 type PreviewSnapshot = {
   token: string;
   createdAt: number;
@@ -92,15 +95,22 @@ export class LocalImportService {
         readdir(child.absolutePath, { withFileTypes: true }),
         lstat(child.absolutePath)
       ]);
+      const childDirectoryCount = children.filter((candidate) => candidate.isDirectory() && !candidate.isSymbolicLink() && !isHiddenName(candidate.name)).length;
+      const hasChildren = childDirectoryCount > 0;
+      if (!normalized && !hasChildren) continue;
       directories.push({
         name: entry.name,
         relativePath: childRelative,
         platform: childRelative.split('/')[0]!,
-        hasChildren: children.some((candidate) => candidate.isDirectory() && !candidate.isSymbolicLink() && !isHiddenName(candidate.name)),
-        createdAt: directoryCreatedAt(info)
+        hasChildren,
+        childDirectoryCount,
+        createdAt: directoryCreatedAt(info),
+        modifiedAt: new Date(info.mtimeMs).toISOString()
       });
     }
-    return { path: normalized, configHash, directories: sortLocalImportDirectories(directories, normalized.split('/').filter(Boolean).length === 1) };
+    const depth = normalized.split('/').filter(Boolean).length;
+    const sortMode: LocalImportDirectorySortMode = depth === 0 ? 'platform-root' : depth === 1 ? 'product-media' : 'name';
+    return { path: normalized, configHash, directories: sortLocalImportDirectories(directories, sortMode) };
   }
 
   async preview(input: { directories?: unknown; primaryDirectory?: unknown }): Promise<LocalImportPreview> {
@@ -287,9 +297,12 @@ function directoryCreatedAt(info: Pick<Stats, 'birthtimeMs' | 'mtimeMs'>): strin
   return new Date(timestamp).toISOString();
 }
 
-export function sortLocalImportDirectories(directories: LocalImportDirectoryEntry[], productMediaLevel: boolean): LocalImportDirectoryEntry[] {
+export function sortLocalImportDirectories(directories: LocalImportDirectoryEntry[], mode: LocalImportDirectorySortMode): LocalImportDirectoryEntry[] {
   return [...directories].sort((left, right) => {
-    if (productMediaLevel) {
+    if (mode === 'platform-root') {
+      const modifiedAtDifference = Date.parse(right.modifiedAt) - Date.parse(left.modifiedAt);
+      if (modifiedAtDifference !== 0) return modifiedAtDifference;
+    } else if (mode === 'product-media') {
       const createdAtDifference = Date.parse(right.createdAt) - Date.parse(left.createdAt);
       if (createdAtDifference !== 0) return createdAtDifference;
     }

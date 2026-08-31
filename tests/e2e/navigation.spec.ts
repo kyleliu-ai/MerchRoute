@@ -2,17 +2,25 @@ import { expect, test } from '@playwright/test';
 
 test.describe('左侧业务导航', () => {
   test('按业务分组展示菜单并保持路由归属', async ({ page }) => {
+    await page.route('**/api/v1/about/version', async (route) => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+        repositoryUrl: 'https://github.com/kyleliu-ai/MerchRoute',
+        current: { productVersion: '0.1.0', configVersion: 'v003', commitSha: '7bfb072f548d75744305a2faa38f23722c4b81cf' },
+        available: { source: 'main', label: 'main', commitSha: '4d3e4705ad715b700f385c6fa0348644a4a625a9', url: 'https://github.com/kyleliu-ai/MerchRoute', compareUrl: 'https://github.com/kyleliu-ai/MerchRoute/compare/7bfb072...4d3e470' },
+        status: 'UPDATE_AVAILABLE', aheadBy: 5, checkedAt: '2026-08-31T10:00:00.000Z'
+      }) });
+    });
     await page.goto('/');
 
     const navigation = page.locator('.app-sider .primary-navigation');
     const topLevelItems = navigation.locator(':scope > li');
-    await expect(topLevelItems).toHaveCount(7);
+    await expect(topLevelItems).toHaveCount(8);
     expect(await navigation.evaluate((element) => [...element.children].map((item) => {
       const title = item.classList.contains('ant-menu-submenu')
         ? item.querySelector(':scope > .ant-menu-submenu-title .ant-menu-title-content')
         : item.querySelector(':scope > .ant-menu-title-content');
       return title?.textContent?.trim();
-    }))).toEqual(['采购管理', '图片审核与投递', '上品管理', '售价管理', '运费管理', '系统设置', '消息中心']);
+    }))).toEqual(['采购管理', '图片审核与投递', '上品管理', '售价管理', '运费管理', '系统设置', '消息中心', '关于 MerchRoute']);
 
     const reviewGroup = navigation.locator(':scope > .ant-menu-submenu').filter({ hasText: '图片审核与投递' });
     await expect(reviewGroup).toHaveClass(/ant-menu-submenu-open/);
@@ -74,6 +82,15 @@ test.describe('左侧业务导航', () => {
     await expect(shippingGroup).toHaveClass(/ant-menu-submenu-open/);
     await expect(pricingGroup).not.toHaveClass(/ant-menu-submenu-open/);
     await expect(shippingGroup.locator(':scope > .ant-menu-sub .ant-menu-item .ant-menu-title-content')).toHaveText(['运费计算', '运费模板']);
+
+    const aboutItem = navigation.getByText('关于 MerchRoute', { exact: true }).locator('..');
+    await aboutItem.click();
+    await expect(page).toHaveURL(/\/about$/);
+    await expect(page.getByRole('heading', { name: '铺货运营，从素材到上架一次跑通' })).toBeVisible();
+    await expect(aboutItem).toHaveClass(/ant-menu-item-selected/);
+    await page.reload();
+    await expect(page).toHaveURL(/\/about$/);
+    await expect(aboutItem).toHaveClass(/ant-menu-item-selected/);
   });
 
   test('本地导入页只请求 E000 本地导入接口，旧采购地址保留查询参数和 hash', async ({ page }) => {

@@ -1,6 +1,6 @@
 import path from 'node:path';
 import os from 'node:os';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ConfigService } from '../../config/service.js';
 import type { PurchaseRepository } from '../../repositories/purchases.js';
@@ -28,9 +28,15 @@ describe('LocalImportService', () => {
 
   afterEach(async () => { await rm(root, { recursive: true, force: true }); });
 
-  it('returns directory creation timestamps and sorts only platform media folders newest first', async () => {
-    await mkdir(path.join(sourceRoot, 'Z-platform'));
-    await mkdir(path.join(sourceRoot, 'A-platform'));
+  it('returns only platform roots with media directories and sorts platform media folders newest first', async () => {
+    await mkdir(path.join(sourceRoot, 'Z-platform', 'product-Z'), { recursive: true });
+    await mkdir(path.join(sourceRoot, 'A-platform', 'product-A'), { recursive: true });
+    await mkdir(path.join(sourceRoot, 'EMPTY-platform'));
+    const diagnostics = path.join(sourceRoot, 'adaptation-diagnostics');
+    await mkdir(diagnostics);
+    await writeFile(path.join(diagnostics, 'media-adaptation-PDD-test.json'), '{}');
+    await mkdir(path.join(sourceRoot, '.hidden-platform', 'product-hidden'), { recursive: true });
+    await symlink(path.join(sourceRoot, 'A-platform'), path.join(sourceRoot, 'linked-platform'), process.platform === 'win32' ? 'junction' : 'dir');
     const older = path.join(sourceRoot, 'PDD', 'Z-older');
     const newer = path.join(sourceRoot, 'PDD', 'A-newer');
     await mkdir(older, { recursive: true });
@@ -41,27 +47,43 @@ describe('LocalImportService', () => {
       mkdir(path.join(newer, 'A-detail')),
       mkdir(path.join(newer, '.runtime'))
     ]);
+    const aPlatformModifiedAt = new Date('2026-08-25T08:00:00.000Z');
+    const pddModifiedAt = new Date('2026-08-26T08:00:00.000Z');
+    const zPlatformModifiedAt = new Date('2026-08-27T08:00:00.000Z');
+    await Promise.all([
+      utimes(path.join(sourceRoot, 'A-platform'), aPlatformModifiedAt, aPlatformModifiedAt),
+      utimes(path.join(sourceRoot, 'PDD'), pddModifiedAt, pddModifiedAt),
+      utimes(path.join(sourceRoot, 'Z-platform'), zPlatformModifiedAt, zPlatformModifiedAt)
+    ]);
     const service = new LocalImportService(config as unknown as ConfigService, {} as PurchaseRepository, vi.fn());
 
     const rootDirectories = await service.listDirectories();
     const mediaDirectories = await service.listDirectories('PDD');
     const childDirectories = await service.listDirectories('PDD/A-newer');
 
-    expect(rootDirectories.directories.map((item) => item.name)).toEqual(['A-platform', 'PDD', 'Z-platform']);
-    expect(rootDirectories.directories.every((item) => !Number.isNaN(Date.parse(item.createdAt)))).toBe(true);
+    expect(rootDirectories.directories.map((item) => item.name)).toEqual(['Z-platform', 'PDD', 'A-platform']);
+    expect(rootDirectories.directories.map((item) => item.childDirectoryCount)).toEqual([1, 2, 1]);
+    expect(rootDirectories.directories.every((item) => !Number.isNaN(Date.parse(item.createdAt)) && !Number.isNaN(Date.parse(item.modifiedAt)))).toBe(true);
+    expect(rootDirectories.directories.map((item) => item.modifiedAt)).toEqual([
+      zPlatformModifiedAt.toISOString(), pddModifiedAt.toISOString(), aPlatformModifiedAt.toISOString()
+    ]);
     expect(mediaDirectories.directories.map((item) => item.name)).toEqual(['A-newer', 'Z-older']);
+    expect(mediaDirectories.directories[0]!.childDirectoryCount).toBe(2);
     expect(Date.parse(mediaDirectories.directories[0]!.createdAt)).toBeGreaterThan(Date.parse(mediaDirectories.directories[1]!.createdAt));
     expect(childDirectories.directories.map((item) => item.name)).toEqual(['A-detail', 'Z-detail']);
   });
 
   it('uses the directory name as a stable ascending tie-breaker', () => {
     const createdAt = '2026-08-27T08:00:00.000Z';
+    const modifiedAt = '2026-08-28T08:00:00.000Z';
     const entries: LocalImportDirectoryEntry[] = [
-      { name: 'Z-R1', relativePath: 'PDD/Z-R1', platform: 'PDD', hasChildren: true, createdAt },
-      { name: 'A-R1', relativePath: 'PDD/A-R1', platform: 'PDD', hasChildren: true, createdAt }
+      { name: 'Z-R1', relativePath: 'PDD/Z-R1', platform: 'PDD', hasChildren: true, childDirectoryCount: 1, createdAt, modifiedAt },
+      { name: 'A-R1', relativePath: 'PDD/A-R1', platform: 'PDD', hasChildren: true, childDirectoryCount: 1, createdAt, modifiedAt }
     ];
 
-    expect(sortLocalImportDirectories(entries, true).map((item) => item.name)).toEqual(['A-R1', 'Z-R1']);
+    expect(sortLocalImportDirectories(entries, 'product-media').map((item) => item.name)).toEqual(['A-R1', 'Z-R1']);
+    expect(sortLocalImportDirectories(entries, 'platform-root').map((item) => item.name)).toEqual(['A-R1', 'Z-R1']);
+    expect(sortLocalImportDirectories(entries, 'name').map((item) => item.name)).toEqual(['A-R1', 'Z-R1']);
     expect(entries.map((item) => item.name)).toEqual(['Z-R1', 'A-R1']);
   });
 

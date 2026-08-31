@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowDownOutlined, ArrowLeftOutlined, ArrowRightOutlined, ArrowUpOutlined, CheckCircleOutlined, ClockCircleOutlined, CloudUploadOutlined,
-  ApiOutlined, BellOutlined, CalculatorOutlined, CloudDownloadOutlined, DatabaseOutlined, DeleteOutlined, EditOutlined, EyeOutlined, FolderOpenOutlined, HolderOutlined, MenuFoldOutlined, MenuUnfoldOutlined, MoneyCollectOutlined,
+  ApiOutlined, BellOutlined, CalculatorOutlined, CloudDownloadOutlined, DatabaseOutlined, DeleteOutlined, EditOutlined, EyeOutlined, FolderOpenOutlined, HolderOutlined, InfoCircleOutlined, MenuFoldOutlined, MenuUnfoldOutlined, MoneyCollectOutlined,
   NotificationOutlined, PictureOutlined, PlusOutlined, ReloadOutlined, SaveOutlined, SearchOutlined, SettingOutlined, ShopOutlined, VerticalAlignTopOutlined, VideoCameraOutlined
 } from '@ant-design/icons';
 import {
@@ -23,6 +23,7 @@ import { ShippingCalculatorPage, ShippingTemplatesPage } from './shipping';
 import { PricingCalculatorPage, PricingQueryPage, PricingTemplatesPage } from './pricing';
 import { WbListingPage } from './wb-listing';
 import { OzonListingPage } from './ozon-listing';
+import { AboutPage } from './about';
 import {
   E001VariantColorPassport,
   E001VariantGroupStatus,
@@ -95,7 +96,8 @@ const navigationItems: MenuProps['items'] = [
     ]
   },
   { key: '/settings', icon: <SettingOutlined />, label: '系统设置' },
-  { key: '/notifications', icon: <BellOutlined />, label: '消息中心' }
+  { key: '/notifications', icon: <BellOutlined />, label: '消息中心' },
+  { key: '/about', icon: <InfoCircleOutlined />, label: '关于 MerchRoute' }
 ];
 
 function resolveMenuKey(pathname: string): string {
@@ -110,6 +112,7 @@ function resolveMenuKey(pathname: string): string {
   if (pathname.startsWith('/shipping')) return '/shipping';
   if (pathname.startsWith('/purchases')) return '/purchases/url-download';
   if (pathname.startsWith('/notifications')) return '/notifications';
+  if (pathname.startsWith('/about')) return '/about';
   if (pathname.startsWith('/pending')) return '/pending';
   if (pathname.startsWith('/history')) return '/history';
   if (pathname.startsWith('/settings')) return '/settings';
@@ -581,6 +584,7 @@ export function App() {
             <Route path="/purchases/local-import" element={<PurchaseLocalImportPage />} />
             <Route path="/purchases/url-download" element={<PurchasePage />} />
             <Route path="/notifications" element={<NotificationsPage />} />
+            <Route path="/about" element={<AboutPage />} />
             <Route path="/listing/wb" element={<WbListingPage />} />
             <Route path="/listing/ozon" element={<OzonListingPage />} />
             <Route path="/shipping" element={<ShippingCalculatorPage />} />
@@ -1924,13 +1928,9 @@ const localImportStatusMeta: Record<LocalImportRecord['status'], { label: string
   COPY_FAILED_RETRYABLE: { label: '复制失败可重试', color: 'red' }
 };
 
-const localImportDirectoryDateFormatter = new Intl.DateTimeFormat('zh-CN', {
-  year: 'numeric', month: 'long', day: 'numeric'
-});
-
 function formatLocalImportDirectoryDate(value: string): string {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? '—' : localImportDirectoryDateFormatter.format(date);
+  const date = dayjs(value);
+  return date.isValid() ? date.format('YYYY-MM-DD HH:mm') : '—';
 }
 
 function PurchaseLocalImportPage() {
@@ -2002,6 +2002,7 @@ function LocalImportCreateView({ onViewImported }: { onViewImported: (sku: strin
     resetPreview();
   };
   const pathParts = currentPath ? currentPath.split('/') : [];
+  const isSourceRoot = pathParts.length === 0;
   const isPlatformDirectory = pathParts.length === 1;
   const error = directories.error instanceof ApiError ? directories.error : undefined;
   return <div className="page-stack local-import-create-view">
@@ -2011,16 +2012,21 @@ function LocalImportCreateView({ onViewImported }: { onViewImported: (sku: strin
         <div className="local-import-browser-layout">
           <div className="local-import-browser">
             <Breadcrumb items={[{ title: <button className="path-crumb" onClick={() => setCurrentPath('')}>来源根目录</button> }, ...pathParts.map((part, index) => ({ title: <button className="path-crumb" onClick={() => setCurrentPath(pathParts.slice(0, index + 1).join('/'))}>{part}</button> }))]} />
-            <div className={`local-directory-list${isPlatformDirectory ? ' is-product-media-list' : ''}`}>
-              {isPlatformDirectory && !directories.isLoading && Boolean(directories.data?.directories.length) && <div className="local-directory-header" aria-hidden="true">
+            <div className={`local-directory-list${isSourceRoot ? ' is-platform-root-list' : ''}${isPlatformDirectory ? ' is-product-media-list' : ''}`}>
+              {isSourceRoot && !directories.isLoading && Boolean(directories.data?.directories.length) && <div className="local-directory-header is-platform-root-header" aria-hidden="true">
+                <span>平台文件夹</span><span>子目录数</span><span className="modified-date-heading">最后修改时间 <ArrowDownOutlined /></span><span>操作</span>
+              </div>}
+              {isPlatformDirectory && !directories.isLoading && Boolean(directories.data?.directories.length) && <div className="local-directory-header is-product-media-header" aria-hidden="true">
                 <span /><span>变体目录</span><span className="creation-date-heading">创建日期 <ArrowDownOutlined /></span><span>平台来源</span><span>操作</span>
               </div>}
-              {directories.isLoading ? <Skeleton active paragraph={{ rows: 3 }} /> : directories.data?.directories.length ? directories.data.directories.map((directory) => <div className={`local-directory-row${isPlatformDirectory ? ' is-product-media-row' : ''}`} key={directory.relativePath}>
-                <Checkbox checked={selected.includes(directory.relativePath)} onChange={(event) => toggleDirectory(directory.relativePath, event.target.checked)} aria-label={`选择 ${directory.relativePath}`} />
+              {directories.isLoading ? <Skeleton active paragraph={{ rows: 3 }} /> : directories.data?.directories.length ? directories.data.directories.map((directory) => <div className={`local-directory-row${isSourceRoot ? ' is-platform-root-row' : ''}${isPlatformDirectory ? ' is-product-media-row' : ''}`} key={directory.relativePath}>
+                {!isSourceRoot && <Checkbox checked={selected.includes(directory.relativePath)} onChange={(event) => toggleDirectory(directory.relativePath, event.target.checked)} aria-label={`选择 ${directory.relativePath}`} />}
                 <div className="local-directory-identity"><FolderOpenOutlined /><button className="directory-name" onClick={() => directory.hasChildren ? setCurrentPath(directory.relativePath) : undefined}>{directory.name}</button></div>
+                {isSourceRoot && <span className="local-directory-child-count" data-label="子目录数">{directory.childDirectoryCount}</span>}
+                {isSourceRoot && <time className="local-directory-modified-at" dateTime={directory.modifiedAt} data-label="最后修改时间">{formatLocalImportDirectoryDate(directory.modifiedAt)}</time>}
                 {isPlatformDirectory && <time className="local-directory-created-at" dateTime={directory.createdAt} data-label="创建日期">{formatLocalImportDirectoryDate(directory.createdAt)}</time>}
-                <div className="local-directory-platform" data-label="平台来源"><Tag>{directory.platform}</Tag></div>
-                <div className="local-directory-action" data-label="操作">{directory.hasChildren && <Button type="link" size="small" onClick={() => setCurrentPath(directory.relativePath)}>打开</Button>}</div>
+                {!isSourceRoot && <div className="local-directory-platform" data-label="平台来源"><Tag>{directory.platform}</Tag></div>}
+                <div className="local-directory-action" data-label="操作">{directory.hasChildren && <Button type="link" size="small" onClick={() => setCurrentPath(directory.relativePath)}>{isSourceRoot ? '导入产品媒体' : '打开'}</Button>}</div>
               </div>) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前目录没有可选子目录" />}
             </div>
           </div>

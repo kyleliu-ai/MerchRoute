@@ -357,7 +357,10 @@ export type PurchaseInput = {
   lengthCm?: string | null; widthCm?: string | null; heightCm?: string | null; netWeightGrams?: string | null;
   productHeightCm?: string | null; productDepthCm?: string | null; productWidthCm?: string | null; providerUrl: string;
 };
-export type LocalImportDirectory = { name: string; relativePath: string; platform: string; hasChildren: boolean; createdAt: string };
+export type LocalImportDirectory = {
+  name: string; relativePath: string; platform: string; hasChildren: boolean; childDirectoryCount: number;
+  createdAt: string; modifiedAt: string;
+};
 export type LocalImportPreview = {
   token: string; previewHash: string; sourceConfigHash: string; targetConfigHash: string; expiresAt: string;
   sourcePlatform: string; importWorkflowLabel: string;
@@ -838,6 +841,29 @@ export type MediaIndexEventHandlers = {
   onError?: () => void;
 };
 
+export type AboutVersionStatus = 'UPDATE_AVAILABLE' | 'UP_TO_DATE' | 'LOCAL_AHEAD' | 'DIVERGED' | 'UNAVAILABLE';
+
+export type AboutVersionInfo = {
+  repositoryUrl: string;
+  current: {
+    productVersion: string;
+    configVersion: string;
+    commitSha?: string;
+  };
+  available: {
+    source: 'release' | 'main';
+    label: string;
+    commitSha: string;
+    publishedAt?: string;
+    url: string;
+    compareUrl?: string;
+  } | null;
+  status: AboutVersionStatus;
+  aheadBy: number;
+  checkedAt: string;
+  error?: string;
+};
+
 export function connectMediaIndexEvents({ onState, onOpen, onError }: MediaIndexEventHandlers): () => void {
   if (typeof EventSource === 'undefined') {
     onError?.();
@@ -864,6 +890,7 @@ export function connectMediaIndexEvents({ onState, onOpen, onError }: MediaIndex
 
 export const api = {
   health: () => request<{ status: string; version: string; appDataDir: string }>('/api/v1/health'),
+  aboutVersion: () => request<AboutVersionInfo>('/api/v1/about/version'),
   config: () => request<ConfigView>('/api/v1/config'),
   saveConfig: (config: AppConfig) => request<ConfigView>('/api/v1/config', { method: 'PUT', body: JSON.stringify(config) }),
   initializeWbPublishing: (input: WbPublishingConfig) => request<{ config: WbAppConfig; wbPublishingReadiness: WbPublishingReadiness }>('/api/v1/config/wb-publishing/initialize', { method: 'POST', body: JSON.stringify(input) }),
