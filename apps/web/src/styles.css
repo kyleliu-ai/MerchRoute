@@ -817,17 +817,19 @@ button, input { font: inherit; }
 .local-import-workflow-label .ant-tag { margin-inline-end: 0; }
 .local-directory-list { min-height: 190px; margin-top: 14px; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: #f9fbfc; }
 .local-directory-header, .local-directory-row.is-product-media-row { grid-template-columns: 24px minmax(210px, 1fr) minmax(132px, .42fr) minmax(96px, .28fr) minmax(56px, auto); }
+.local-directory-header.is-platform-root-header, .local-directory-row.is-platform-root-row { grid-template-columns: minmax(170px, 1fr) minmax(82px, .24fr) minmax(150px, .46fr) minmax(112px, auto); }
 .local-directory-header { display: grid; align-items: center; gap: 10px; min-height: 40px; padding: 8px 12px; color: #627488; border-bottom: 1px solid #d8e4e7; background: #edf5f6; font-size: 11px; font-weight: 750; letter-spacing: .04em; }
-.local-directory-header .creation-date-heading { display: inline-flex; align-items: center; gap: 5px; color: #0f6772; }
-.local-directory-header .creation-date-heading .anticon { font-size: 9px; }
+.local-directory-header .creation-date-heading, .local-directory-header .modified-date-heading { display: inline-flex; align-items: center; gap: 5px; color: #0f6772; }
+.local-directory-header .creation-date-heading .anticon, .local-directory-header .modified-date-heading .anticon { font-size: 9px; }
 .local-directory-row { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto auto; align-items: center; gap: 8px; min-height: 48px; padding: 7px 12px; border-bottom: 1px solid var(--line); }
-.local-directory-row.is-product-media-row { gap: 10px; min-height: 58px; background: #fff; }
+.local-directory-row.is-product-media-row, .local-directory-row.is-platform-root-row { gap: 10px; min-height: 58px; background: #fff; }
 .local-directory-row:last-child { border-bottom: 0; }
 .local-directory-row:hover { background: #f3fafb; }
 .local-directory-identity { display: flex; min-width: 0; align-items: center; gap: 9px; }
 .local-directory-identity > .anticon { flex: 0 0 auto; color: #1796a5; font-size: 16px; }
 .local-directory-identity .directory-name { min-width: 0; overflow: hidden; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
-.local-directory-created-at { color: #42566d; font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.local-directory-created-at, .local-directory-modified-at, .local-directory-child-count { color: #42566d; font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.local-directory-child-count { color: #0f6772; font-weight: 700; }
 .local-directory-platform .ant-tag { margin-inline-end: 0; color: #17616a; border-color: #b7dde2; background: #edf9fa; }
 .local-directory-action { min-width: 0; }
 .local-directory-action .ant-btn { padding-inline: 0; font-weight: 650; }
@@ -884,14 +886,19 @@ button, input { font: inherit; }
   .local-directory-header { display: none; }
   .local-directory-row { grid-template-columns: 22px minmax(0, 1fr) auto; padding: 10px 8px; }
   .local-directory-row:not(.is-product-media-row) .local-directory-action { grid-column: 2 / -1; }
+  .local-directory-row.is-platform-root-row { grid-template-columns: minmax(0, 1fr); align-items: start; gap: 7px; padding-block: 12px; }
+  .local-directory-row.is-platform-root-row .local-directory-identity,
+  .local-directory-row.is-platform-root-row .local-directory-child-count,
+  .local-directory-row.is-platform-root-row .local-directory-modified-at,
+  .local-directory-row.is-platform-root-row .local-directory-action { grid-column: 1 / -1; }
   .local-directory-row.is-product-media-row { grid-template-columns: 22px minmax(0, 1fr); align-items: start; gap: 7px 9px; padding-block: 12px; }
   .local-directory-row.is-product-media-row > .ant-checkbox-wrapper { grid-row: 1 / span 4; margin-top: 2px; }
   .local-directory-row.is-product-media-row .local-directory-identity { grid-column: 2 / -1; }
   .local-directory-row.is-product-media-row .local-directory-created-at { grid-column: 2 / -1; }
   .local-directory-row.is-product-media-row .local-directory-platform { grid-column: 2 / -1; }
   .local-directory-row.is-product-media-row .local-directory-action { grid-column: 2 / -1; }
-  .local-directory-created-at, .local-directory-platform, .local-directory-action { display: flex; min-width: 0; align-items: center; gap: 6px; }
-  .local-directory-created-at::before, .local-directory-platform::before, .local-directory-action::before { flex: 0 0 auto; color: #8593a1; content: attr(data-label); font-size: 9px; font-weight: 700; letter-spacing: .04em; }
+  .local-directory-created-at, .local-directory-modified-at, .local-directory-child-count, .local-directory-platform, .local-directory-action { display: flex; min-width: 0; align-items: center; gap: 6px; }
+  .local-directory-created-at::before, .local-directory-modified-at::before, .local-directory-child-count::before, .local-directory-platform::before, .local-directory-action::before { flex: 0 0 auto; color: #8593a1; content: attr(data-label); font-size: 9px; font-weight: 700; letter-spacing: .04em; }
   .local-directory-action .ant-btn { min-height: 24px; height: 24px; }
   .local-import-contract { gap: 5px; padding-inline: 10px; font-size: 12px; }
   .local-import-price-flow > .ant-form-item { padding: 12px; }

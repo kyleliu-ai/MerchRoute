@@ -12,6 +12,16 @@ describe.sequential('review and submission integration', () => {
   let appData: string;
   let config: AppConfig;
   let app: Awaited<ReturnType<typeof buildApp>>;
+  const aboutVersion = {
+    check: vi.fn(async () => ({
+      repositoryUrl: 'https://github.com/kyleliu-ai/MerchRoute',
+      current: { productVersion: '0.1.0', configVersion: 'v003', commitSha: '7bfb072f548d75744305a2faa38f23722c4b81cf' },
+      available: { source: 'main' as const, label: 'main', commitSha: '4d3e4705ad715b700f385c6fa0348644a4a625a9', url: 'https://github.com/kyleliu-ai/MerchRoute' },
+      status: 'UPDATE_AVAILABLE' as const,
+      aheadBy: 5,
+      checkedAt: '2026-08-31T10:00:00.000Z'
+    }))
+  };
 
   beforeAll(async () => {
     root = await mkdtemp(path.join(os.tmpdir(), 'n8n-review-v001-'));
@@ -25,9 +35,21 @@ describe.sequential('review and submission integration', () => {
     await createProduct(config.stages[3]!.candidateRoot!, '测试套图A', ['scenePrompt01/image_01.png', 'scenePrompt02/image_02.png']);
     await writeTaskContext(config.stages[3]!.candidateRoot!, '测试套图A');
     process.env.APP_DATA_DIR = appData;
-    app = await buildApp({ databaseUrl: null });
+    app = await buildApp({ databaseUrl: null, aboutVersion });
     await app.services.mediaIndex.refreshAll();
   }, 30_000);
+
+  it('serves the read-only MerchRoute version summary', async () => {
+    const response = await app.inject({ method: 'GET', url: '/api/v1/about/version' });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      current: { productVersion: '0.1.0', configVersion: 'v003' },
+      available: { source: 'main', label: 'main' },
+      status: 'UPDATE_AVAILABLE',
+      aheadBy: 5
+    });
+    expect(aboutVersion.check).toHaveBeenCalledOnce();
+  });
 
   afterAll(async () => {
     await app?.close();

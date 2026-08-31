@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, rm, utimes, writeFile } from 'node:fs/promises';
 import sharp from 'sharp';
 import dotenv from 'dotenv';
 import { Pool } from 'pg';
@@ -130,6 +130,10 @@ export default async function globalSetup(): Promise<void> {
   const directories = config.stages.flatMap((stage) => [stage.inputQueueRoot, stage.candidateRoot, stage.approvedArchiveRoot, stage.outputRoot, ...stage.targets.map((target) => target.targetQueueRoot)]).filter((item): item is string => Boolean(item));
   await Promise.all([...new Set(directories)].map((directory) => mkdir(directory, { recursive: true })));
   const localSource = config.stages.find((stage) => stage.id === 'E000')!.inputQueueRoot!;
+  const diagnosticsDirectory = path.join(localSource, 'adaptation-diagnostics');
+  await mkdir(diagnosticsDirectory, { recursive: true });
+  await writeFile(path.join(diagnosticsDirectory, 'media-adaptation-PDD-e2e.json'), '{}', 'utf8');
+  await mkdir(path.join(localSource, 'EMPTY-PLATFORM'), { recursive: true });
   await createLocalImportSource(localSource, 'E2E红色', true, '#087f8c');
   await createLocalImportSource(localSource, 'E2E蓝色', false, '#245db8');
   await createLocalImportPriceSource(localSource, 'E2E汇率', {
@@ -138,6 +142,12 @@ export default async function globalSetup(): Promise<void> {
   await createLocalImportPriceSource(localSource, 'E2E缺少汇率', {
     sellingPrice: 1200, currencyType: 'RUB', productUrl: 'https://example.com/e2e-local-import-rub-missing'
   });
+  const pddModifiedAt = new Date('2026-08-28T02:00:00.000Z');
+  const wbModifiedAt = new Date('2026-08-29T02:00:00.000Z');
+  await Promise.all([
+    utimes(path.join(localSource, 'PDD'), pddModifiedAt, pddModifiedAt),
+    utimes(path.join(localSource, 'WB'), wbModifiedAt, wbModifiedAt)
+  ]);
   await createProduct(config.stages.find((stage) => stage.id === 'E006')!.candidateRoot!, 'E2E-测试产品A', ['主图/image_01.png', '详情图/image_02.png']);
   await createProduct(config.stages.find((stage) => stage.id === 'E006')!.candidateRoot!, 'E2E-预览切换', [
     { relativePath: '预览组/01-portrait.png', width: 180, height: 320 },
