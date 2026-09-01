@@ -1,8 +1,33 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
-import { appConfigSchema, chineseCountryCatalog, chineseCountryNameToCode, classifyPurchaseProductUrl, commercePlatformInputSchema, countryCodeToChineseLabel, countryCodeToChineseName, createDefaultConfig, createDefaultWorkflowParameters, E001_VARIANT_MAX_IMAGE_COUNT, ERROR_CODES, latestWbMediaDeliveryBatch, limitWbDescription, MEDIA_INDEX_STATUSES, normalizeWbComparablePath, normalizeWbDescription, pricingProductQueryInputSchema, pricingTemplateDefinitionSchema, resolveCountryCode, shippingCalculationInputSchema, SUBMISSION_STEPS, WATCHER_STATUSES, WB_DESCRIPTION_MAX_LENGTH, wbFormConfigSchema, wbListingDraftUpdateSchema, wbListingPresetDefinitionSchema, wbMediaMatchesVariant, wbProductV2Schema, withWorkflowProductIdentity, withWorkflowRuntimeParameterPlaceholders, workflowParameterFileName, workflowParameterOptionsFileName } from './index.js';
+import { appConfigSchema, chineseCountryCatalog, chineseCountryNameToCode, classifyPurchaseProductUrl, commercePlatformInputSchema, countryCodeToChineseLabel, countryCodeToChineseName, createDefaultConfig, createDefaultWorkflowParameters, E001_VARIANT_MAX_IMAGE_COUNT, ERROR_CODES, latestWbMediaDeliveryBatch, limitWbDescription, LOCAL_IMPORT_PRODUCT_NAME_MAX_LENGTH, MEDIA_INDEX_STATUSES, normalizeWbComparablePath, normalizeWbDescription, pricingProductQueryInputSchema, pricingTemplateDefinitionSchema, resolveCountryCode, shippingCalculationInputSchema, SUBMISSION_STEPS, validateLocalImportProductName, WATCHER_STATUSES, WB_DESCRIPTION_MAX_LENGTH, wbFormConfigSchema, wbListingDraftUpdateSchema, wbListingPresetDefinitionSchema, wbMediaMatchesVariant, wbProductV2Schema, withWorkflowProductIdentity, withWorkflowRuntimeParameterPlaceholders, workflowParameterFileName, workflowParameterOptionsFileName } from './index.js';
 import type { MediaIndexState, MediaIndexStatus, StageSummary, StageView, WatcherStatus } from './index.js';
 
 describe('shared contracts', () => {
+  it.each([
+    '女士单肩包',
+    '女士单肩包2',
+    '女士单肩包（大号）2',
+    '新款，轻便！女包《夏季》【特别款】—…·'
+  ])('accepts the local-import product name %s', (value) => {
+    expect(validateLocalImportProductName(value)).toMatchObject({ valid: true, value });
+  });
+
+  it.each([
+    ['', 'REQUIRED'],
+    ['E2E本地导入包', 'INVALID_CHARACTERS'],
+    ['本地 导入包', 'INVALID_CHARACTERS'],
+    ['本地导入包🎒', 'INVALID_CHARACTERS'],
+    ['本地导入包-', 'INVALID_CHARACTERS'],
+    ['包'.repeat(LOCAL_IMPORT_PRODUCT_NAME_MAX_LENGTH + 1), 'TOO_LONG']
+  ])('rejects the local-import product name %s', (value, issue) => {
+    expect(validateLocalImportProductName(value)).toMatchObject({ valid: false, issue });
+  });
+
+  it('counts Unicode code points, trims outer whitespace and normalizes NFC without truncating', () => {
+    expect(validateLocalImportProductName('包'.repeat(LOCAL_IMPORT_PRODUCT_NAME_MAX_LENGTH))).toMatchObject({ valid: true, length: 20 });
+    expect(validateLocalImportProductName('  神奇商品2（新）  ')).toEqual({ valid: true, value: '神奇商品2（新）', length: 8 });
+  });
+
   it('shares backward-compatible stage summaries with media index state', () => {
     expect(MEDIA_INDEX_STATUSES).toEqual(['DISABLED', 'WARMING', 'READY', 'REFRESHING', 'STALE', 'ERROR']);
     expect(WATCHER_STATUSES).toEqual(['ACTIVE', 'STARTING', 'DEGRADED', 'UNAVAILABLE', 'DISABLED']);

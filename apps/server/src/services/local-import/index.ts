@@ -2,7 +2,7 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { constants, type Stats } from 'node:fs';
 import { access, copyFile, lstat, mkdir, readFile, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
-import { AppError, IMAGE_EXTENSIONS, type StageConfig } from '@n8n-media-review/shared';
+import { AppError, IMAGE_EXTENSIONS, validateLocalImportProductName, type StageConfig } from '@n8n-media-review/shared';
 import { Decimal } from 'decimal.js';
 import type { ConfigService } from '../../config/service.js';
 import {
@@ -499,7 +499,7 @@ function validateEditedFields(value: unknown, fallback: ProductFields): ProductF
   const providerUrl = requiredText(input.providerUrl ?? fallback.providerUrl, '商品 URL');
   try { new URL(providerUrl); } catch { throw new AppError('LOCAL_IMPORT_INFORMATION_INVALID', '产品信息中的商品 URL 无效', undefined, 409); }
   return {
-    productName: requiredText(input.productName ?? fallback.productName, '产品名称'),
+    productName: requiredLocalImportProductName(input.productName ?? fallback.productName),
     purchasePrice: requiredDecimal(input.purchasePrice ?? fallback.purchasePrice, '国内采购价'),
     retailPrice: fallback.retailPrice,
     currency: 'CNY',
@@ -517,6 +517,15 @@ function validateEditedFields(value: unknown, fallback: ProductFields): ProductF
 }
 
 function requiredText(value: unknown, field: string) { const text = optionalText(value); if (!text) throw new AppError('LOCAL_IMPORT_INFORMATION_INVALID', `${field}不能为空`, undefined, 409); return text; }
+function requiredLocalImportProductName(value: unknown) {
+  const validation = validateLocalImportProductName(value);
+  if (!validation.valid) {
+    throw new AppError('LOCAL_IMPORT_INFORMATION_INVALID', validation.message, {
+      field: 'productName', issue: validation.issue, actualLength: validation.length
+    }, 409);
+  }
+  return validation.value;
+}
 function optionalText(value: unknown) { return value == null ? undefined : String(value).trim() || undefined; }
 function requiredDecimal(value: unknown, field: string) { const decimal = optionalDecimal(value); if (decimal === undefined) throw new AppError('LOCAL_IMPORT_INFORMATION_INVALID', `${field}必须是有效数字`, undefined, 409); return decimal; }
 function optionalDecimal(value: unknown) { if (value == null || value === '') return undefined; const number = Number(value); return Number.isFinite(number) && number >= 0 ? String(value).trim() : undefined; }

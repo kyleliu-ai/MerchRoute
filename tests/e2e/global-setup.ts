@@ -223,7 +223,7 @@ async function createLocalImportPriceSource(root: string, name: string, price: {
   await sharp({ create: { width: 160, height: 160, channels: 3, background: '#087f8c' } }).png().toFile(path.join(directory, '主图', 'image.png'));
   await writeFile(path.join(directory, 'productInformation-sku.json'), JSON.stringify({
     SKU: `external-${name}`,
-    productName: `${name}产品`,
+    productName: `${name.replace(/^E2E/, '')}产品`,
     sellingPrice: price.sellingPrice,
     currencyType: price.currencyType,
     ...(price.Exchange == null ? {} : { Exchange: price.Exchange }),

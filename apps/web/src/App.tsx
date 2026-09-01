@@ -15,7 +15,7 @@ import type { MenuProps } from 'antd';
 import type {
   AppConfig, FolderTreeNode, MediaIndexState, MediaIndexStatus, ProductTask, StageConfig, StageSummary, StageView, VariantSelectionGroup, WorkflowGroup, WorkflowParameterOptions, WorkflowParameterType, WorkflowParameterValue, WorkflowParameters
 } from '@n8n-media-review/shared';
-import { classifyPurchaseProductUrl, DEPRECATED_OUTPUT_ROOT_STAGE_IDS, E001_VARIANT_MAX_IMAGE_COUNT, WORKFLOW_RUNTIME_PARAMETER_NAMES } from '@n8n-media-review/shared';
+import { classifyPurchaseProductUrl, DEPRECATED_OUTPUT_ROOT_STAGE_IDS, E001_VARIANT_MAX_IMAGE_COUNT, LOCAL_IMPORT_PRODUCT_NAME_MAX_LENGTH, validateLocalImportProductName, WORKFLOW_RUNTIME_PARAMETER_NAMES } from '@n8n-media-review/shared';
 import dayjs, { type Dayjs } from 'dayjs';
 import { api, ApiError, type DownloadWorkflow, type LocalImportPreview, type LocalImportRecord, type LocalImportListItem, type PathValidation, type PendingView, type PurchaseDetail, type PurchaseDownloadBatch, type PurchaseInput, type PurchaseSummary, type SubmissionHistoryQuery, type TaskNotification } from './api/client';
 import { CopyValueButton } from './copy-value';
@@ -50,7 +50,8 @@ const navigationItems: MenuProps['items'] = [
     popupClassName: 'primary-navigation-popup',
     children: [
       { key: '/purchases/local-import', label: '本地导入图片' },
-      { key: '/purchases/url-download', label: '产品URL下载' }
+      { key: '/purchases/url-download', label: '产品URL下载' },
+      { key: '/purchases/query', label: '采购商品查询' }
     ]
   },
   {
@@ -103,6 +104,7 @@ const navigationItems: MenuProps['items'] = [
 function resolveMenuKey(pathname: string): string {
   if (pathname.startsWith('/purchases/local-import')) return '/purchases/local-import';
   if (pathname.startsWith('/purchases/url-download')) return '/purchases/url-download';
+  if (pathname.startsWith('/purchases/query')) return '/purchases/query';
   if (pathname.startsWith('/listing/ozon')) return '/listing/ozon';
   if (pathname.startsWith('/listing/wb')) return '/listing/wb';
   if (pathname.startsWith('/pricing/query')) return '/pricing/query';
@@ -583,6 +585,7 @@ export function App() {
             <Route path="/purchases" element={<LegacyPurchaseRedirect />} />
             <Route path="/purchases/local-import" element={<PurchaseLocalImportPage />} />
             <Route path="/purchases/url-download" element={<PurchasePage />} />
+            <Route path="/purchases/query" element={<PurchaseProductQueryPage />} />
             <Route path="/notifications" element={<NotificationsPage />} />
             <Route path="/about" element={<AboutPage />} />
             <Route path="/listing/wb" element={<WbListingPage />} />
@@ -2005,6 +2008,7 @@ function LocalImportCreateView({ onViewImported }: { onViewImported: (sku: strin
   const isSourceRoot = pathParts.length === 0;
   const isPlatformDirectory = pathParts.length === 1;
   const error = directories.error instanceof ApiError ? directories.error : undefined;
+  const productNameValidation = validateLocalImportProductName(fields?.productName);
   return <div className="page-stack local-import-create-view">
     {error ? <Alert className="local-import-blocker" type="error" showIcon message="本地导入当前不可用" description={error.userMessage} action={<Button onClick={() => navigate('/settings/workflows?stage=E000')}>前往系统设置</Button>} /> : <>
       <div className="local-import-steps" aria-label="本地导入步骤"><span className={!preview ? 'active' : 'done'}>01 选择媒体目录</span><span className={preview && !result ? 'active' : preview ? 'done' : ''}>02 预览编辑</span><span className={result ? 'active' : ''}>03 确认导入</span></div>
@@ -2042,7 +2046,21 @@ function LocalImportCreateView({ onViewImported }: { onViewImported: (sku: strin
         <div className="local-source-summary">{preview.sources.map((source) => <div key={source.relativePath}><strong>{source.directoryName}</strong><span>{source.platform}</span>{source.isPrimary && <Tag color="cyan">主目录</Tag>}<small>{source.informationFileRelativePath || '无产品信息文件'} · {source.files.length} 个文件</small></div>)}</div>
         <div className="local-import-workflow-label"><Text>本次下载工作流</Text><Tooltip title="仅表示本地导入来源，不会启动 n8n"><Tag color="cyan">{preview.importWorkflowLabel}</Tag></Tooltip><Text type="secondary">来源标签 · 不创建下载任务</Text></div>
         <Form layout="vertical" className="local-import-form">
-          <Form.Item label="产品名称" required><Input aria-label="产品名称" value={fields.productName} onChange={(event) => setFields({ ...fields, productName: event.target.value })} /></Form.Item>
+          <Form.Item
+            label="产品名称"
+            required
+            validateStatus={productNameValidation.valid ? undefined : 'error'}
+            help={productNameValidation.valid ? undefined : productNameValidation.message}
+            extra="允许汉字、数字 0-9 及中文常用标点；保存时去除首尾空白。"
+          >
+            <Input
+              aria-label="产品名称"
+              aria-invalid={!productNameValidation.valid}
+              value={fields.productName}
+              suffix={<span className={`local-import-product-name-count${productNameValidation.valid ? '' : ' is-invalid'}`} aria-live="polite">{productNameValidation.length} / {LOCAL_IMPORT_PRODUCT_NAME_MAX_LENGTH}</span>}
+              onChange={(event) => setFields({ ...fields, productName: event.target.value })}
+            />
+          </Form.Item>
           <div className={`local-import-price-flow is-${preview.priceConversion.status.toLowerCase()}`}>
             <Form.Item label="零售价格(RUB)" extra={preview.priceConversion.sourceCurrency === 'RUB' ? '来自产品信息文件，首次导入不可修改' : 'CNY 来源没有 RUB 零售价'}><Input aria-label="零售价格(RUB)" value={fields.retailPrice ?? ''} placeholder="—" addonAfter="RUB" readOnly /></Form.Item>
             <Form.Item label="汇率" extra="产品信息文件中的 Exchange"><Input aria-label="汇率" value={preview.priceConversion.exchangeRate ? `1 CNY = ${preview.priceConversion.exchangeRate} RUB` : '不适用或未提供'} readOnly /></Form.Item>
@@ -2053,7 +2071,7 @@ function LocalImportCreateView({ onViewImported }: { onViewImported: (sku: strin
           <Row gutter={12}>{([['courierFee','快递费'],['productHeightCm','产品高(cm)'],['productDepthCm','产品深(cm)'],['productWidthCm','产品宽(cm)'],['netWeightGrams','净重(g)'],['grossWeightGrams','毛重(g)'],['lengthCm','包装长(cm)'],['widthCm','包装宽(cm)'],['heightCm','包装高(cm)']] as const).map(([key, label]) => <Col xs={12} md={8} lg={4} key={key}><Form.Item label={label}><Input value={fields[key] ?? ''} onChange={(event) => setFields({ ...fields, [key]: event.target.value })} /></Form.Item></Col>)}</Row>
         </Form>
         <Alert type="info" showIcon message="外部 SKU 仅留作来源记录" description="系统将在确认时自动生成新的 7 位内部 SKU；本期不会创建下载任务，也不会关联 WB/OZON 上品流程。" />
-        <Flex justify="end" gap={10} className="local-import-confirm"><Button onClick={() => { setPreview(undefined); setFields(undefined); }}>返回选择</Button><Button type="primary" loading={importMutation.isPending} disabled={Boolean(result) || !isValidPurchasePrice(fields.purchasePrice)} onClick={() => importMutation.mutate()}>确认导入</Button></Flex>
+        <Flex justify="end" gap={10} className="local-import-confirm"><Button onClick={() => { setPreview(undefined); setFields(undefined); }}>返回选择</Button><Button type="primary" loading={importMutation.isPending} disabled={Boolean(result) || !productNameValidation.valid || !isValidPurchasePrice(fields.purchasePrice)} onClick={() => importMutation.mutate()}>确认导入</Button></Flex>
       </Card>}
       {result && <Result className="local-import-result" status={result.status === 'IMPORTED' ? 'success' : result.status === 'SKIPPED_DUPLICATE' ? 'warning' : 'error'} title={localImportStatusMeta[result.status].label} subTitle={result.status === 'SKIPPED_DUPLICATE' ? `该商品 URL 已归属内部 SKU ${result.duplicateSku}，未创建新记录或复制媒体。` : result.status === 'IMPORTED' ? `内部 SKU ${result.sku} 已进入 E000 审核候选目录。` : result.errorMessage} extra={<Space wrap>{result.status === 'COPY_FAILED_RETRYABLE' && <Button type="primary" loading={retryMutation.isPending} onClick={() => retryMutation.mutate()}>重试媒体复制</Button>}{result.sku && <Button onClick={() => onViewImported(result.sku!)}>查看该产品</Button>}{result.status === 'IMPORTED' && <Button type="primary" onClick={() => navigate('/review/E000')}>前往 E000 审核</Button>}<Button onClick={() => { setSelected([]); setPrimary(''); resetPreview(); }}>开始下一次导入</Button></Space>} />}
     </>}
@@ -2154,7 +2172,7 @@ function LocalImportPriceSummary({ procurement }: { procurement: PurchaseSummary
   </>;
 }
 
-function LocalImportDetailView({ record, onRetry, onEdit }: { record: LocalImportRecord; onRetry: (id: string) => void; onEdit: () => void }) {
+function LocalImportDetailView({ record, onRetry, onEdit }: { record: LocalImportRecord; onRetry?: (id: string) => void; onEdit: () => void }) {
   const purchase = record.purchase;
   const legacy = Boolean(purchase && isLegacyLocalImportProcurement(purchase.procurement));
   return <div className="page-stack local-import-detail">
@@ -2178,11 +2196,13 @@ function LocalImportDetailView({ record, onRetry, onEdit }: { record: LocalImpor
       ...(record.errorMessage ? [{ key: 'error', label: '错误信息', span: 2, children: <Text type="danger">{record.errorMessage}</Text> }] : [])
     ]} />
     <Card size="small" title={`来源目录 · ${record.sources.length}`}><List dataSource={record.sources} locale={{ emptyText: record.status === 'SKIPPED_DUPLICATE' ? '重复跳过记录未登记新的媒体来源' : '没有来源目录' }} renderItem={(source) => <List.Item><div className="local-import-source-detail"><Space wrap><strong>{source.relativePath}</strong>{source.isPrimary && <Tag color="cyan">主目录</Tag>}<Tag>{source.platform}</Tag></Space><Text type="secondary">外部 SKU：{source.externalSku || '—'} · 信息文件：{source.informationFileRelativePath || '—'}</Text>{source.informationFileSha256 && <Text className="mono-text" type="secondary">SHA-256：{source.informationFileSha256}</Text>}{source.providerUrl && <a href={source.providerUrl} target="_blank" rel="noreferrer">{source.providerUrl}</a>}<Text type="secondary">目标子目录：{source.targetSubdirectory}</Text></div></List.Item>} /></Card>
-    <Flex justify="end" gap={8}>{record.status === 'COPY_FAILED_RETRYABLE' && <Button type="primary" onClick={() => onRetry(record.id)}>重试媒体复制</Button>}{record.sku && <Button icon={<EditOutlined />} onClick={onEdit}>编辑采购信息</Button>}</Flex>
+    <Flex justify="end" gap={8}>{record.status === 'COPY_FAILED_RETRYABLE' && onRetry && <Button type="primary" onClick={() => onRetry(record.id)}>重试媒体复制</Button>}{record.sku && <Button icon={<EditOutlined />} onClick={onEdit}>编辑采购信息</Button>}</Flex>
   </div>;
 }
 
-function LocalImportPurchaseEditor({ record, onClose, onSaved }: { record?: LocalImportListItem; onClose: () => void; onSaved: (value: LocalImportRecord) => void }) {
+type LocalImportPurchaseEditorRecord = Pick<LocalImportRecord, 'id' | 'importWorkflowLabel' | 'purchase'>;
+
+function LocalImportPurchaseEditor({ record, onClose, onSaved }: { record?: LocalImportPurchaseEditorRecord; onClose: () => void; onSaved: (value: LocalImportRecord) => void }) {
   const [form] = Form.useForm<Omit<PurchaseInput, 'downloadWorkflowCode'>>();
   useEffect(() => {
     if (!record?.purchase) return;
@@ -2225,6 +2245,108 @@ function LocalImportPurchaseEditor({ record, onClose, onSaved }: { record?: Loca
       <Flex justify="end" gap={8}><Button onClick={onClose}>取消</Button><Button type="primary" htmlType="submit" loading={save.isPending}>保存采购信息</Button></Flex>
     </Form>}
   </Drawer>;
+}
+
+function PurchaseProductQueryPage() {
+  const client = useQueryClient();
+  const location = useLocation();
+  const [page, setPage] = useState(1);
+  const [search, setSearch] = useState(() => new URLSearchParams(location.search).get('query') || '');
+  const [entryMethodKey, setEntryMethodKey] = useState<string>();
+  const [datePreset, setDatePreset] = useState<PurchaseDatePreset>('ALL');
+  const [customCreatedRange, setCustomCreatedRange] = useState<[Dayjs, Dayjs] | null>(null);
+  const [detailItem, setDetailItem] = useState<PurchaseSummary>();
+  const [editor, setEditor] = useState<PurchaseSummary>();
+  const params = useMemo(() => {
+    const value = new URLSearchParams({ page: String(page), pageSize: '50', sort: 'RECORDED_DESC' });
+    if (search.trim()) value.set('query', search.trim());
+    if (entryMethodKey) value.set('entryMethodKey', entryMethodKey);
+    let createdRange: [Dayjs, Dayjs] | undefined;
+    const today = dayjs().startOf('day');
+    if (datePreset === 'TODAY') createdRange = [today, today.add(1, 'day')];
+    if (datePreset === 'YESTERDAY') createdRange = [today.subtract(1, 'day'), today];
+    if (datePreset === 'LAST_7_DAYS') createdRange = [today.subtract(6, 'day'), today.add(1, 'day')];
+    if (datePreset === 'CUSTOM' && customCreatedRange) createdRange = [customCreatedRange[0].startOf('day'), customCreatedRange[1].add(1, 'day').startOf('day')];
+    if (createdRange) {
+      value.set('createdFrom', createdRange[0].toISOString());
+      value.set('createdTo', createdRange[1].toISOString());
+    }
+    return value;
+  }, [customCreatedRange, datePreset, entryMethodKey, page, search]);
+  const purchases = useQuery({ queryKey: ['purchases', 'query', params.toString()], queryFn: () => api.purchases(params), retry: false });
+  const workflowConfig = useQuery({ queryKey: ['config'], queryFn: api.config });
+  const workflows = useQuery({ queryKey: ['download-workflows', 'all'], queryFn: () => api.downloadWorkflows(true), enabled: purchases.isSuccess, retry: false });
+  const purchaseDetail = useQuery({
+    queryKey: ['purchase-query-detail', detailItem?.sku], queryFn: () => api.purchase(detailItem!.sku),
+    enabled: Boolean(detailItem && detailItem.entryOrigin.sourceType !== 'LOCAL_IMPORT'), retry: false
+  });
+  const localImportDetail = useQuery({
+    queryKey: ['purchase-query-local-import-detail', detailItem?.entryOrigin.sourceId],
+    queryFn: () => api.localImport(detailItem!.entryOrigin.sourceId!),
+    enabled: Boolean(detailItem?.entryOrigin.sourceType === 'LOCAL_IMPORT' && detailItem.entryOrigin.sourceId), retry: false
+  });
+  const reset = () => {
+    setPage(1); setSearch(''); setEntryMethodKey(undefined); setDatePreset('ALL'); setCustomCreatedRange(null);
+  };
+  if (purchases.isError) {
+    const databaseUnavailable = purchases.error.message.startsWith('DATABASE_UNAVAILABLE:');
+    return <Result status="warning" title={databaseUnavailable ? 'PostgreSQL 尚未连接' : '采购商品查询暂不可用'} subTitle={databaseUnavailable ? '请检查本地服务的 DATABASE_URL 配置，重启服务后再重新检测。' : purchases.error.message} extra={<Button type="primary" onClick={() => void purchases.refetch()}>重新检测</Button>} />;
+  }
+  const configuredStages = workflowConfig.data?.config.stages || [];
+  const workflowLabelByCode = new Map((workflows.data?.items || []).map((item) => {
+    const stage = configuredStages.find((candidate) => candidate.id === item.code);
+    return [item.code, `${workflowLabel(stage, item.code)} · ${stage?.displayName || item.displayName}`] as const;
+  }));
+  configuredStages.filter((stage) => stage.download).forEach((stage) => {
+    if (!workflowLabelByCode.has(stage.id)) workflowLabelByCode.set(stage.id, `${workflowLabel(stage)} · ${stage.displayName}`);
+  });
+  const localEditorRecord: LocalImportPurchaseEditorRecord | undefined = editor?.entryOrigin.sourceType === 'LOCAL_IMPORT' && editor.entryOrigin.sourceId ? {
+    id: editor.entryOrigin.sourceId,
+    importWorkflowLabel: editor.entryOrigin.label,
+    purchase: {
+      sku: editor.sku, productName: editor.productName, variants: editor.variants,
+      createdAt: editor.createdAt, updatedAt: editor.updatedAt, procurement: editor.procurement
+    }
+  } : undefined;
+  const methodOptions = (purchases.data?.facets.entryMethods || []).map((item) => ({ value: item.value, label: `${item.label} · ${item.count}` }));
+  return <div className="page-stack purchase-page purchase-product-query-page">
+    <PageTitle eyebrow="PROCUREMENT CATALOG" title="采购商品查询" description="查询所有已录入本地数据库的采购产品、录入来源和本地媒体目录。" />
+    <Card className="filter-bar"><Flex wrap gap={10} align="center">
+      <Input className="search-input" prefix={<SearchOutlined />} value={search} placeholder="搜索 SKU 或产品名" onChange={(event) => { setPage(1); setSearch(event.target.value); }} allowClear />
+      <Select value={datePreset} aria-label="录入日期" onChange={(value) => { setPage(1); setDatePreset(value); if (value !== 'CUSTOM') setCustomCreatedRange(null); }} style={{ width: 140 }} options={[{ value: 'ALL', label: '全部日期' }, { value: 'TODAY', label: '当天' }, { value: 'YESTERDAY', label: '昨天' }, { value: 'LAST_7_DAYS', label: '最近7天' }, { value: 'CUSTOM', label: '时间段查询' }]} />
+      {datePreset === 'CUSTOM' && <DatePicker.RangePicker value={customCreatedRange} onChange={(value) => { setPage(1); setCustomCreatedRange(value as [Dayjs, Dayjs] | null); }} allowClear placeholder={['开始日期', '结束日期']} />}
+      <Select allowClear aria-label="录入方式" placeholder="录入方式" value={entryMethodKey} onChange={(value) => { setPage(1); setEntryMethodKey(value); }} style={{ width: 220 }} options={methodOptions} />
+      <Button onClick={reset}>重置</Button><Text type="secondary">共 {purchases.data?.total || 0} 条采购商品</Text>
+    </Flex></Card>
+    <Card className="purchase-table-card" bodyStyle={{ padding: 0 }}>
+      <Table<PurchaseSummary> rowKey="sku" loading={purchases.isLoading} pagination={false} scroll={{ x: 1780 }} dataSource={purchases.data?.items || []} columns={[
+        { title: 'SKU', dataIndex: 'sku', width: 118, render: (value: string) => <span className="copy-value-inline"><span className="mono-badge">{value}</span><CopyValueButton label="SKU" value={value} /></span> },
+        { title: '产品与采购摘要', width: 330, render: (_: unknown, item) => { const productMeasurements = formatProductMeasurements(item.procurement); return <div className="purchase-product-cell"><strong className="copy-value-inline"><span>{item.productName}</span><CopyValueButton label="产品名" value={item.productName} /></strong><span>{formatPurchaseMoney(item.procurement.purchasePrice, item.procurement.currency)} · 快递 {formatPurchaseMoney(item.procurement.courierFee, item.procurement.currency)}</span>{productMeasurements && <small>产品：{productMeasurements}</small>}<small>包装：{formatPackagingMeasurements(item.procurement)}</small><small>{item.variants?.length || 1} 个产品变体</small></div>; } },
+        { title: '录入方式', width: 190, render: (_: unknown, item) => <Tag color={item.entryOrigin.sourceType === 'OTHER' ? 'default' : 'cyan'}>{item.entryOrigin.label}</Tag> },
+        { title: '导入平台', width: 120, render: (_: unknown, item) => item.entryOrigin.platform ? <Tag>{item.entryOrigin.platform}</Tag> : <Text type="secondary">未标记</Text> },
+        { title: '产品URL', width: 230, render: (_: unknown, item) => <a className="provider-url" href={item.procurement.providerUrl} target="_blank" rel="noreferrer">{urlLabel(item.procurement.providerUrl)}</a> },
+        { title: '本地媒体文件夹', width: 320, render: (_: unknown, item) => item.localMediaFolder ? <span className="copy-value-inline purchase-query-folder"><Text ellipsis={{ tooltip: item.localMediaFolder }}>{item.localMediaFolder}</Text><CopyValueButton label="本地媒体文件夹" value={item.localMediaFolder} /></span> : <Text type="secondary">尚未生成</Text> },
+        { title: '录入日期', width: 165, render: (_: unknown, item) => dayjs(item.entryOrigin.recordedAt).format('YYYY-MM-DD HH:mm') },
+        { title: '操作', width: 150, fixed: 'right', render: (_: unknown, item) => { const editable = item.entryOrigin.sourceType !== 'OTHER'; return <Space size={4}><Button size="small" icon={<EyeOutlined />} onClick={() => setDetailItem(item)}>详情</Button><Tooltip title={editable ? undefined : '该录入方式暂未注册编辑入口'}><span><Button size="small" icon={<EditOutlined />} disabled={!editable} onClick={() => setEditor(item)}>编辑</Button></span></Tooltip></Space>; } }
+      ]} />
+      <div className="purchase-pagination"><Pagination current={page} pageSize={50} total={purchases.data?.total || 0} showSizeChanger={false} onChange={setPage} /></div>
+    </Card>
+    <Drawer open={Boolean(detailItem)} width={760} onClose={() => setDetailItem(undefined)} title={detailItem ? `采购商品详情 · ${detailItem.sku}` : '采购商品详情'}>
+      {detailItem?.entryOrigin.sourceType === 'LOCAL_IMPORT' ? localImportDetail.isLoading ? <Skeleton active /> : localImportDetail.data?.import ? <LocalImportDetailView record={{ ...localImportDetail.data.import, importWorkflowLabel: detailItem.entryOrigin.label }} onEdit={() => setEditor(detailItem)} /> : <Result status="warning" title="本地导入详情不可用" /> : purchaseDetail.isLoading ? <Skeleton active /> : purchaseDetail.data?.purchase && <div className="page-stack"><PurchaseQueryOriginSummary item={detailItem!} /><PurchaseDetailView purchase={purchaseDetail.data.purchase} /></div>}
+    </Drawer>
+    <LocalImportPurchaseEditor record={localEditorRecord} onClose={() => setEditor(undefined)} onSaved={() => { setEditor(undefined); void client.invalidateQueries({ queryKey: ['purchases'] }); }} />
+    {editor?.entryOrigin.sourceType === 'URL_DOWNLOAD' && <PurchaseEditorDrawer open purchase={editor} workflows={workflows.data?.items || []} workflowsLoading={workflows.isLoading} workflowLabels={workflowLabelByCode} onClose={() => setEditor(undefined)} onSaved={() => { setEditor(undefined); void client.invalidateQueries({ queryKey: ['purchases'] }); }} />}
+  </div>;
+}
+
+function PurchaseQueryOriginSummary({ item }: { item: PurchaseSummary }) {
+  return <Descriptions title="录入来源" bordered size="small" column={2} items={[
+    { key: 'method', label: '录入方式', children: <Tag color={item.entryOrigin.sourceType === 'OTHER' ? 'default' : 'cyan'}>{item.entryOrigin.label}</Tag> },
+    { key: 'platform', label: '导入平台', children: item.entryOrigin.platform || '未标记' },
+    { key: 'date', label: '录入日期', children: dayjs(item.entryOrigin.recordedAt).format('YYYY-MM-DD HH:mm:ss') },
+    { key: 'workflow', label: '工作流', children: item.entryOrigin.workflowCode || '不适用' },
+    { key: 'folder', label: '本地媒体文件夹', span: 2, children: item.localMediaFolder ? <span className="copy-value-inline"><Text>{item.localMediaFolder}</Text><CopyValueButton label="本地媒体文件夹" value={item.localMediaFolder} /></span> : '尚未生成' }
+  ]} />;
 }
 
 function PurchasePage() {

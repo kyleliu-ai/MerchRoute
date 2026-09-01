@@ -85,6 +85,28 @@ export type LocalImportQuery = {
   createdFrom?: string;
   createdTo?: string;
 };
+export type PurchaseEntryOriginSourceType = 'LOCAL_IMPORT' | 'URL_DOWNLOAD' | 'OTHER';
+export type PurchaseEntryOrigin = {
+  methodKey: string;
+  label: string;
+  platform?: string;
+  workflowCode?: string;
+  sourceType: PurchaseEntryOriginSourceType;
+  sourceId?: string;
+  recordedAt: string;
+};
+export type PurchaseListQuery = {
+  page?: number;
+  pageSize?: number;
+  query?: string;
+  status?: string;
+  workflowCode?: string;
+  createdFrom?: string;
+  createdTo?: string;
+  source?: string;
+  entryMethodKey?: string;
+  sort?: string;
+};
 export type WorkflowInput = {
   code: string;
   displayName: string;
@@ -358,13 +380,20 @@ export class PurchaseRepository {
 
   async close(): Promise<void> { await this.pool?.end(); }
 
-  async listPurchases(input: { page?: number; pageSize?: number; query?: string; status?: string; workflowCode?: string; createdFrom?: string; createdTo?: string; source?: string }) {
+  async listPurchases(input: PurchaseListQuery) {
     const page = Math.max(1, input.page || 1);
     const pageSize = Math.min(100, Math.max(10, input.pageSize || 50));
     const values: unknown[] = [];
     const where: string[] = [];
     if (input.source && input.source !== 'URL_DOWNLOAD') throw new AppError('CONFIG_INVALID', '采购来源筛选无效');
     if (input.source === 'URL_DOWNLOAD') where.push('NOT EXISTS (SELECT 1 FROM local_imports li WHERE li.sku = p.sku)');
+    const entryMethodKey = String(input.entryMethodKey || '').trim();
+    if (entryMethodKey.length > 200) throw new AppError('CONFIG_INVALID', '录入方式筛选值过长');
+    if (entryMethodKey) {
+      values.push(entryMethodKey);
+      where.push(`COALESCE(origin.method_key,'OTHER:UNREGISTERED') = $${values.length}`);
+    }
+    if (input.sort && input.sort !== 'RECORDED_DESC') throw new AppError('CONFIG_INVALID', '采购商品排序方式无效');
     if (input.query?.trim()) {
       values.push(`%${input.query.trim()}%`);
       where.push(`(p.sku ILIKE $${values.length} OR p.product_name ILIKE $${values.length})`);
@@ -380,6 +409,7 @@ export class PurchaseRepository {
     const count = await this.query<{ total: string }>(`
       SELECT COUNT(*)::text AS total
       FROM products p
+      LEFT JOIN product_entry_origins origin ON origin.sku = p.sku
       LEFT JOIN LATERAL (
         SELECT status, workflow_code FROM download_jobs WHERE sku = p.sku ORDER BY created_at DESC LIMIT 1
       ) latest_job ON true
@@ -388,6 +418,11 @@ export class PurchaseRepository {
     const rows = await this.query<SqlRow>(`
       SELECT p.sku, p.product_name, p.created_at, p.updated_at,
         COALESCE((SELECT jsonb_agg(v.name ORDER BY v.sort_order ASC, v.created_at ASC) FROM product_variants v WHERE v.sku=p.sku),'[]'::jsonb) AS variants,
+        COALESCE(origin.method_key,'OTHER:UNREGISTERED') AS entry_method_key,
+        COALESCE(origin.method_label,'其它方式') AS entry_method_label,
+        origin.platform AS entry_platform,origin.workflow_code AS entry_workflow_code,
+        COALESCE(origin.source_type,'OTHER') AS entry_source_type,origin.source_id AS entry_source_id,
+        p.created_at AS entry_recorded_at,
         pv.id AS procurement_version_id, pv.download_workflow_code, pv.purchase_price, pv.retail_price, pv.courier_fee, pv.currency,
         pv.gross_weight_g, pv.length_cm, pv.width_cm, pv.height_cm,
         pv.net_weight_g, pv.product_height_cm, pv.product_depth_cm, pv.product_width_cm,
@@ -395,18 +430,42 @@ export class PurchaseRepository {
         latest_job.id AS job_id, latest_job.status AS job_status, latest_job.workflow_code AS job_workflow_code,
         latest_job.output_dir AS job_output_dir, latest_job.created_at AS job_created_at, latest_job.finished_at AS job_finished_at,
         latest_job.error_message AS job_error_message, latest_job.next_attempt_at AS job_next_attempt_at,
-        latest_job.retry_reason AS job_retry_reason, latest_job.resource_retry_count AS job_resource_retry_count
+        latest_job.retry_reason AS job_retry_reason, latest_job.resource_retry_count AS job_resource_retry_count,
+        CASE
+          WHEN origin.source_type='LOCAL_IMPORT' THEN local_import.target_folder
+          WHEN origin.source_type='URL_DOWNLOAD' THEN latest_success.output_dir
+          ELSE latest_success.output_dir
+        END AS local_media_folder
       FROM products p
+      LEFT JOIN product_entry_origins origin ON origin.sku = p.sku
       JOIN LATERAL (
         SELECT * FROM procurement_versions WHERE sku = p.sku ORDER BY version_no DESC LIMIT 1
       ) pv ON true
+      LEFT JOIN local_imports local_import ON origin.source_type='LOCAL_IMPORT' AND local_import.id::text=origin.source_id
       LEFT JOIN LATERAL (
         SELECT * FROM download_jobs WHERE sku = p.sku ORDER BY created_at DESC LIMIT 1
       ) latest_job ON true
+      LEFT JOIN LATERAL (
+        SELECT output_dir FROM download_jobs
+        WHERE sku=p.sku AND status='SUCCEEDED' AND output_dir IS NOT NULL AND BTRIM(output_dir)<>''
+        ORDER BY finished_at DESC NULLS LAST,created_at DESC LIMIT 1
+      ) latest_success ON true
       ${filter}
-      ORDER BY p.updated_at DESC, p.sku DESC
+      ORDER BY ${input.sort === 'RECORDED_DESC' ? 'p.created_at' : 'p.updated_at'} DESC, p.sku DESC
       LIMIT $${values.length - 1} OFFSET $${values.length}`, values);
-    return { items: rows.rows.map(toPurchaseSummary), total: Number(count.rows[0]?.total || 0), page, pageSize };
+    const facets = await this.query<SqlRow>(`
+      SELECT COALESCE(origin.method_key,'OTHER:UNREGISTERED') value,
+        COALESCE(origin.method_label,'其它方式') label,origin.platform,origin.workflow_code,
+        COALESCE(origin.source_type,'OTHER') source_type,COUNT(*)::int count
+      FROM products p
+      LEFT JOIN product_entry_origins origin ON origin.sku=p.sku
+      WHERE EXISTS(SELECT 1 FROM procurement_versions pv WHERE pv.sku=p.sku)
+      GROUP BY 1,2,3,4,5
+      ORDER BY LOWER(COALESCE(origin.method_label,'其它方式')),COALESCE(origin.method_key,'OTHER:UNREGISTERED')`);
+    return {
+      items: rows.rows.map(toPurchaseSummary), total: Number(count.rows[0]?.total || 0), page, pageSize,
+      facets: { entryMethods: facets.rows.map(toPurchaseEntryMethodFacet) }
+    };
   }
 
   async findPricingProducts(lookup: PricingProductQueryInput['lookup']): Promise<PricingProductSnapshot[]> {
@@ -461,7 +520,8 @@ export class PurchaseRepository {
       await client.query('INSERT INTO products (sku, product_name) VALUES ($1, $2)', [sku, input.productName.trim()]);
       await registerPurchaseUrl(client, input.providerUrl, sku);
       await client.query('INSERT INTO product_variants(id,sku,name,normalized_name,sort_order) VALUES($1,$2,$3,$4,0)', [randomUUID(), sku, '默认变体', normalizeProductVariantKey('默认变体')]);
-      await insertProcurementVersion(client, sku, input, 1, downloadWorkflowCode);
+      const procurementVersionId = await insertProcurementVersion(client, sku, input, 1, downloadWorkflowCode);
+      await insertUrlDownloadEntryOrigin(client, sku, downloadWorkflowCode, procurementVersionId);
       return this.getPurchaseWithClient(client, sku);
     });
   }
@@ -522,6 +582,7 @@ export class PurchaseRepository {
         id, idempotencyKey, sku, sourcePlatform, importWorkflowLabel,
         JSON.stringify(input.sourceConfigSnapshot), JSON.stringify(input.targetConfigSnapshot), input.previewHash.toLowerCase()
       ]);
+      await insertLocalImportEntryOrigin(client, sku, sourcePlatform, id);
       for (const source of input.sources) {
         await client.query(`INSERT INTO product_media_sources(
           id,local_import_id,sku,platform,relative_path,normalized_path_key,is_primary,external_sku,
@@ -1432,6 +1493,55 @@ export class PurchaseRepository {
         await client.query(`INSERT INTO purchase_schema_migrations(id) VALUES('016_procurement_retail_price')`);
       });
     }
+    const productEntryOrigins = await this.query<{ id: string }>('SELECT id FROM purchase_schema_migrations WHERE id=$1', ['017_product_entry_origins']);
+    if (!productEntryOrigins.rows[0]) {
+      await this.transaction(async (client) => {
+        await client.query(`CREATE TABLE IF NOT EXISTS product_entry_origins(
+          sku CHAR(7) PRIMARY KEY REFERENCES products(sku) ON DELETE CASCADE,
+          method_key TEXT NOT NULL,method_label TEXT NOT NULL,platform TEXT,workflow_code TEXT,
+          source_type TEXT NOT NULL CHECK(source_type IN('LOCAL_IMPORT','URL_DOWNLOAD','OTHER')),
+          source_id TEXT,recorded_at TIMESTAMPTZ NOT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          CHECK(LENGTH(BTRIM(method_key))>0),CHECK(LENGTH(BTRIM(method_label))>0)
+        )`);
+        await client.query(`INSERT INTO product_entry_origins(
+          sku,method_key,method_label,platform,workflow_code,source_type,source_id,recorded_at
+        )
+        SELECT p.sku,
+          'LOCAL_IMAGE_IMPORT:' || COALESCE(NULLIF(REGEXP_REPLACE(UPPER(BTRIM(li.source_platform)),'[[:space:]]+','_','g'),''),'UNKNOWN'),
+          CASE WHEN NULLIF(BTRIM(li.source_platform),'') IS NULL THEN '本地图片导入-未知平台' ELSE '本地图片导入-' || BTRIM(li.source_platform) END,
+          NULLIF(BTRIM(li.source_platform),''),NULL,'LOCAL_IMPORT',li.id::text,p.created_at
+        FROM products p
+        JOIN LATERAL (
+          SELECT id,source_platform FROM local_imports WHERE sku=p.sku ORDER BY created_at ASC,id ASC LIMIT 1
+        ) li ON true
+        ON CONFLICT(sku) DO NOTHING`);
+        await client.query(`INSERT INTO product_entry_origins(
+          sku,method_key,method_label,platform,workflow_code,source_type,source_id,recorded_at
+        )
+        SELECT p.sku,
+          CASE WHEN pv.download_workflow_code IS NULL THEN 'OTHER:LEGACY' ELSE 'URL_DOWNLOAD:' || UPPER(BTRIM(pv.download_workflow_code)) END,
+          CASE
+            WHEN pv.download_workflow_code='E006' THEN 'PDD下载E006'
+            WHEN pv.download_workflow_code='E007' THEN '1688下载E007'
+            WHEN pv.download_workflow_code IS NULL THEN '其它方式'
+            WHEN POSITION(pv.download_workflow_code IN COALESCE(w.display_name,''))>0 THEN BTRIM(w.display_name)
+            ELSE COALESCE(NULLIF(BTRIM(w.display_name),''),'产品URL下载') || pv.download_workflow_code
+          END,
+          CASE WHEN pv.download_workflow_code='E006' THEN 'PDD' WHEN pv.download_workflow_code='E007' THEN '1688' ELSE NULL END,
+          pv.download_workflow_code,CASE WHEN pv.download_workflow_code IS NULL THEN 'OTHER' ELSE 'URL_DOWNLOAD' END,
+          pv.id::text,p.created_at
+        FROM products p
+        LEFT JOIN LATERAL (
+          SELECT id,download_workflow_code FROM procurement_versions WHERE sku=p.sku ORDER BY version_no ASC LIMIT 1
+        ) pv ON true
+        LEFT JOIN download_workflows w ON w.code=pv.download_workflow_code
+        WHERE NOT EXISTS(SELECT 1 FROM product_entry_origins origin WHERE origin.sku=p.sku)
+        ON CONFLICT(sku) DO NOTHING`);
+        await client.query('CREATE INDEX IF NOT EXISTS product_entry_origins_method_recorded ON product_entry_origins(method_key,recorded_at DESC,sku DESC)');
+        await client.query('CREATE INDEX IF NOT EXISTS product_entry_origins_source ON product_entry_origins(source_type,source_id)');
+        await client.query(`INSERT INTO purchase_schema_migrations(id) VALUES('017_product_entry_origins')`);
+      });
+    }
   }
 
   private async seedDefaultWorkflow(input: WorkflowInput) {
@@ -1860,18 +1970,67 @@ async function finalizeBatchIfComplete(client: PoolClient, batchId: string) {
 function asRecord(value: unknown): JsonRecord { return value && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : {}; }
 
 async function insertProcurementVersion(client: PoolClient, sku: string, input: PurchaseInput, versionNo: number, downloadWorkflowCode: string | null) {
+  const id = randomUUID();
   await client.query(`INSERT INTO procurement_versions (
     id, sku, version_no, download_workflow_code, purchase_price, retail_price, courier_fee, currency,
     gross_weight_g, length_cm, width_cm, height_cm,
     net_weight_g, product_height_cm, product_depth_cm, product_width_cm,
     transport_mode, provider_url
   ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`, [
-    randomUUID(), sku, versionNo, downloadWorkflowCode, input.purchasePrice.trim(), nullableDecimal(input.retailPrice),
+    id, sku, versionNo, downloadWorkflowCode, input.purchasePrice.trim(), nullableDecimal(input.retailPrice),
     (input.courierFee || '0').trim(), (input.currency || 'CNY').trim().toUpperCase(),
     nullableDecimal(input.grossWeightGrams), nullableDecimal(input.lengthCm), nullableDecimal(input.widthCm), nullableDecimal(input.heightCm),
     nullableDecimal(input.netWeightGrams), nullableDecimal(input.productHeightCm), nullableDecimal(input.productDepthCm), nullableDecimal(input.productWidthCm),
     input.transportMode?.trim() || null, input.providerUrl.trim()
   ]);
+  return id;
+}
+
+async function insertUrlDownloadEntryOrigin(client: PoolClient, sku: string, workflowCode: string, sourceId: string) {
+  const workflow = await client.query<{ display_name: string }>('SELECT display_name FROM download_workflows WHERE code=$1', [workflowCode]);
+  const metadata = urlDownloadEntryOriginMetadata(workflowCode, workflow.rows[0]?.display_name);
+  await insertProductEntryOrigin(client, {
+    sku, methodKey: `URL_DOWNLOAD:${workflowCode.toLocaleUpperCase('en-US')}`, methodLabel: metadata.label,
+    platform: metadata.platform, workflowCode, sourceType: 'URL_DOWNLOAD', sourceId
+  });
+}
+
+async function insertLocalImportEntryOrigin(client: PoolClient, sku: string, platform: string, sourceId: string) {
+  const normalizedPlatform = platform.trim();
+  await insertProductEntryOrigin(client, {
+    sku, methodKey: `LOCAL_IMAGE_IMPORT:${entryOriginKeySegment(normalizedPlatform)}`,
+    methodLabel: `本地图片导入-${normalizedPlatform || '未知平台'}`, platform: normalizedPlatform || undefined,
+    sourceType: 'LOCAL_IMPORT', sourceId
+  });
+}
+
+async function insertProductEntryOrigin(client: PoolClient, input: {
+  sku: string;
+  methodKey: string;
+  methodLabel: string;
+  platform?: string;
+  workflowCode?: string;
+  sourceType: PurchaseEntryOriginSourceType;
+  sourceId?: string;
+}) {
+  await client.query(`INSERT INTO product_entry_origins(
+    sku,method_key,method_label,platform,workflow_code,source_type,source_id,recorded_at
+  ) SELECT $1,$2,$3,$4,$5,$6,$7,p.created_at FROM products p WHERE p.sku=$1
+  ON CONFLICT(sku) DO NOTHING`, [
+    input.sku, input.methodKey, input.methodLabel, input.platform || null, input.workflowCode || null,
+    input.sourceType, input.sourceId || null
+  ]);
+}
+
+function urlDownloadEntryOriginMetadata(workflowCode: string, displayName?: string) {
+  if (workflowCode === 'E006') return { label: 'PDD下载E006', platform: 'PDD' };
+  if (workflowCode === 'E007') return { label: '1688下载E007', platform: '1688' };
+  const name = String(displayName || '').trim() || '产品URL下载';
+  return { label: name.includes(workflowCode) ? name : `${name}${workflowCode}`, platform: undefined };
+}
+
+function entryOriginKeySegment(value: string) {
+  return value.trim().toLocaleUpperCase('en-US').replace(/\s+/g, '_') || 'UNKNOWN';
 }
 
 function validatePurchase(input: PurchaseInput) {
@@ -2004,11 +2163,29 @@ function toProcurementVersion(row: SqlRow) { return {
   netWeightGrams: row.net_weight_g, productHeightCm: row.product_height_cm, productDepthCm: row.product_depth_cm, productWidthCm: row.product_width_cm,
   transportMode: row.transport_mode, providerUrl: row.provider_url, createdAt: row.created_at
 }; }
-function toPurchaseSummary(row: SqlRow) { return { ...toProduct(row), procurement: toProcurementVersion(row), latestDownloadJob: row.job_id ? {
+function toPurchaseSummary(row: SqlRow) { return {
+  ...toProduct(row), procurement: toProcurementVersion(row),
+  entryOrigin: {
+    methodKey: row.entry_method_key,
+    label: row.entry_method_label,
+    platform: row.entry_platform || undefined,
+    workflowCode: row.entry_workflow_code || undefined,
+    sourceType: row.entry_source_type as PurchaseEntryOriginSourceType,
+    sourceId: row.entry_source_id || undefined,
+    recordedAt: row.entry_recorded_at
+  } satisfies PurchaseEntryOrigin,
+  localMediaFolder: row.local_media_folder || undefined,
+  latestDownloadJob: row.job_id ? {
   id: row.job_id, status: row.job_status, workflowCode: row.job_workflow_code, outputDir: row.job_output_dir, createdAt: row.job_created_at,
   finishedAt: row.job_finished_at, errorMessage: row.job_error_message, nextAttemptAt: row.job_next_attempt_at,
   retryReason: row.job_retry_reason, resourceRetryCount: Number(row.job_resource_retry_count || 0)
-} : undefined }; }
+  } : undefined
+}; }
+function toPurchaseEntryMethodFacet(row: SqlRow) { return {
+  value: String(row.value), label: String(row.label), platform: row.platform || undefined,
+  workflowCode: row.workflow_code || undefined, sourceType: row.source_type as PurchaseEntryOriginSourceType,
+  count: Number(row.count || 0)
+}; }
 function toPricingProductSnapshot(row: SqlRow): PricingProductSnapshot { return {
   sku: row.sku, productName: row.product_name, updatedAt: row.updated_at,
   procurement: {
