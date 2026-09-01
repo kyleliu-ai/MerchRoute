@@ -16,6 +16,8 @@ export const VIDEO_EXTENSIONS = ['.mp4', '.mov'] as const;
 export const MEDIA_EXTENSIONS = [...IMAGE_EXTENSIONS, ...VIDEO_EXTENSIONS] as const;
 export const ROOT_METADATA_EXTENSIONS = ['.json', '.txt', '.md', '.csv'] as const;
 export const E001_VARIANT_MAX_IMAGE_COUNT = 5;
+export const LOCAL_IMPORT_PRODUCT_NAME_MAX_LENGTH = 20;
+export const LOCAL_IMPORT_PRODUCT_NAME_ALLOWED_PUNCTUATION = '，。！？、；：“”‘’（）《》【】—…·';
 export const DEPRECATED_OUTPUT_ROOT_STAGE_IDS: readonly string[] = ['E001', 'E002', 'E003', 'E006', 'E007'];
 export const ERROR_CODES = [
   'CONFIG_INVALID', 'STAGE_DISABLED', 'PATH_NOT_FOUND', 'PATH_NOT_READABLE', 'PATH_NOT_WRITABLE',
@@ -30,6 +32,43 @@ export const ERROR_CODES = [
 export type PurchaseProductUrlClassification =
   | { platform: 'PDD'; workflowCode: 'E006'; productId: string }
   | { platform: '1688'; workflowCode: 'E007'; productId: string };
+
+export type LocalImportProductNameValidation =
+  | { valid: true; value: string; length: number }
+  | { valid: false; value: string; length: number; issue: 'REQUIRED' | 'TOO_LONG' | 'INVALID_CHARACTERS'; message: string };
+
+const localImportProductNamePunctuation = new Set(Array.from(LOCAL_IMPORT_PRODUCT_NAME_ALLOWED_PUNCTUATION));
+
+export function validateLocalImportProductName(input: unknown): LocalImportProductNameValidation {
+  const value = String(input ?? '').trim().normalize('NFC');
+  const characters = Array.from(value);
+  const length = characters.length;
+  if (length === 0) return { valid: false, value, length, issue: 'REQUIRED', message: '请输入产品名称' };
+  if (length > LOCAL_IMPORT_PRODUCT_NAME_MAX_LENGTH) {
+    return {
+      valid: false,
+      value,
+      length,
+      issue: 'TOO_LONG',
+      message: `产品名称最多 ${LOCAL_IMPORT_PRODUCT_NAME_MAX_LENGTH} 个字符，当前 ${length} 个`
+    };
+  }
+  const charactersValid = characters.every((character) => (
+    /^\p{Script=Han}$/u.test(character)
+    || /^[0-9]$/.test(character)
+    || localImportProductNamePunctuation.has(character)
+  ));
+  if (!charactersValid) {
+    return {
+      valid: false,
+      value,
+      length,
+      issue: 'INVALID_CHARACTERS',
+      message: '产品名称仅允许汉字、数字 0-9 及中文常用标点'
+    };
+  }
+  return { valid: true, value, length };
+}
 
 const isHostOrSubdomain = (hostname: string, rootDomain: string): boolean =>
   hostname === rootDomain || hostname.endsWith(`.${rootDomain}`);

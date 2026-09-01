@@ -15,7 +15,7 @@ import type { MenuProps } from 'antd';
 import type {
   AppConfig, FolderTreeNode, MediaIndexState, MediaIndexStatus, ProductTask, StageConfig, StageSummary, StageView, VariantSelectionGroup, WorkflowGroup, WorkflowParameterOptions, WorkflowParameterType, WorkflowParameterValue, WorkflowParameters
 } from '@n8n-media-review/shared';
-import { classifyPurchaseProductUrl, DEPRECATED_OUTPUT_ROOT_STAGE_IDS, E001_VARIANT_MAX_IMAGE_COUNT, WORKFLOW_RUNTIME_PARAMETER_NAMES } from '@n8n-media-review/shared';
+import { classifyPurchaseProductUrl, DEPRECATED_OUTPUT_ROOT_STAGE_IDS, E001_VARIANT_MAX_IMAGE_COUNT, LOCAL_IMPORT_PRODUCT_NAME_MAX_LENGTH, validateLocalImportProductName, WORKFLOW_RUNTIME_PARAMETER_NAMES } from '@n8n-media-review/shared';
 import dayjs, { type Dayjs } from 'dayjs';
 import { api, ApiError, type DownloadWorkflow, type LocalImportPreview, type LocalImportRecord, type LocalImportListItem, type PathValidation, type PendingView, type PurchaseDetail, type PurchaseDownloadBatch, type PurchaseInput, type PurchaseSummary, type SubmissionHistoryQuery, type TaskNotification } from './api/client';
 import { CopyValueButton } from './copy-value';
@@ -2005,6 +2005,7 @@ function LocalImportCreateView({ onViewImported }: { onViewImported: (sku: strin
   const isSourceRoot = pathParts.length === 0;
   const isPlatformDirectory = pathParts.length === 1;
   const error = directories.error instanceof ApiError ? directories.error : undefined;
+  const productNameValidation = validateLocalImportProductName(fields?.productName);
   return <div className="page-stack local-import-create-view">
     {error ? <Alert className="local-import-blocker" type="error" showIcon message="本地导入当前不可用" description={error.userMessage} action={<Button onClick={() => navigate('/settings/workflows?stage=E000')}>前往系统设置</Button>} /> : <>
       <div className="local-import-steps" aria-label="本地导入步骤"><span className={!preview ? 'active' : 'done'}>01 选择媒体目录</span><span className={preview && !result ? 'active' : preview ? 'done' : ''}>02 预览编辑</span><span className={result ? 'active' : ''}>03 确认导入</span></div>
@@ -2042,7 +2043,21 @@ function LocalImportCreateView({ onViewImported }: { onViewImported: (sku: strin
         <div className="local-source-summary">{preview.sources.map((source) => <div key={source.relativePath}><strong>{source.directoryName}</strong><span>{source.platform}</span>{source.isPrimary && <Tag color="cyan">主目录</Tag>}<small>{source.informationFileRelativePath || '无产品信息文件'} · {source.files.length} 个文件</small></div>)}</div>
         <div className="local-import-workflow-label"><Text>本次下载工作流</Text><Tooltip title="仅表示本地导入来源，不会启动 n8n"><Tag color="cyan">{preview.importWorkflowLabel}</Tag></Tooltip><Text type="secondary">来源标签 · 不创建下载任务</Text></div>
         <Form layout="vertical" className="local-import-form">
-          <Form.Item label="产品名称" required><Input aria-label="产品名称" value={fields.productName} onChange={(event) => setFields({ ...fields, productName: event.target.value })} /></Form.Item>
+          <Form.Item
+            label="产品名称"
+            required
+            validateStatus={productNameValidation.valid ? undefined : 'error'}
+            help={productNameValidation.valid ? undefined : productNameValidation.message}
+            extra="允许汉字、数字 0-9 及中文常用标点；保存时去除首尾空白。"
+          >
+            <Input
+              aria-label="产品名称"
+              aria-invalid={!productNameValidation.valid}
+              value={fields.productName}
+              suffix={<span className={`local-import-product-name-count${productNameValidation.valid ? '' : ' is-invalid'}`} aria-live="polite">{productNameValidation.length} / {LOCAL_IMPORT_PRODUCT_NAME_MAX_LENGTH}</span>}
+              onChange={(event) => setFields({ ...fields, productName: event.target.value })}
+            />
+          </Form.Item>
           <div className={`local-import-price-flow is-${preview.priceConversion.status.toLowerCase()}`}>
             <Form.Item label="零售价格(RUB)" extra={preview.priceConversion.sourceCurrency === 'RUB' ? '来自产品信息文件，首次导入不可修改' : 'CNY 来源没有 RUB 零售价'}><Input aria-label="零售价格(RUB)" value={fields.retailPrice ?? ''} placeholder="—" addonAfter="RUB" readOnly /></Form.Item>
             <Form.Item label="汇率" extra="产品信息文件中的 Exchange"><Input aria-label="汇率" value={preview.priceConversion.exchangeRate ? `1 CNY = ${preview.priceConversion.exchangeRate} RUB` : '不适用或未提供'} readOnly /></Form.Item>
@@ -2053,7 +2068,7 @@ function LocalImportCreateView({ onViewImported }: { onViewImported: (sku: strin
           <Row gutter={12}>{([['courierFee','快递费'],['productHeightCm','产品高(cm)'],['productDepthCm','产品深(cm)'],['productWidthCm','产品宽(cm)'],['netWeightGrams','净重(g)'],['grossWeightGrams','毛重(g)'],['lengthCm','包装长(cm)'],['widthCm','包装宽(cm)'],['heightCm','包装高(cm)']] as const).map(([key, label]) => <Col xs={12} md={8} lg={4} key={key}><Form.Item label={label}><Input value={fields[key] ?? ''} onChange={(event) => setFields({ ...fields, [key]: event.target.value })} /></Form.Item></Col>)}</Row>
         </Form>
         <Alert type="info" showIcon message="外部 SKU 仅留作来源记录" description="系统将在确认时自动生成新的 7 位内部 SKU；本期不会创建下载任务，也不会关联 WB/OZON 上品流程。" />
-        <Flex justify="end" gap={10} className="local-import-confirm"><Button onClick={() => { setPreview(undefined); setFields(undefined); }}>返回选择</Button><Button type="primary" loading={importMutation.isPending} disabled={Boolean(result) || !isValidPurchasePrice(fields.purchasePrice)} onClick={() => importMutation.mutate()}>确认导入</Button></Flex>
+        <Flex justify="end" gap={10} className="local-import-confirm"><Button onClick={() => { setPreview(undefined); setFields(undefined); }}>返回选择</Button><Button type="primary" loading={importMutation.isPending} disabled={Boolean(result) || !productNameValidation.valid || !isValidPurchasePrice(fields.purchasePrice)} onClick={() => importMutation.mutate()}>确认导入</Button></Flex>
       </Card>}
       {result && <Result className="local-import-result" status={result.status === 'IMPORTED' ? 'success' : result.status === 'SKIPPED_DUPLICATE' ? 'warning' : 'error'} title={localImportStatusMeta[result.status].label} subTitle={result.status === 'SKIPPED_DUPLICATE' ? `该商品 URL 已归属内部 SKU ${result.duplicateSku}，未创建新记录或复制媒体。` : result.status === 'IMPORTED' ? `内部 SKU ${result.sku} 已进入 E000 审核候选目录。` : result.errorMessage} extra={<Space wrap>{result.status === 'COPY_FAILED_RETRYABLE' && <Button type="primary" loading={retryMutation.isPending} onClick={() => retryMutation.mutate()}>重试媒体复制</Button>}{result.sku && <Button onClick={() => onViewImported(result.sku!)}>查看该产品</Button>}{result.status === 'IMPORTED' && <Button type="primary" onClick={() => navigate('/review/E000')}>前往 E000 审核</Button>}<Button onClick={() => { setSelected([]); setPrimary(''); resetPreview(); }}>开始下一次导入</Button></Space>} />}
     </>}

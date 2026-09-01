@@ -114,6 +114,35 @@ describe('LocalImportService', () => {
     expect(preview.fields).not.toHaveProperty('SKU');
   });
 
+  it('keeps an invalid source product name editable in preview and enforces the normalized name at final import', async () => {
+    const folder = path.join(sourceRoot, 'PDD', 'invalid-name');
+    await mkdir(folder, { recursive: true });
+    await writeFile(path.join(folder, 'productInformation-sku.json'), JSON.stringify({
+      productName: 'E2E本地导入包', sellingPrice: 19.8, currencyType: 'CNY',
+      productUrl: 'https://example.com/invalid-local-import-name'
+    }));
+    const reserveLocalImport = vi.fn().mockResolvedValue({ created: false, import: { id: 'existing', status: 'IMPORTED' } });
+    const service = new LocalImportService(config as unknown as ConfigService, { reserveLocalImport } as unknown as PurchaseRepository, vi.fn());
+    const preview = await service.preview({ directories: ['PDD/invalid-name'], primaryDirectory: 'PDD/invalid-name' });
+
+    expect(preview.fields.productName).toBe('E2E本地导入包');
+    await expect(service.import({ previewToken: preview.token, idempotencyKey: 'invalid-name', fields: preview.fields })).rejects.toMatchObject({
+      code: 'LOCAL_IMPORT_INFORMATION_INVALID',
+      message: '产品名称仅允许汉字、数字 0-9 及中文常用标点',
+      details: { field: 'productName', issue: 'INVALID_CHARACTERS', actualLength: 8 }
+    });
+    expect(reserveLocalImport).not.toHaveBeenCalled();
+
+    await service.import({
+      previewToken: preview.token,
+      idempotencyKey: 'normalized-name',
+      fields: { ...preview.fields, productName: '  神奇商品2（新）  ' }
+    });
+    expect(reserveLocalImport).toHaveBeenCalledWith(expect.objectContaining({
+      purchase: expect.objectContaining({ productName: '神奇商品2（新）' })
+    }));
+  });
+
   it('converts a RUB retail price to a four-decimal CNY purchase price and rejects first-import retail tampering', async () => {
     const folder = path.join(sourceRoot, 'WB', 'rub-price');
     await mkdir(folder, { recursive: true });
