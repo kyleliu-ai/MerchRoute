@@ -9,6 +9,7 @@ let admin: Pool;
 let isolated: Pool;
 let purchases: PurchaseRepository;
 let isolatedConnectionString: string;
+const recordedPddUrl = 'https://mobile.yangkeduo.com/goods.html?goods_id=744279810472&_oak_rcto=YWLIj0YF-r4bXgRGk8JiJHm2_C_KbSK_qAUMFq7NvhrNwgoYROT3MC0P&_oc_trace_mark=199&_oc_adinfo=eyJwYWdlX3NuIjoxMDAyOCwic2NlbmVfaWQiOjR9&_oak_gallery_token=28ec92fac59d1bf8ceac88b8f5421ab4&_oak_gallery=https%3A%2F%2Fimg.pddpic.com%2Fmms-material-img%2F2025-05-08%2Ff977a8d8-fbe6-48d5-81c6-b52927f6cb5e.jpeg&_oc_refer_ad=1&page_from=205&thumb_url=https%3A%2F%2Fimg.pddpic.com%2Fmms-material-img%2F2025-05-08%2Ff977a8d8-fbe6-48d5-81c6-b52927f6cb5e.jpeg%3FimageMogr2%2Fthumbnail%2F400x%257CimageView2%2F2%2Fw%2F400%2Fq%2F80&refer_page_name=opt&refer_page_id=10028_1788168285865_8ngcf07f2o&refer_page_sn=10028&uin=TNHGCRQT22VZQNT6RCHZOO22D4_GEXDA';
 
 const input = (idempotencyKey: string, urls = ['https://example.com/local/red', 'https://example.com/local/blue'], platform = 'PDD'): ReserveLocalImportInput => ({
   idempotencyKey, previewHash: 'a'.repeat(64),
@@ -166,7 +167,7 @@ describe.runIf(Boolean(connectionString))('local import PostgreSQL integration',
   it('keeps local imports out of the URL-download list without changing shared product lookup', async () => {
     const urlPurchase = await purchases.createPurchase({
       productName: 'URL下载来源产品', purchasePrice: '19.8', courierFee: '2', currency: 'CNY',
-      providerUrl: 'https://example.com/url-download-only', downloadWorkflowCode: 'E006'
+      providerUrl: recordedPddUrl, downloadWorkflowCode: 'E006'
     });
     await purchases.enqueueDownload(urlPurchase.sku, 'E006');
 
@@ -183,7 +184,17 @@ describe.runIf(Boolean(connectionString))('local import PostgreSQL integration',
     expect(filtered).toMatchObject({ total: 1, page: 1, pageSize: 10 });
     expect(filtered.items).toEqual([expect.objectContaining({ sku: urlPurchase.sku, productName: 'URL下载来源产品' })]);
 
-    const duplicate = await purchases.reserveLocalImport(input('local-duplicate-url-download', ['https://example.com/url-download-only']));
+    const byRecordedUrl = await purchases.listPurchases({
+      page: 1, pageSize: 10, query: `  ${recordedPddUrl}  `, source: 'URL_DOWNLOAD'
+    });
+    expect(byRecordedUrl).toMatchObject({ total: 1 });
+    expect(byRecordedUrl.items).toEqual([expect.objectContaining({ sku: urlPurchase.sku })]);
+    const byPartialUrl = await purchases.listPurchases({
+      page: 1, pageSize: 10, query: 'https://mobile.yangkeduo.com/goods.html?goods_id=744279810472'
+    });
+    expect(byPartialUrl).toMatchObject({ items: [], total: 0 });
+
+    const duplicate = await purchases.reserveLocalImport(input('local-duplicate-url-download', [recordedPddUrl]));
     expect(duplicate.import).toMatchObject({ status: 'SKIPPED_DUPLICATE', duplicateSku: urlPurchase.sku, sku: undefined });
     expect((await purchases.listPurchases({ query: urlPurchase.sku, source: 'URL_DOWNLOAD' })).items).toEqual([
       expect.objectContaining({ sku: urlPurchase.sku })

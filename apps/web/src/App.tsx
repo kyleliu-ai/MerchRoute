@@ -2312,7 +2312,7 @@ function PurchaseProductQueryPage() {
   return <div className="page-stack purchase-page purchase-product-query-page">
     <PageTitle eyebrow="PROCUREMENT CATALOG" title="采购商品查询" description="查询所有已录入本地数据库的采购产品、录入来源和本地媒体目录。" />
     <Card className="filter-bar"><Flex wrap gap={10} align="center">
-      <Input className="search-input" prefix={<SearchOutlined />} value={search} placeholder="搜索 SKU 或产品名" onChange={(event) => { setPage(1); setSearch(event.target.value); }} allowClear />
+      <Input className="search-input" prefix={<SearchOutlined />} value={search} aria-label="SKU、产品名或产品URL" placeholder="搜索 SKU、产品名或产品URL" onChange={(event) => { setPage(1); setSearch(event.target.value); }} allowClear />
       <Select value={datePreset} aria-label="录入日期" onChange={(value) => { setPage(1); setDatePreset(value); if (value !== 'CUSTOM') setCustomCreatedRange(null); }} style={{ width: 140 }} options={[{ value: 'ALL', label: '全部日期' }, { value: 'TODAY', label: '当天' }, { value: 'YESTERDAY', label: '昨天' }, { value: 'LAST_7_DAYS', label: '最近7天' }, { value: 'CUSTOM', label: '时间段查询' }]} />
       {datePreset === 'CUSTOM' && <DatePicker.RangePicker value={customCreatedRange} onChange={(value) => { setPage(1); setCustomCreatedRange(value as [Dayjs, Dayjs] | null); }} allowClear placeholder={['开始日期', '结束日期']} />}
       <Select allowClear aria-label="录入方式" placeholder="录入方式" value={entryMethodKey} onChange={(value) => { setPage(1); setEntryMethodKey(value); }} style={{ width: 220 }} options={methodOptions} />
