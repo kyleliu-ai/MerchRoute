@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 
 const recordedAt = '2026-08-31T08:15:00.000Z';
 const localFolder = 'F:\\采购素材\\E000\\0000162-休闲百搭斜挎包';
+const recordedPddUrl = 'https://mobile.yangkeduo.com/goods.html?goods_id=744279810472&_oak_rcto=YWLIj0YF-r4bXgRGk8JiJHm2_C_KbSK_qAUMFq7NvhrNwgoYROT3MC0P&_oc_trace_mark=199&_oc_adinfo=eyJwYWdlX3NuIjoxMDAyOCwic2NlbmVfaWQiOjR9&_oak_gallery_token=28ec92fac59d1bf8ceac88b8f5421ab4&_oak_gallery=https%3A%2F%2Fimg.pddpic.com%2Fmms-material-img%2F2025-05-08%2Ff977a8d8-fbe6-48d5-81c6-b52927f6cb5e.jpeg&_oc_refer_ad=1&page_from=205&thumb_url=https%3A%2F%2Fimg.pddpic.com%2Fmms-material-img%2F2025-05-08%2Ff977a8d8-fbe6-48d5-81c6-b52927f6cb5e.jpeg%3FimageMogr2%2Fthumbnail%2F400x%257CimageView2%2F2%2Fw%2F400%2Fq%2F80&refer_page_name=opt&refer_page_id=10028_1788168285865_8ngcf07f2o&refer_page_sn=10028&uin=TNHGCRQT22VZQNT6RCHZOO22D4_GEXDA';
 const baseProcurement = {
   versionNo: 1, purchasePrice: '28.5000', retailPrice: '342.0000', courierFee: '2.0000', currency: 'CNY',
   grossWeightGrams: '620.000', lengthCm: '30.000', widthCm: '15.000', heightCm: '10.000',
@@ -10,7 +11,7 @@ const baseProcurement = {
 };
 const localProduct = {
   sku: '0000162', productName: '休闲百搭斜挎包', variants: ['黑色', '米白色'], createdAt: recordedAt, updatedAt: recordedAt,
-  procurement: { ...baseProcurement, id: 'pv-local', providerUrl: 'https://mobile.yangkeduo.com/goods.html?goods_id=162' },
+  procurement: { ...baseProcurement, id: 'pv-local', providerUrl: recordedPddUrl },
   entryOrigin: { methodKey: 'LOCAL_IMAGE_IMPORT:PDD', label: '本地图片导入-PDD', platform: 'PDD', sourceType: 'LOCAL_IMPORT', sourceId: 'local-import-162', recordedAt },
   localMediaFolder: localFolder
 };
@@ -61,8 +62,13 @@ test.describe('采购商品查询', () => {
     await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(localFolder);
     await expect(page.locator('.purchase-table-card tbody')).toContainText('尚未生成');
 
-    await page.getByPlaceholder('搜索 SKU 或产品名').fill('0000162');
+    const searchInput = page.getByRole('textbox', { name: 'SKU、产品名或产品URL' });
+    await expect(searchInput).toHaveAttribute('placeholder', '搜索 SKU、产品名或产品URL');
+    await searchInput.fill('0000162');
     await expect.poll(() => requests.some((url) => url.searchParams.get('query') === '0000162')).toBe(true);
+    await searchInput.fill(recordedPddUrl);
+    await expect.poll(() => requests.some((url) => url.searchParams.get('query') === recordedPddUrl)).toBe(true);
+    await expect(localRow).toContainText(localProduct.sku);
     await page.getByRole('combobox', { name: '录入方式' }).click();
     await page.locator('.ant-select-dropdown:visible .ant-select-item-option').filter({ hasText: '本地图片导入-PDD' }).click();
     await expect.poll(() => requests.some((url) => url.searchParams.get('entryMethodKey') === 'LOCAL_IMAGE_IMPORT:PDD')).toBe(true);

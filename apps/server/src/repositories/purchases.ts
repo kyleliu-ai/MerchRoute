@@ -395,8 +395,14 @@ export class PurchaseRepository {
     }
     if (input.sort && input.sort !== 'RECORDED_DESC') throw new AppError('CONFIG_INVALID', '采购商品排序方式无效');
     if (input.query?.trim()) {
-      values.push(`%${input.query.trim()}%`);
-      where.push(`(p.sku ILIKE $${values.length} OR p.product_name ILIKE $${values.length})`);
+      const query = input.query.trim();
+      values.push(`%${query}%`);
+      const textQueryParameter = values.length;
+      values.push(query);
+      const providerUrlParameter = values.length;
+      where.push(`(p.sku ILIKE $${textQueryParameter} OR p.product_name ILIKE $${textQueryParameter}
+        OR EXISTS(SELECT 1 FROM purchase_provider_urls provider_url
+          WHERE provider_url.sku=p.sku AND provider_url.provider_url_key=$${providerUrlParameter}))`);
     }
     if (input.status) { values.push(input.status); where.push(`latest_job.status = $${values.length}`); }
     if (input.workflowCode) { values.push(input.workflowCode); where.push(`latest_job.workflow_code = $${values.length}`); }
