@@ -1,27 +1,37 @@
 import type { ReactNode } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
 import {
   ArrowRightOutlined,
   BellOutlined,
   BranchesOutlined,
   CalculatorOutlined,
   CheckCircleOutlined,
+  CloudDownloadOutlined,
   CloudServerOutlined,
+  CloudUploadOutlined,
   CodeOutlined,
   DatabaseOutlined,
+  FileTextOutlined,
   GithubOutlined,
   GlobalOutlined,
   LinkOutlined,
   PictureOutlined,
+  QuestionCircleOutlined,
   ReloadOutlined,
   SafetyCertificateOutlined,
   ShopOutlined,
-  SyncOutlined,
+  ToolOutlined,
   WarningOutlined
 } from '@ant-design/icons';
 import { Button, Skeleton, Tooltip } from 'antd';
 import dayjs from 'dayjs';
-import { api, type AboutVersionInfo, type AboutVersionStatus } from './api/client';
+import {
+  api,
+  type AboutContentScope,
+  type AboutRuntimeStatus,
+  type AboutSyncStatus,
+  type AboutVersionInfo
+} from './api/client';
 import './about.css';
 
 const REPOSITORY_URL = 'https://github.com/kyleliu-ai/MerchRoute';
@@ -50,20 +60,57 @@ const POSITIONING = [
   { label: '开源 MIT', icon: <CodeOutlined /> }
 ];
 
-const STATUS_META: Record<AboutVersionStatus, { label: (version: AboutVersionInfo) => string; detail: (version: AboutVersionInfo) => string; icon: ReactNode }> = {
-  UPDATE_AVAILABLE: { label: (version) => `可更新 ${version.aheadBy} 个提交`, detail: () => 'GitHub 目标版本包含当前构建之后的新内容', icon: <SyncOutlined /> },
-  UP_TO_DATE: { label: () => '当前已是最新', detail: () => '当前构建与 GitHub 目标版本一致', icon: <CheckCircleOutlined /> },
-  LOCAL_AHEAD: { label: () => '本地构建领先', detail: () => '当前构建包含 GitHub 目标版本之外的提交', icon: <BranchesOutlined /> },
-  DIVERGED: { label: () => '版本分支已分叉', detail: (version) => `GitHub 目标另有 ${version.aheadBy} 个提交，建议先查看差异`, icon: <BranchesOutlined /> },
-  UNAVAILABLE: { label: () => '暂时无法判断', detail: () => '产品版本仍可用，可稍后重新检查 GitHub', icon: <WarningOutlined /> }
+const SYNC_STATUS_META: Record<AboutSyncStatus, { label: string; detail: string; icon: ReactNode }> = {
+  SYNCED: {
+    label: '运行与部署内容已同步',
+    detail: '本机源码、n8n/部署资产和 GitHub 目标内容一致，无需再次同步。',
+    icon: <CheckCircleOutlined />
+  },
+  LOCAL_ONLY: {
+    label: '本机存在尚未发布的内容',
+    detail: '本机存在尚未发布的运行或部署内容，建议按“本机 → GitHub”流程创建 Draft PR。',
+    icon: <CloudUploadOutlined />
+  },
+  REMOTE_ONLY: {
+    label: 'GitHub 存在本机未包含的内容',
+    detail: 'GitHub 存在本机未包含的运行或部署内容，仅允许查看差异，不自动更新本机。',
+    icon: <CloudDownloadOutlined />
+  },
+  DIVERGED: {
+    label: '运行与部署内容存在双向差异',
+    detail: '运行或部署内容存在双向差异，应保留本机内容并人工审查。',
+    icon: <BranchesOutlined />
+  },
+  UNAVAILABLE: {
+    label: '暂时无法完整核验',
+    detail: '暂时无法完整核验版本内容，不影响当前服务运行。',
+    icon: <WarningOutlined />
+  }
+};
+
+const RUNTIME_STATUS_META: Record<AboutRuntimeStatus, { label: string; icon: ReactNode }> = {
+  CURRENT: { label: '当前运行构建已包含本机源码', icon: <CheckCircleOutlined /> },
+  REBUILD_REQUIRED: { label: '本机源码已变化，当前服务需要重新构建并重启', icon: <ToolOutlined /> },
+  UNKNOWN: { label: '暂时无法确认运行构建与本机源码的关系', icon: <QuestionCircleOutlined /> }
+};
+
+const CONTENT_SCOPE_META: Record<AboutContentScope, { label: string; icon: ReactNode }> = {
+  runtime: { label: '运行与部署', icon: <ToolOutlined /> },
+  documentation: { label: '文档', icon: <FileTextOutlined /> },
+  verification: { label: '测试与 CI', icon: <SafetyCertificateOutlined /> }
 };
 
 export function AboutPage() {
+  const queryClient = useQueryClient();
   const versionQuery = useQuery({
     queryKey: ['about-version'],
-    queryFn: api.aboutVersion,
+    queryFn: () => api.aboutVersion(false),
     retry: false,
     staleTime: 10 * 60_000
+  });
+  const refreshMutation = useMutation({
+    mutationFn: () => api.aboutVersion(true),
+    onSuccess: (data) => queryClient.setQueryData(['about-version'], data)
   });
   const version = versionQuery.data;
   const repositoryUrl = version?.repositoryUrl || REPOSITORY_URL;
@@ -88,7 +135,12 @@ export function AboutPage() {
             <span>LOCAL FIRST</span><span>HUMAN IN THE LOOP</span><span>OPEN SOURCE</span>
           </div>
         </div>
-        <VersionPanel query={versionQuery} />
+        <VersionPanel
+          query={versionQuery}
+          refreshing={versionQuery.isFetching || refreshMutation.isPending}
+          refreshError={refreshMutation.error}
+          onRefresh={() => refreshMutation.mutate()}
+        />
       </section>
 
       <section className="about-section about-route-section" aria-labelledby="about-route-title">
@@ -133,60 +185,100 @@ export function AboutPage() {
         <div>
           <span className="about-github-icon" aria-hidden="true"><GithubOutlined /></span>
           <div>
-            <p className="about-section-eyebrow">SOURCE &amp; RELEASES</p>
-            <h2 id="about-github-title">在 GitHub 查看源码与版本差异</h2>
-            <p>此页面只读取公开版本信息，不会自动更新、拉取或替换本地代码。</p>
+            <p className="about-section-eyebrow">SOURCE &amp; HISTORY</p>
+            <h2 id="about-github-title">在 GitHub 查看源码与提交历史</h2>
+            <p>此页面只读取公开内容与提交信息，不会自动更新、拉取或替换本地代码。</p>
           </div>
         </div>
         <div className="about-github-actions">
           <Button href={repositoryUrl} target="_blank" rel="noopener noreferrer" icon={<GithubOutlined />}>打开 GitHub 仓库</Button>
           {compareUrl
-            ? <Button type="primary" href={compareUrl} target="_blank" rel="noopener noreferrer" icon={<LinkOutlined />}>查看版本差异</Button>
-            : <Tooltip title="当前没有可用的 Compare 链接"><Button type="primary" disabled icon={<LinkOutlined />}>查看版本差异</Button></Tooltip>}
+            ? <Button type="primary" href={compareUrl} target="_blank" rel="noopener noreferrer" icon={<LinkOutlined />}>查看提交历史</Button>
+            : <Tooltip title="当前没有可用的 Compare 链接"><Button type="primary" disabled icon={<LinkOutlined />}>查看提交历史</Button></Tooltip>}
         </div>
       </section>
     </main>
   );
 }
 
-function VersionPanel({ query }: { query: ReturnType<typeof useQuery<AboutVersionInfo, Error>> }) {
+function VersionPanel({
+  query,
+  refreshing,
+  refreshError,
+  onRefresh
+}: {
+  query: UseQueryResult<AboutVersionInfo, Error>;
+  refreshing: boolean;
+  refreshError: Error | null;
+  onRefresh: () => void;
+}) {
   if (query.isLoading) {
-    return <aside className="about-version-panel" aria-label="版本信息"><p className="about-version-eyebrow">VERSION CHECK</p><Skeleton active title={{ width: '48%' }} paragraph={{ rows: 5 }} /></aside>;
+    return <aside className="about-version-panel" aria-label="版本信息"><p className="about-version-eyebrow">CONTENT SYNC</p><Skeleton active title={{ width: '48%' }} paragraph={{ rows: 7 }} /></aside>;
   }
 
   const version = query.data;
   if (!version) {
     return (
       <aside className="about-version-panel" aria-label="版本信息">
-        <p className="about-version-eyebrow">VERSION CHECK</p>
-        <div className="about-version-empty"><WarningOutlined /><strong>版本信息加载失败</strong><span>{query.error?.message || '请稍后重新检查'}</span></div>
-        <Button className="about-version-retry" icon={<ReloadOutlined />} onClick={() => void query.refetch()}>重新检查</Button>
+        <p className="about-version-eyebrow">CONTENT SYNC</p>
+        <div className="about-version-empty"><WarningOutlined /><strong>版本信息加载失败</strong><span>{refreshError?.message || query.error?.message || '请稍后重新检查'}</span></div>
+        <Button className="about-version-retry" loading={refreshing} icon={<ReloadOutlined />} onClick={onRefresh}>重新检查</Button>
       </aside>
     );
   }
 
-  const meta = STATUS_META[version.status];
+  const syncMeta = SYNC_STATUS_META[version.syncStatus];
+  const runtimeMeta = RUNTIME_STATUS_META[version.runtimeStatus];
   return (
     <aside className="about-version-panel" aria-label="版本信息">
       <div className="about-version-heading">
-        <div><p className="about-version-eyebrow">VERSION CHECK</p><h2>版本状态</h2></div>
-        <Tooltip title="重新检查版本"><Button aria-label="重新检查版本" type="text" icon={<ReloadOutlined spin={query.isFetching} />} onClick={() => void query.refetch()} /></Tooltip>
+        <div><p className="about-version-eyebrow">CONTENT SYNC · SCOPE V{version.scopeVersion || '—'}</p><h2>内容同步状态</h2></div>
+        <Tooltip title="重新核验内容"><Button aria-label="重新检查版本" type="text" loading={refreshing} icon={<ReloadOutlined />} onClick={onRefresh} /></Tooltip>
       </div>
-      <div className={`about-version-status is-${version.status.toLowerCase()}`} aria-live="polite">
-        <span className="about-version-status-icon" aria-hidden="true">{meta.icon}</span>
-        <span><strong>{meta.label(version)}</strong><small>{meta.detail(version)}</small></span>
+      <div className={`about-version-status is-${version.syncStatus.toLowerCase()}`} aria-live="polite">
+        <span className="about-version-status-icon" aria-hidden="true">{syncMeta.icon}</span>
+        <span><strong>{syncMeta.label}</strong><small>{syncMeta.detail}</small></span>
+      </div>
+      <div className={`about-runtime-status is-${version.runtimeStatus.toLowerCase()}`}>
+        <span aria-hidden="true">{runtimeMeta.icon}</span><strong>{runtimeMeta.label}</strong>
       </div>
       <div className="about-version-builds">
-        <VersionBuild label="当前产品版本" primary={version.current.productVersion} secondary={shortSha(version.current.commitSha)} />
+        <VersionBuild label="当前运行构建" primary={version.current.productVersion} secondary={shortSha(version.current.commitSha)} />
         <VersionBuild label={version.available?.source === 'release' ? 'GitHub Release' : 'GitHub main'} primary={version.available?.label || '暂不可用'} secondary={shortSha(version.available?.commitSha)} />
+      </div>
+      <div className="about-content-comparison" aria-label="内容范围核验结果">
+        {(Object.keys(CONTENT_SCOPE_META) as AboutContentScope[]).map((scope) => (
+          <ContentComparisonRow key={scope} scope={scope} comparison={version.contentComparison[scope]} />
+        ))}
+      </div>
+      <div className="about-version-diagnostics">
+        <p>{historyDescription(version)}</p>
+        <p>{auxiliaryContentDescription(version)}</p>
       </div>
       <dl className="about-version-details">
         <div><dt>配置契约版本</dt><dd>{version.current.configVersion}</dd></div>
+        <div><dt>指纹范围契约</dt><dd>schema v{version.scopeVersion || '—'}</dd></div>
+        <div><dt>构建时间</dt><dd>{version.current.builtAt ? dayjs(version.current.builtAt).format('YYYY-MM-DD HH:mm') : '—'}</dd></div>
+        <div><dt>构建状态</dt><dd>{version.current.dirty === undefined ? '—' : version.current.dirty ? '包含未提交修改' : '干净构建'}</dd></div>
         <div><dt>{version.available?.source === 'release' ? 'GitHub 发布日期' : 'GitHub 提交日期'}</dt><dd>{version.available?.publishedAt ? dayjs(version.available.publishedAt).format('YYYY-MM-DD HH:mm') : '—'}</dd></div>
-        <div><dt>检查时间</dt><dd>{dayjs(version.checkedAt).format('YYYY-MM-DD HH:mm')}</dd></div>
+        <div><dt>核验时间</dt><dd>{dayjs(version.checkedAt).format('YYYY-MM-DD HH:mm')}</dd></div>
       </dl>
-      {version.error && <p className="about-version-error">{version.error}</p>}
+      {(version.error || refreshError) && <p className="about-version-error">{version.error || refreshError?.message}</p>}
     </aside>
+  );
+}
+
+function ContentComparisonRow({ scope, comparison }: { scope: AboutContentScope; comparison: AboutVersionInfo['contentComparison'][AboutContentScope] }) {
+  const meta = CONTENT_SCOPE_META[scope];
+  const result = comparison.status === 'MATCH'
+    ? '一致'
+    : comparison.status === 'DIFFERENT'
+      ? `差异 ${comparison.differenceCount ?? 0} 项`
+      : '无法核验';
+  return (
+    <div className={`about-content-row is-${comparison.status.toLowerCase()}`}>
+      <span><i aria-hidden="true">{meta.icon}</i>{meta.label}</span><strong>{result}</strong>
+    </div>
   );
 }
 
@@ -196,6 +288,27 @@ function VersionBuild({ label, primary, secondary }: { label: string; primary: s
 
 function SectionHeading({ eyebrow, title, id, description }: { eyebrow: string; title: string; id: string; description?: string }) {
   return <header className="about-section-heading"><div><p className="about-section-eyebrow">{eyebrow}</p><h2 id={id}>{title}</h2></div>{description && <p>{description}</p>}</header>;
+}
+
+function historyDescription(version: AboutVersionInfo): string {
+  const history = version.historyComparison;
+  if (history.status === 'IDENTICAL') return '提交历史一致。';
+  if (history.status === 'UNKNOWN') return '提交历史暂时无法核验；内容指纹仍作为主判断依据。';
+  const localOnly = history.localOnlyCommits ?? 0;
+  const remoteOnly = history.remoteOnlyCommits ?? 0;
+  const suffix = version.syncStatus === 'SYNCED' ? '该差异不影响当前内容一致性。' : '提交历史仅用于诊断，不代替内容核验。';
+  return `提交历史不同：本机独有 ${localOnly} 个提交，GitHub 独有 ${remoteOnly} 个提交。${suffix}`;
+}
+
+function auxiliaryContentDescription(version: AboutVersionInfo): string {
+  const parts: string[] = [];
+  const documentation = version.contentComparison.documentation;
+  const verification = version.contentComparison.verification;
+  if (documentation.status === 'DIFFERENT') parts.push(`文档 ${documentation.differenceCount ?? 0} 项`);
+  if (verification.status === 'DIFFERENT') parts.push(`测试与 CI ${verification.differenceCount ?? 0} 项`);
+  if (parts.length) return `仓库辅助内容存在差异：${parts.join('，')}。`;
+  if (documentation.status === 'UNAVAILABLE' || verification.status === 'UNAVAILABLE') return '仓库辅助内容暂时无法完整核验。';
+  return '文档、测试与 CI 内容一致。';
 }
 
 function shortSha(sha: string | undefined): string {

@@ -1,114 +1,238 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createAboutVersionService } from './about-version.js';
+import { createAboutVersionService, type AboutBuildInfo } from './about-version.js';
+import { collectGithubTreeSnapshot, type ContentFingerprintSnapshot, type FingerprintScopeContract, type GithubTreeEntry } from './content-fingerprint.js';
 
-const CURRENT_SHA = '7bfb072f548d75744305a2faa38f23722c4b81cf';
-const REMOTE_SHA = '4d3e4705ad715b700f385c6fa0348644a4a625a9';
-const CHECKED_AT = new Date('2026-08-31T10:00:00.000Z');
+const CURRENT_SHA = '19e9886d0b4562dd70e46a4431f0da835b61e72c';
+const REMOTE_SHA = `38c6cbb${'1'.repeat(33)}`;
+const REMOTE_TREE_SHA = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+const BASE_TREE_SHA = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+const CONTRACT_BLOB_SHA = 'cccccccccccccccccccccccccccccccccccccccc';
+const CHECKED_AT = new Date('2026-09-01T06:00:00.000Z');
+const CONTRACT: FingerprintScopeContract = {
+  schemaVersion: 1,
+  strategy: 'default-include',
+  documentation: { prefixes: ['docs/'], extensions: ['.md'], basenames: ['LICENSE'] },
+  verification: { prefixes: ['tests/', '.github/'], directoryNames: ['tests'], fileInfixes: ['.test.', '.spec.'], basenames: ['playwright.config.ts', 'eslint.config.js'] },
+  excluded: { prefixes: ['outputs/', 'backups/'], directoryNames: ['node_modules', 'dist'], basenames: ['config/content-fingerprint-scope.json'], basenamePrefixes: ['.env'], extensions: ['.db', '.dump', '.log'] }
+};
 
-describe('about version service', () => {
-  it('prefers the latest stable release and reports commits available to update', async () => {
-    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
-      const url = String(input);
-      if (url.endsWith('/releases/latest')) return json({ tag_name: 'v0.2.0', html_url: 'https://github.com/kyleliu-ai/MerchRoute/releases/tag/v0.2.0', published_at: '2026-08-30T00:00:00Z', draft: false, prerelease: false });
-      if (url.endsWith('/commits/v0.2.0')) return json({ sha: REMOTE_SHA });
-      if (url.includes('/compare/')) return json({ status: 'ahead', ahead_by: 5, html_url: `https://github.com/kyleliu-ai/MerchRoute/compare/${CURRENT_SHA}...${REMOTE_SHA}` });
-      throw new Error(`unexpected request: ${url}`);
-    });
-    const service = createService(fetchImpl);
+describe('about content version service', () => {
+  it('reports SYNCED when runtime content matches despite squash-diverged history and documents the neutral differences', async () => {
+    const local = snapshot([
+      file('apps/server/src/app.ts', '1'),
+      file('README.md', '2'),
+      file('docs/local.md', '3'),
+      file('tests/about.test.ts', '4')
+    ]);
+    const remote = [
+      file('apps/server/src/app.ts', '1'),
+      file('README.md', '5'),
+      file('tests/about.test.ts', '4')
+    ];
+    const service = createService({ local, remote, base: [file('apps/server/src/app.ts', '0')], compareStatus: 'diverged', localOnly: 3, remoteOnly: 8 });
 
     await expect(service.check()).resolves.toMatchObject({
-      current: { productVersion: '0.1.0', configVersion: 'v003', commitSha: CURRENT_SHA },
-      available: { source: 'release', label: 'v0.2.0', commitSha: REMOTE_SHA },
-      status: 'UPDATE_AVAILABLE',
-      aheadBy: 5
+      syncStatus: 'SYNCED',
+      runtimeStatus: 'CURRENT',
+      contentComparison: {
+        runtime: { status: 'MATCH', differenceCount: 0 },
+        documentation: { status: 'DIFFERENT', differenceCount: 2 },
+        verification: { status: 'MATCH', differenceCount: 0 }
+      },
+      historyComparison: { status: 'DIVERGED', localOnlyCommits: 3, remoteOnlyCommits: 8 }
     });
-    expect(fetchImpl.mock.calls.some(([input]) => String(input).endsWith('/MerchRoute'))).toBe(false);
   });
 
-  it('falls back to the repository default branch when no release exists', async () => {
-    const fetchImpl = githubMainFetch({ compareStatus: 'identical', aheadBy: 0 });
-    const result = await createService(fetchImpl).check();
-
-    expect(result).toMatchObject({
-      available: { source: 'main', label: 'main', commitSha: REMOTE_SHA },
-      status: 'UP_TO_DATE',
-      aheadBy: 0,
-      checkedAt: CHECKED_AT.toISOString()
-    });
-    expect(fetchImpl).toHaveBeenCalledTimes(4);
+  it('keeps SYNCED when only README, tests or CI differ', async () => {
+    const local = snapshot([file('apps/web/src/App.tsx', '1'), file('README.md', '2'), file('tests/e2e/about.spec.ts', '3')]);
+    const remote = [file('apps/web/src/App.tsx', '1'), file('README.md', '4'), file('.github/workflows/check.yml', '5')];
+    const result = await createService({ local, remote, base: remote, compareStatus: 'diverged', localOnly: 1, remoteOnly: 2 }).check();
+    expect(result.syncStatus).toBe('SYNCED');
+    expect(result.contentComparison.runtime.status).toBe('MATCH');
+    expect(result.contentComparison.documentation.status).toBe('DIFFERENT');
+    expect(result.contentComparison.verification.status).toBe('DIFFERENT');
   });
 
   it.each([
-    ['behind', 'LOCAL_AHEAD'],
-    ['diverged', 'DIVERGED']
-  ] as const)('maps GitHub compare status %s to %s', async (compareStatus, expectedStatus) => {
-    const result = await createService(githubMainFetch({ compareStatus, aheadBy: compareStatus === 'diverged' ? 2 : 0 })).check();
-    expect(result.status).toBe(expectedStatus);
-    expect(result.aheadBy).toBe(compareStatus === 'diverged' ? 2 : 0);
+    ['LOCAL_ONLY', [file('apps/app.ts', '2')], [file('apps/app.ts', '1')]],
+    ['REMOTE_ONLY', [file('apps/app.ts', '1')], [file('apps/app.ts', '2')]],
+    ['DIVERGED', [file('apps/app.ts', '2')], [file('apps/app.ts', '3')]]
+  ] as const)('classifies runtime content as %s from merge-base changes', async (expected, localEntries, remoteEntries) => {
+    const local = snapshot([...localEntries]);
+    const result = await createService({
+      local,
+      remote: [...remoteEntries],
+      base: [file('apps/app.ts', '1')],
+      compareStatus: expected === 'LOCAL_ONLY' ? 'behind' : expected === 'REMOTE_ONLY' ? 'ahead' : 'diverged',
+      localOnly: expected === 'REMOTE_ONLY' ? 0 : 1,
+      remoteOnly: expected === 'LOCAL_ONLY' ? 0 : 1
+    }).check();
+    expect(result.syncStatus).toBe(expected);
+    expect(result.contentComparison.runtime).toMatchObject({ status: 'DIFFERENT', differenceCount: 1 });
   });
 
-  it('keeps the current product version visible when GitHub cannot be reached', async () => {
-    const service = createService(vi.fn(async () => { throw new Error('request timed out'); }));
-    const result = await service.check();
-
-    expect(result).toMatchObject({
-      current: { productVersion: '0.1.0', configVersion: 'v003', commitSha: CURRENT_SHA },
-      available: null,
-      status: 'UNAVAILABLE'
-    });
-    expect(result.error).toContain('request timed out');
+  it('treats squash-equivalent runtime changes as shared content and keeps a new local file LOCAL_ONLY', async () => {
+    const local = snapshot([file('apps/shared.ts', '2'), file('apps/local-new.ts', '3')]);
+    const result = await createService({
+      local,
+      remote: [file('apps/shared.ts', '2')],
+      base: [file('apps/shared.ts', '1')],
+      compareStatus: 'diverged',
+      localOnly: 4,
+      remoteOnly: 8
+    }).check();
+    expect(result.syncStatus).toBe('LOCAL_ONLY');
+    expect(result.historyComparison.status).toBe('DIVERGED');
   });
 
-  it('reports missing local Git metadata without hiding the remote main build', async () => {
-    const fetchImpl = githubMainFetch({ compareStatus: 'identical', aheadBy: 0 });
+  it('marks the running service for rebuild when local runtime source changed after build', async () => {
+    const built = snapshot([file('apps/app.ts', '1')]);
+    const local = snapshot([file('apps/app.ts', '2')]);
+    const result = await createService({ local, remote: [file('apps/app.ts', '2')], base: [file('apps/app.ts', '1')], build: buildInfo(built) }).check();
+    expect(result.syncStatus).toBe('SYNCED');
+    expect(result.runtimeStatus).toBe('REBUILD_REQUIRED');
+  });
+
+  it.each([
+    ['a truncated GitHub tree', { truncated: true }],
+    ['an incompatible remote scope contract', { remoteContractVersion: 2 }]
+  ])('returns UNAVAILABLE for %s', async (_name, behavior) => {
+    const local = snapshot([file('apps/app.ts', '1')]);
+    const result = await createService({ local, remote: [file('apps/app.ts', '1')], ...behavior }).check();
+    expect(result.syncStatus).toBe('UNAVAILABLE');
+    expect(result.contentComparison.runtime.status).toBe('UNAVAILABLE');
+    expect(result.error).toMatch(/完整|不兼容/);
+  });
+
+  it('keeps product and runtime information when GitHub is unavailable', async () => {
+    const local = snapshot([file('apps/app.ts', '1')]);
+    const fetchImpl = vi.fn(async () => { throw new Error('request timed out'); });
     const service = createAboutVersionService({
       repoRoot: '.',
       configVersion: 'v003',
       productVersion: '0.1.0',
       fetchImpl: fetchImpl as typeof fetch,
-      resolveCommit: async () => { throw new Error('not a git checkout'); },
-      now: () => CHECKED_AT
+      now: () => CHECKED_AT,
+      readContract: async () => CONTRACT,
+      collectLocalSnapshot: async () => local,
+      readBuildInfo: async () => buildInfo(local)
     });
     const result = await service.check();
-
-    expect(result.status).toBe('UNAVAILABLE');
-    expect(result.current.commitSha).toBeUndefined();
-    expect(result.available).toMatchObject({ source: 'main', commitSha: REMOTE_SHA });
-    expect(result.error).toContain('Git 元数据');
-    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(result).toMatchObject({
+      current: { productVersion: '0.1.0', configVersion: 'v003', commitSha: CURRENT_SHA },
+      syncStatus: 'UNAVAILABLE',
+      runtimeStatus: 'CURRENT'
+    });
+    expect(result.error).toContain('request timed out');
+    expect(await service.check()).toBe(result);
+    expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
-  it('caches a successful result for ten minutes', async () => {
-    const fetchImpl = githubMainFetch({ compareStatus: 'ahead', aheadBy: 5 });
-    const service = createService(fetchImpl);
-    const first = await service.check();
-    const second = await service.check();
+  it('prefers a stable release target over main', async () => {
+    const local = snapshot([file('apps/app.ts', '1')]);
+    const fetchImpl = githubFetch({ local, remote: [file('apps/app.ts', '1')], release: true });
+    const result = await createService({ local, remote: [file('apps/app.ts', '1')], fetchImpl }).check();
+    expect(result.available).toMatchObject({ source: 'release', label: 'v0.2.0' });
+    expect(fetchImpl.mock.calls.some(([input]) => String(input).endsWith('/MerchRoute'))).toBe(false);
+  });
 
-    expect(second).toBe(first);
-    expect(fetchImpl).toHaveBeenCalledTimes(4);
+  it('caches normal requests for ten minutes and explicit refresh bypasses the cache', async () => {
+    const local = snapshot([file('apps/app.ts', '1')]);
+    const fetchImpl = githubFetch({ local, remote: [file('apps/app.ts', '1')] });
+    const service = createService({ local, remote: [file('apps/app.ts', '1')], fetchImpl });
+    const first = await service.check();
+    expect(await service.check()).toBe(first);
+    const callsBeforeRefresh = fetchImpl.mock.calls.length;
+    await service.check({ refresh: true });
+    expect(fetchImpl.mock.calls.length).toBeGreaterThan(callsBeforeRefresh);
   });
 });
 
-function createService(fetchImpl: ReturnType<typeof vi.fn>) {
+type ServiceFixture = {
+  local: ContentFingerprintSnapshot;
+  remote: GithubTreeEntry[];
+  base?: GithubTreeEntry[];
+  compareStatus?: string;
+  localOnly?: number;
+  remoteOnly?: number;
+  truncated?: boolean;
+  remoteContractVersion?: number;
+  build?: AboutBuildInfo;
+  fetchImpl?: ReturnType<typeof vi.fn>;
+};
+
+function createService(fixture: ServiceFixture) {
   return createAboutVersionService({
     repoRoot: '.',
     configVersion: 'v003',
     productVersion: '0.1.0',
-    fetchImpl: fetchImpl as typeof fetch,
-    resolveCommit: async () => CURRENT_SHA,
-    now: () => CHECKED_AT
+    fetchImpl: (fixture.fetchImpl ?? githubFetch(fixture)) as typeof fetch,
+    now: () => CHECKED_AT,
+    readContract: async () => CONTRACT,
+    collectLocalSnapshot: async () => fixture.local,
+    readBuildInfo: async () => fixture.build ?? buildInfo(fixture.local)
   });
 }
 
-function githubMainFetch({ compareStatus, aheadBy }: { compareStatus: string; aheadBy: number }) {
+function githubFetch(fixture: Partial<ServiceFixture> & { local: ContentFingerprintSnapshot; remote: GithubTreeEntry[]; release?: boolean }) {
   return vi.fn(async (input: string | URL | Request) => {
     const url = String(input);
-    if (url.endsWith('/releases/latest')) return json({}, 404);
+    if (url.endsWith('/releases/latest')) return fixture.release
+      ? json({ tag_name: 'v0.2.0', html_url: 'https://github.com/kyleliu-ai/MerchRoute/releases/tag/v0.2.0', published_at: CHECKED_AT.toISOString(), draft: false, prerelease: false })
+      : json({}, 404);
     if (url.endsWith('/MerchRoute')) return json({ default_branch: 'main' });
-    if (url.endsWith('/commits/main')) return json({ sha: REMOTE_SHA, html_url: `https://github.com/kyleliu-ai/MerchRoute/commit/${REMOTE_SHA}`, commit: { committer: { date: '2026-08-31T08:00:00Z' } } });
-    if (url.includes('/compare/')) return json({ status: compareStatus, ahead_by: aheadBy, html_url: `https://github.com/kyleliu-ai/MerchRoute/compare/${CURRENT_SHA}...${REMOTE_SHA}` });
+    if (url.endsWith('/commits/main') || url.endsWith('/commits/v0.2.0')) return json({
+      sha: REMOTE_SHA,
+      html_url: `https://github.com/kyleliu-ai/MerchRoute/commit/${REMOTE_SHA}`,
+      commit: { committer: { date: CHECKED_AT.toISOString() }, tree: { sha: REMOTE_TREE_SHA } }
+    });
+    if (url.includes(`/git/trees/${REMOTE_TREE_SHA}`)) {
+      const tree = fixture.remoteContractVersion === undefined
+        ? fixture.remote
+        : [...fixture.remote, { path: 'config/content-fingerprint-scope.json', type: 'blob', sha: CONTRACT_BLOB_SHA }];
+      return json({ truncated: fixture.truncated ?? false, tree });
+    }
+    if (url.includes(`/git/trees/${BASE_TREE_SHA}`)) return json({ truncated: false, tree: fixture.base ?? fixture.remote });
+    if (url.includes(`/git/blobs/${CONTRACT_BLOB_SHA}`)) return json({ encoding: 'base64', content: Buffer.from(JSON.stringify({ schemaVersion: fixture.remoteContractVersion })).toString('base64') });
+    if (url.includes('/compare/')) return json({
+      status: fixture.compareStatus ?? 'diverged',
+      ahead_by: fixture.remoteOnly ?? 8,
+      behind_by: fixture.localOnly ?? 3,
+      html_url: `https://github.com/kyleliu-ai/MerchRoute/compare/${CURRENT_SHA}...${REMOTE_SHA}`,
+      merge_base_commit: { sha: 'dddddddddddddddddddddddddddddddddddddddd', commit: { tree: { sha: BASE_TREE_SHA } } }
+    });
     throw new Error(`unexpected request: ${url}`);
   });
+}
+
+function snapshot(entries: GithubTreeEntry[]): ContentFingerprintSnapshot {
+  return collectGithubTreeSnapshot(entries, CONTRACT);
+}
+
+function buildInfo(snapshotValue: ContentFingerprintSnapshot): AboutBuildInfo {
+  return {
+    schemaVersion: 1,
+    productVersion: '0.1.0',
+    configVersion: 'v003',
+    builtAt: CHECKED_AT.toISOString(),
+    commitSha: CURRENT_SHA,
+    dirty: false,
+    scopeVersion: 1,
+    fingerprints: {
+      runtime: snapshotValue.scopes.runtime.fingerprint,
+      documentation: snapshotValue.scopes.documentation.fingerprint,
+      verification: snapshotValue.scopes.verification.fingerprint
+    },
+    fileCounts: {
+      runtime: snapshotValue.scopes.runtime.fileCount,
+      documentation: snapshotValue.scopes.documentation.fileCount,
+      verification: snapshotValue.scopes.verification.fileCount
+    }
+  };
+}
+
+function file(filePath: string, digit: string): GithubTreeEntry {
+  return { path: filePath, type: 'blob', sha: digit.repeat(40) };
 }
 
 function json(body: unknown, status = 200): Response {
