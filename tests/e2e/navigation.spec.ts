@@ -32,7 +32,7 @@ test.describe('左侧业务导航', () => {
     await purchaseGroup.locator(':scope > .ant-menu-submenu-title').click();
     await expect(purchaseGroup).toHaveClass(/ant-menu-submenu-open/);
     await expect(reviewGroup).not.toHaveClass(/ant-menu-submenu-open/);
-    await expect(purchaseGroup.locator(':scope > .ant-menu-sub .ant-menu-item .ant-menu-title-content')).toHaveText(['本地导入图片', '产品URL下载']);
+    await expect(purchaseGroup.locator(':scope > .ant-menu-sub .ant-menu-item .ant-menu-title-content')).toHaveText(['本地导入图片', '产品URL下载', '采购商品查询']);
 
     await purchaseGroup.getByText('本地导入图片', { exact: true }).click();
     await expect(page).toHaveURL(/\/purchases\/local-import$/);
@@ -45,6 +45,11 @@ test.describe('左侧业务导航', () => {
     await expect(page).toHaveURL(/\/purchases\/url-download$/);
     await expect(page.getByRole('heading', { name: '产品URL下载' })).toBeVisible();
     await expect(purchaseGroup.getByText('产品URL下载', { exact: true }).locator('..')).toHaveClass(/ant-menu-item-selected/);
+
+    await purchaseGroup.getByText('采购商品查询', { exact: true }).click();
+    await expect(page).toHaveURL(/\/purchases\/query$/);
+    await expect(page.getByRole('heading', { name: '采购商品查询' })).toBeVisible();
+    await expect(purchaseGroup.getByText('采购商品查询', { exact: true }).locator('..')).toHaveClass(/ant-menu-item-selected/);
 
     await reviewGroup.locator(':scope > .ant-menu-submenu-title').click();
     await reviewGroup.getByText('待投递清单', { exact: true }).click();
@@ -127,6 +132,7 @@ test.describe('左侧业务导航', () => {
     const purchasePopup = page.locator('.primary-navigation-popup:visible');
     await expect(purchasePopup.getByText('本地导入图片', { exact: true })).toBeVisible();
     await expect(purchasePopup.getByText('产品URL下载', { exact: true })).toBeVisible();
+    await expect(purchasePopup.getByText('采购商品查询', { exact: true })).toBeVisible();
 
     await page.locator('.app-sider .primary-navigation > .ant-menu-submenu').filter({ hasText: '图片审核与投递' }).locator(':scope > .ant-menu-submenu-title').hover();
     const popup = page.locator('.primary-navigation-popup:visible');

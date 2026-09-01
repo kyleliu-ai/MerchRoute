@@ -16,6 +16,7 @@
 
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 320px; background: var(--porcelain); }
+html:has(.purchase-product-query-page), body:has(.purchase-product-query-page) { overflow-x: clip; }
 button, input { font: inherit; }
 .app-frame { min-height: 100vh; }
 .app-sider { position: sticky !important; top: 0; height: 100vh; overflow: hidden; background: #172033 !important; }
@@ -329,6 +330,10 @@ button, input { font: inherit; }
 .purchase-product-cell strong { font-size: 14px; }
 .purchase-product-cell span { color: var(--steel); font-size: 12px; }
 .purchase-product-cell small { color: #8492a3; font: 10px "IBM Plex Mono", monospace; }
+.purchase-product-query-page { min-width: 0; overflow-x: hidden; }
+.purchase-product-query-page .purchase-table-card .ant-table-content { contain: paint; max-width: 100%; }
+.purchase-query-folder { display: flex; max-width: 100%; }
+.purchase-query-folder .ant-typography { min-width: 0; max-width: 264px; margin: 0; overflow: hidden; color: var(--steel); font: 10px/1.35 "IBM Plex Mono", monospace; text-overflow: ellipsis; white-space: nowrap; }
 .provider-url { display: block; overflow: hidden; color: var(--cyan); text-decoration: none; text-overflow: ellipsis; white-space: nowrap; }
 .provider-url:hover { text-decoration: underline; }
 .latest-download-job { display: flex; min-width: 0; flex-direction: column; gap: 5px; }
