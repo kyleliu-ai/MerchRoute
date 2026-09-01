@@ -1,25 +1,43 @@
 import { expect, test, type Page } from '@playwright/test';
 
-const UPDATE_AVAILABLE = {
+const SYNCED = {
   repositoryUrl: 'https://github.com/kyleliu-ai/MerchRoute',
-  current: { productVersion: '0.1.0', configVersion: 'v003', commitSha: '7bfb072f548d75744305a2faa38f23722c4b81cf' },
+  scopeVersion: 1,
+  current: {
+    productVersion: '0.1.0',
+    configVersion: 'v003',
+    commitSha: '19e9886d0b4562dd70e46a4431f0da835b61e72c',
+    builtAt: '2026-09-01T05:30:00.000Z',
+    dirty: false
+  },
   available: {
     source: 'main',
     label: 'main',
-    commitSha: '4d3e4705ad715b700f385c6fa0348644a4a625a9',
-    publishedAt: '2026-08-31T08:00:00.000Z',
-    url: 'https://github.com/kyleliu-ai/MerchRoute/commit/4d3e4705ad715b700f385c6fa0348644a4a625a9',
-    compareUrl: 'https://github.com/kyleliu-ai/MerchRoute/compare/7bfb072f548d75744305a2faa38f23722c4b81cf...4d3e4705ad715b700f385c6fa0348644a4a625a9'
+    commitSha: `38c6cbb${'1'.repeat(33)}`,
+    publishedAt: '2026-09-01T04:00:00.000Z',
+    url: `https://github.com/kyleliu-ai/MerchRoute/commit/38c6cbb${'1'.repeat(33)}`,
+    compareUrl: `https://github.com/kyleliu-ai/MerchRoute/compare/19e9886d0b4562dd70e46a4431f0da835b61e72c...38c6cbb${'1'.repeat(33)}`
   },
-  status: 'UPDATE_AVAILABLE',
-  aheadBy: 5,
-  checkedAt: '2026-08-31T10:00:00.000Z'
+  syncStatus: 'SYNCED',
+  runtimeStatus: 'CURRENT',
+  contentComparison: {
+    runtime: { status: 'MATCH', differenceCount: 0 },
+    documentation: { status: 'DIFFERENT', differenceCount: 2 },
+    verification: { status: 'MATCH', differenceCount: 0 }
+  },
+  historyComparison: { status: 'DIVERGED', localOnlyCommits: 3, remoteOnlyCommits: 8 },
+  checkedAt: '2026-09-01T06:00:00.000Z'
 };
 
 test.describe('关于 MerchRoute', () => {
-  test('展示品牌、业务链路、能力与只读版本差异入口', async ({ page }) => {
+  test('内容一致时以指纹为主结论并将历史和文档差异降级为辅助信息', async ({ page }) => {
     let checks = 0;
-    await mockAboutVersion(page, () => { checks += 1; return UPDATE_AVAILABLE; });
+    let refreshChecks = 0;
+    await mockAboutVersion(page, (url) => {
+      checks += 1;
+      if (url.searchParams.get('refresh') === '1') refreshChecks += 1;
+      return SYNCED;
+    });
     await page.goto('/about');
 
     await expect(page.getByRole('heading', { name: '铺货运营，从素材到上架一次跑通' })).toBeVisible();
@@ -31,29 +49,37 @@ test.describe('关于 MerchRoute', () => {
     ]);
     await expect(page.locator('.about-positioning-item strong')).toHaveText(['本地优先・数据可控', '可审核・可追踪', 'Windows + macOS', '开源 MIT']);
 
-    await expect(page.getByText('可更新 5 个提交')).toBeVisible();
-    await expect(page.getByText('GitHub 目标版本包含当前构建之后的新内容')).toBeVisible();
+    await expect(page.getByText('运行与部署内容已同步')).toBeVisible();
+    await expect(page.getByText('本机源码、n8n/部署资产和 GitHub 目标内容一致，无需再次同步。')).toBeVisible();
+    await expect(page.getByText('当前运行构建已包含本机源码')).toBeVisible();
+    await expect(page.getByText('提交历史不同：本机独有 3 个提交，GitHub 独有 8 个提交。该差异不影响当前内容一致性。')).toBeVisible();
+    await expect(page.getByText('仓库辅助内容存在差异：文档 2 项。')).toBeVisible();
+    await expect(page.getByText('可更新 8 个提交')).toHaveCount(0);
+    await expect(page.getByText('版本分支已分叉')).toHaveCount(0);
+    await expect(page.getByText('建议再次同步')).toHaveCount(0);
     await expect(page.getByText('0.1.0', { exact: true })).toBeVisible();
-    await expect(page.getByText('7bfb072')).toBeVisible();
-    await expect(page.getByText('4d3e470')).toBeVisible();
+    await expect(page.getByText('19e9886')).toBeVisible();
+    await expect(page.getByText('38c6cbb')).toBeVisible();
     await expect(page.getByText('v003')).toBeVisible();
+    await expect(page.getByText('schema v1')).toBeVisible();
 
     const repository = page.getByRole('link', { name: '打开 GitHub 仓库' });
     await expect(repository).toHaveAttribute('href', 'https://github.com/kyleliu-ai/MerchRoute');
     await expect(repository).toHaveAttribute('target', '_blank');
     await expect(repository).toHaveAttribute('rel', /noopener/);
-    const compare = page.getByRole('link', { name: '查看版本差异' });
-    await expect(compare).toHaveAttribute('href', UPDATE_AVAILABLE.available.compareUrl);
+    const compare = page.getByRole('link', { name: '查看提交历史' });
+    await expect(compare).toHaveAttribute('href', SYNCED.available.compareUrl);
     await expect(compare).toHaveAttribute('rel', /noreferrer/);
     await expect(page.getByText('不会自动更新、拉取或替换本地代码')).toBeVisible();
 
     await page.getByRole('button', { name: '重新检查版本' }).click();
     await expect.poll(() => checks).toBe(2);
+    expect(refreshChecks).toBe(1);
   });
 
   test('320px 下业务链路纵向排列且页面不横向溢出', async ({ page }) => {
     await page.setViewportSize({ width: 320, height: 720 });
-    await mockAboutVersion(page, () => UPDATE_AVAILABLE);
+    await mockAboutVersion(page, () => SYNCED);
     await page.goto('/about');
     await expect(page.getByRole('heading', { name: '铺货运营，从素材到上架一次跑通' })).toBeVisible();
 
@@ -64,27 +90,34 @@ test.describe('关于 MerchRoute', () => {
   test('GitHub 不可用时仍显示当前版本且不影响服务健康检查', async ({ page, request }) => {
     await mockAboutVersion(page, () => ({
       repositoryUrl: 'https://github.com/kyleliu-ai/MerchRoute',
-      current: { productVersion: '0.1.0', configVersion: 'v003', commitSha: '7bfb072f548d75744305a2faa38f23722c4b81cf' },
+      scopeVersion: 1,
+      current: { productVersion: '0.1.0', configVersion: 'v003', commitSha: '19e9886d0b4562dd70e46a4431f0da835b61e72c' },
       available: null,
-      status: 'UNAVAILABLE',
-      aheadBy: 0,
-      checkedAt: '2026-08-31T10:00:00.000Z',
-      error: 'GitHub 版本信息暂时不可用：请求超时'
+      syncStatus: 'UNAVAILABLE',
+      runtimeStatus: 'UNKNOWN',
+      contentComparison: {
+        runtime: { status: 'UNAVAILABLE' },
+        documentation: { status: 'UNAVAILABLE' },
+        verification: { status: 'UNAVAILABLE' }
+      },
+      historyComparison: { status: 'UNKNOWN' },
+      checkedAt: '2026-09-01T06:00:00.000Z',
+      error: 'GitHub 内容暂时无法核验：请求超时'
     }));
     await page.goto('/about');
 
-    await expect(page.getByText('暂时无法判断')).toBeVisible();
+    await expect(page.getByText('暂时无法完整核验', { exact: true })).toBeVisible();
     await expect(page.getByText('0.1.0', { exact: true })).toBeVisible();
-    await expect(page.getByText('GitHub 版本信息暂时不可用：请求超时')).toBeVisible();
-    await expect(page.getByRole('button', { name: '查看版本差异' })).toBeDisabled();
+    await expect(page.getByText('GitHub 内容暂时无法核验：请求超时')).toBeVisible();
+    await expect(page.getByRole('button', { name: '查看提交历史' })).toBeDisabled();
     const health = await request.get('/api/v1/health');
     expect(health.ok()).toBe(true);
     expect((await health.json()).status).toBe('ok');
   });
 });
 
-async function mockAboutVersion(page: Page, body: () => unknown): Promise<void> {
-  await page.route('**/api/v1/about/version', async (route) => {
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body()) });
+async function mockAboutVersion(page: Page, body: (url: URL) => unknown): Promise<void> {
+  await page.route('**/api/v1/about/version*', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body(new URL(route.request().url()))) });
   });
 }

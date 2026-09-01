@@ -251,7 +251,10 @@ export async function buildApp(options: BuildAppOptions = {}) {
   });
 
   app.get('/api/v1/health', async () => ({ status: 'ok', version: APP_VERSION, appDataDir: config.appDataDir, now: new Date().toISOString() }));
-  app.get('/api/v1/about/version', async () => await aboutVersion.check());
+  app.get('/api/v1/about/version', async (request) => {
+    const refresh = (request.query as { refresh?: unknown }).refresh;
+    return await aboutVersion.check({ refresh: refresh === '1' || refresh === 'true' });
+  });
   app.get('/api/v1/config', async () => ({
     config: config.get(),
     readiness: await configReadiness(config),

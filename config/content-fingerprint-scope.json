@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "strategy": "default-include",
+  "documentation": {
+    "prefixes": ["docs/"],
+    "extensions": [".md", ".markdown"],
+    "basenames": ["LICENSE", "LICENSE.txt", "NOTICE", "NOTICE.txt"]
+  },
+  "verification": {
+    "prefixes": ["tests/", "test-fixtures/", ".github/"],
+    "directoryNames": ["tests", "__tests__", "fixtures", "__fixtures__"],
+    "fileInfixes": [".test.", ".spec."],
+    "basenames": ["playwright.config.ts", "eslint.config.js"]
+  },
+  "excluded": {
+    "prefixes": [
+      ".git/",
+      ".codex-tmp/",
+      ".e2e-data/",
+      ".runtime-backups/",
+      ".tools/",
+      "acceptance-results/",
+      "app-data/",
+      "backups/",
+      "browser-profiles/",
+      "coverage/",
+      "database-backups/",
+      "db-backups/",
+      "logs/",
+      "node_modules/",
+      "outputs/",
+      "playwright-report/",
+      "test-results/",
+      "tmp/"
+    ],
+    "directoryNames": ["node_modules", "dist", "coverage", ".cache", ".npm", "logs", "tmp", "sessions", "data-test", "playwright-cache"],
+    "basenames": ["config/content-fingerprint-scope.json", ".DS_Store", "Thumbs.db", "Desktop.ini"],
+    "basenamePrefixes": [],
+    "extensions": [".db", ".db-journal", ".sqlite", ".sqlite3", ".pem", ".key", ".p12", ".pfx", ".dump", ".backup", ".sql.gz", ".log", ".tsbuildinfo"]
+  }
+}
