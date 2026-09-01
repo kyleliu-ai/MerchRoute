@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
 import {
   ArrowRightOutlined,
@@ -14,7 +14,9 @@ import {
   FileTextOutlined,
   GithubOutlined,
   GlobalOutlined,
+  KeyOutlined,
   LinkOutlined,
+  LockOutlined,
   PictureOutlined,
   QuestionCircleOutlined,
   ReloadOutlined,
@@ -23,11 +25,13 @@ import {
   ToolOutlined,
   WarningOutlined
 } from '@ant-design/icons';
-import { Button, Skeleton, Tooltip } from 'antd';
+import { Alert, Button, Drawer, Input, Popconfirm, Skeleton, Tooltip, message } from 'antd';
 import dayjs from 'dayjs';
 import {
   api,
   type AboutContentScope,
+  type AboutGithubAccessState,
+  type AboutGithubAccessStatus,
   type AboutRuntimeStatus,
   type AboutSyncStatus,
   type AboutVersionInfo
@@ -35,6 +39,8 @@ import {
 import './about.css';
 
 const REPOSITORY_URL = 'https://github.com/kyleliu-ai/MerchRoute';
+const TOKEN_MANAGEMENT_URL = 'https://github.com/settings/personal-access-tokens';
+const TOKEN_CREATION_URL = 'https://github.com/settings/personal-access-tokens/new?name=MerchRoute-About-ReadOnly&description=Read-only+content+verification+for+MerchRoute&target_name=kyleliu-ai&expires_in=90&contents=read';
 
 const ROUTE_STAGES: Array<{ label: string; detail: string; icon: ReactNode }> = [
   { label: '采购与素材', detail: '建立商品与原始素材入口', icon: <DatabaseOutlined /> },
@@ -102,16 +108,51 @@ const CONTENT_SCOPE_META: Record<AboutContentScope, { label: string; icon: React
 
 export function AboutPage() {
   const queryClient = useQueryClient();
+  const [accessDrawerOpen, setAccessDrawerOpen] = useState(false);
+  const [accessToken, setAccessToken] = useState('');
   const versionQuery = useQuery({
     queryKey: ['about-version'],
     queryFn: () => api.aboutVersion(false),
     retry: false,
     staleTime: 10 * 60_000
   });
+  const accessQuery = useQuery({
+    queryKey: ['about-github-access'],
+    queryFn: () => api.aboutGithubAccess(),
+    retry: false
+  });
   const refreshMutation = useMutation({
     mutationFn: () => api.aboutVersion(true),
-    onSuccess: (data) => queryClient.setQueryData(['about-version'], data)
+    onSuccess: async (data) => {
+      queryClient.setQueryData(['about-version'], data);
+      await accessQuery.refetch();
+    }
   });
+  const saveAccessMutation = useMutation({
+    mutationFn: () => api.saveAboutGithubAccess(accessToken.trim()),
+    onSuccess: async (data) => {
+      setAccessToken('');
+      queryClient.setQueryData(['about-github-access'], data);
+      message.success('Access Token 已验证并安全保存');
+      const version = await api.aboutVersion(true);
+      queryClient.setQueryData(['about-version'], version);
+      await accessQuery.refetch();
+    }
+  });
+  const anonymousMutation = useMutation({
+    mutationFn: () => api.useAnonymousGithubAccess(),
+    onSuccess: async (data) => {
+      setAccessToken('');
+      queryClient.setQueryData(['about-github-access'], data);
+      message.success('已切换为 GitHub 匿名请求');
+      const version = await api.aboutVersion(true);
+      queryClient.setQueryData(['about-version'], version);
+      await accessQuery.refetch();
+    }
+  });
+  useEffect(() => {
+    if (versionQuery.dataUpdatedAt) void accessQuery.refetch();
+  }, [versionQuery.dataUpdatedAt]);
   const version = versionQuery.data;
   const repositoryUrl = version?.repositoryUrl || REPOSITORY_URL;
   const compareUrl = version?.available?.compareUrl;
@@ -140,8 +181,31 @@ export function AboutPage() {
           refreshing={versionQuery.isFetching || refreshMutation.isPending}
           refreshError={refreshMutation.error}
           onRefresh={() => refreshMutation.mutate()}
+          access={accessQuery.data?.access}
+          onConfigureAccess={() => setAccessDrawerOpen(true)}
         />
       </section>
+
+      <GithubAccessDrawer
+        open={accessDrawerOpen}
+        access={accessQuery.data?.access}
+        loading={accessQuery.isLoading}
+        loadError={accessQuery.error}
+        token={accessToken}
+        saving={saveAccessMutation.isPending}
+        disabling={anonymousMutation.isPending}
+        saveError={saveAccessMutation.error}
+        onTokenChange={setAccessToken}
+        onSave={() => saveAccessMutation.mutate()}
+        onUseAnonymous={() => anonymousMutation.mutate()}
+        onClose={() => {
+          if (saveAccessMutation.isPending || anonymousMutation.isPending) return;
+          setAccessToken('');
+          saveAccessMutation.reset();
+          anonymousMutation.reset();
+          setAccessDrawerOpen(false);
+        }}
+      />
 
       <section className="about-section about-route-section" aria-labelledby="about-route-title">
         <SectionHeading eyebrow="OPERATIONS ROUTE" title="一条链路，串起商品运营全流程" id="about-route-title" description="每一步都保留清晰入口、状态和交接关系。" />
@@ -205,24 +269,27 @@ function VersionPanel({
   query,
   refreshing,
   refreshError,
-  onRefresh
+  onRefresh,
+  access,
+  onConfigureAccess
 }: {
   query: UseQueryResult<AboutVersionInfo, Error>;
   refreshing: boolean;
   refreshError: Error | null;
   onRefresh: () => void;
+  access?: AboutGithubAccessStatus;
+  onConfigureAccess: () => void;
 }) {
   if (query.isLoading) {
-    return <aside className="about-version-panel" aria-label="版本信息"><p className="about-version-eyebrow">CONTENT SYNC</p><Skeleton active title={{ width: '48%' }} paragraph={{ rows: 7 }} /></aside>;
+    return <aside className="about-version-panel" aria-label="版本信息"><VersionHeading access={access} refreshing={refreshing} onRefresh={onRefresh} onConfigureAccess={onConfigureAccess} /><Skeleton active title={{ width: '48%' }} paragraph={{ rows: 7 }} /></aside>;
   }
 
   const version = query.data;
   if (!version) {
     return (
       <aside className="about-version-panel" aria-label="版本信息">
-        <p className="about-version-eyebrow">CONTENT SYNC</p>
+        <VersionHeading access={access} refreshing={refreshing} onRefresh={onRefresh} onConfigureAccess={onConfigureAccess} />
         <div className="about-version-empty"><WarningOutlined /><strong>版本信息加载失败</strong><span>{refreshError?.message || query.error?.message || '请稍后重新检查'}</span></div>
-        <Button className="about-version-retry" loading={refreshing} icon={<ReloadOutlined />} onClick={onRefresh}>重新检查</Button>
       </aside>
     );
   }
@@ -231,10 +298,7 @@ function VersionPanel({
   const runtimeMeta = RUNTIME_STATUS_META[version.runtimeStatus];
   return (
     <aside className="about-version-panel" aria-label="版本信息">
-      <div className="about-version-heading">
-        <div><p className="about-version-eyebrow">CONTENT SYNC · SCOPE V{version.scopeVersion || '—'}</p><h2>内容同步状态</h2></div>
-        <Tooltip title="重新核验内容"><Button aria-label="重新检查版本" type="text" loading={refreshing} icon={<ReloadOutlined />} onClick={onRefresh} /></Tooltip>
-      </div>
+      <VersionHeading access={access} scopeVersion={version.scopeVersion} refreshing={refreshing} onRefresh={onRefresh} onConfigureAccess={onConfigureAccess} />
       <div className={`about-version-status is-${version.syncStatus.toLowerCase()}`} aria-live="polite">
         <span className="about-version-status-icon" aria-hidden="true">{syncMeta.icon}</span>
         <span><strong>{syncMeta.label}</strong><small>{syncMeta.detail}</small></span>
@@ -266,6 +330,194 @@ function VersionPanel({
       {(version.error || refreshError) && <p className="about-version-error">{version.error || refreshError?.message}</p>}
     </aside>
   );
+}
+
+function VersionHeading({ access, scopeVersion, refreshing, onRefresh, onConfigureAccess }: {
+  access?: AboutGithubAccessStatus;
+  scopeVersion?: number;
+  refreshing: boolean;
+  onRefresh: () => void;
+  onConfigureAccess: () => void;
+}) {
+  const accessTone = githubAccessTone(access);
+  const accessLabel = githubAccessButtonLabel(access);
+  return (
+    <div className="about-version-heading">
+      <div><p className="about-version-eyebrow">CONTENT SYNC{scopeVersion ? ` · SCOPE V${scopeVersion}` : ''}</p><h2>内容同步状态</h2></div>
+      <div className="about-version-heading-actions">
+        <Tooltip title={accessLabel}>
+          <Button className="about-access-trigger" aria-label="配置 Access Token" type="text" icon={<KeyOutlined />} onClick={onConfigureAccess}>
+            <span className={`about-access-dot is-${accessTone}`} aria-hidden="true" />
+            <span>配置 Access Token</span>
+          </Button>
+        </Tooltip>
+        <Tooltip title="重新核验内容"><Button aria-label="重新检查版本" type="text" loading={refreshing} icon={<ReloadOutlined />} onClick={onRefresh} /></Tooltip>
+      </div>
+    </div>
+  );
+}
+
+function GithubAccessDrawer({
+  open,
+  access,
+  loading,
+  loadError,
+  token,
+  saving,
+  disabling,
+  saveError,
+  onTokenChange,
+  onSave,
+  onUseAnonymous,
+  onClose
+}: {
+  open: boolean;
+  access?: AboutGithubAccessStatus;
+  loading: boolean;
+  loadError: Error | null;
+  token: string;
+  saving: boolean;
+  disabling: boolean;
+  saveError: Error | null;
+  onTokenChange: (value: string) => void;
+  onSave: () => void;
+  onUseAnonymous: () => void;
+  onClose: () => void;
+}) {
+  const meta = githubAccessDrawerMeta(access);
+  const tokenReady = /^github_pat_[A-Za-z0-9_]{20,400}$/.test(token.trim());
+  const busy = saving || disabling;
+  const canManage = access?.canManage !== false;
+  return (
+    <Drawer
+      className="about-access-drawer"
+      width="min(520px, 100vw)"
+      open={open}
+      destroyOnHidden
+      title={<span className="about-access-drawer-title"><KeyOutlined /><strong>GitHub 只读 Access Token</strong></span>}
+      onClose={onClose}
+    >
+      {loading ? <Skeleton active paragraph={{ rows: 8 }} /> : (
+        <div className="about-access-drawer-body">
+          <section className={`about-access-state is-${meta.tone}`} aria-live="polite">
+            <span className="about-access-state-icon" aria-hidden="true">{meta.icon}</span>
+            <div>
+              <p>当前请求方式</p>
+              <h3>{meta.title}</h3>
+              <span>{meta.description}</span>
+            </div>
+          </section>
+
+          {loadError && <Alert showIcon type="warning" message="Access Token 状态暂时无法读取" description={loadError.message} />}
+          {!canManage && <Alert showIcon type="warning" message="当前页面不是从本机打开" description="Access Token 只允许在运行 MerchRoute 的电脑上配置。远程访问仍可查看同步状态。" />}
+          {access?.anonymousFallback && <Alert showIcon type="warning" message="已自动回退匿名请求" description="当前 Token 已失效、权限不足或额度受限；内容核验仍会继续，但请尽快生成并保存新 Token。" />}
+
+          <dl className="about-access-facts">
+            <div><dt>配置来源</dt><dd>{githubAccessSourceLabel(access)}</dd></div>
+            <div><dt>最近核验</dt><dd>{access?.checkedAt ? dayjs(access.checkedAt).format('YYYY-MM-DD HH:mm') : '尚未核验'}</dd></div>
+            <div><dt>GitHub 额度</dt><dd>{access?.rateLimit ? `${access.rateLimit.remaining} / ${access.rateLimit.limit}` : '等待 GitHub 响应'}</dd></div>
+            <div><dt>额度重置</dt><dd>{access?.rateLimit?.resetAt ? dayjs(access.rateLimit.resetAt).format('MM-DD HH:mm') : '—'}</dd></div>
+          </dl>
+
+          <section className="about-access-lifecycle" aria-labelledby="about-access-lifecycle-title">
+            <div className="about-access-section-heading">
+              <p>90-DAY ROTATION</p>
+              <h3 id="about-access-lifecycle-title">生成、验证、到期更换</h3>
+            </div>
+            <div className="about-access-rail" aria-label="Access Token 配置流程">
+              <span><i>01</i><strong>生成</strong><small>仅选 MerchRoute</small></span>
+              <span><i>02</i><strong>验证并保存</strong><small>确认只读访问</small></span>
+              <span><i>03</i><strong>到期更换</strong><small>重新生成并替换</small></span>
+            </div>
+          </section>
+
+          <section className="about-access-guide" aria-labelledby="about-access-guide-title">
+            <div className="about-access-section-heading">
+              <p>GITHUB SETUP</p>
+              <h3 id="about-access-guide-title">生成细粒度只读 Token</h3>
+            </div>
+            <ol>
+              <li><span>1</span><p>点击下方按钮，GitHub 会预填名称、资源所有者、90 天期限和 <code>Contents: read</code>。</p></li>
+              <li><span>2</span><p>在 Repository access 中选择 <code>Only select repositories</code>，只勾选 <code>MerchRoute</code>。</p></li>
+              <li><span>3</span><p>确认 Repository permissions 只有 <code>Contents: Read-only</code>；Metadata 只读由 GitHub 自动附加。</p></li>
+              <li><span>4</span><p>生成后立即复制一次，返回这里粘贴并验证。到期日以 GitHub 管理页为准。</p></li>
+            </ol>
+            <div className="about-access-external-actions">
+              <Button type="primary" href={TOKEN_CREATION_URL} target="_blank" rel="noopener noreferrer" icon={<GithubOutlined />}>生成 90 天只读 Token</Button>
+              <Button href={TOKEN_MANAGEMENT_URL} target="_blank" rel="noopener noreferrer" icon={<LinkOutlined />}>管理 GitHub Tokens</Button>
+            </div>
+          </section>
+
+          <section className="about-access-form" aria-labelledby="about-access-form-title">
+            <div className="about-access-section-heading">
+              <p>SECURE STORAGE</p>
+              <h3 id="about-access-form-title">粘贴并验证</h3>
+            </div>
+            <Alert showIcon type="info" icon={<LockOutlined />} message="Token 只写且不会再次显示" description="MerchRoute 验证仓库只读权限后加密保存在本机应用数据目录；不会写入浏览器、仓库、n8n 或普通日志。" />
+            <label htmlFor="about-github-token">Fine-grained Access Token</label>
+            <Input.Password
+              id="about-github-token"
+              aria-label="GitHub fine-grained Access Token"
+              autoComplete="new-password"
+              maxLength={512}
+              value={token}
+              status={token && !tokenReady ? 'error' : undefined}
+              placeholder="粘贴以 github_pat_ 开头的完整 Token"
+              onChange={(event) => onTokenChange(event.target.value)}
+              onPressEnter={() => { if (tokenReady && canManage && !busy) onSave(); }}
+            />
+            {token && !tokenReady && <p className="about-access-input-error">请输入以 github_pat_ 开头的完整细粒度 Token。</p>}
+            {saveError && <Alert showIcon type="error" message="Access Token 未保存" description={saveError.message} />}
+            <div className="about-access-form-actions">
+              <Button type="primary" icon={<SafetyCertificateOutlined />} loading={saving} disabled={!tokenReady || !canManage || disabling} onClick={onSave}>验证并保存</Button>
+              <Popconfirm
+                title="停用 Access Token？"
+                description="MerchRoute 将立即改用 GitHub 匿名请求，旧环境变量也不会重新接管。"
+                okText="停用并切换匿名模式"
+                cancelText="取消"
+                okButtonProps={{ danger: true, loading: disabling }}
+                onConfirm={onUseAnonymous}
+              >
+                <Button danger type="text" disabled={!canManage || busy || (access?.mode === 'ANONYMOUS' && access.source === 'NONE')}>停用 Token，切换匿名模式</Button>
+              </Popconfirm>
+            </div>
+          </section>
+        </div>
+      )}
+    </Drawer>
+  );
+}
+
+function githubAccessTone(access: AboutGithubAccessStatus | undefined): 'verified' | 'anonymous' | 'warning' {
+  if (!access || (access.mode === 'ANONYMOUS' && access.source === 'NONE' && !access.anonymousFallback)) return 'anonymous';
+  if (access.mode === 'AUTHENTICATED' && access.state === 'VERIFIED') return 'verified';
+  return 'warning';
+}
+
+function githubAccessButtonLabel(access: AboutGithubAccessStatus | undefined): string {
+  const tone = githubAccessTone(access);
+  return tone === 'verified' ? 'Access Token 已验证' : tone === 'warning' ? 'Access Token 需要检查或更换' : '当前使用 GitHub 匿名请求';
+}
+
+function githubAccessDrawerMeta(access: AboutGithubAccessStatus | undefined): { tone: 'verified' | 'anonymous' | 'warning'; title: string; description: string; icon: ReactNode } {
+  const tone = githubAccessTone(access);
+  if (tone === 'verified') return { tone, title: '专用只读 Token 已验证', description: '当前内容核验使用认证请求，并保留十分钟结果缓存。', icon: <CheckCircleOutlined /> };
+  if (tone === 'warning') {
+    const titleByState: Partial<Record<AboutGithubAccessState, string>> = {
+      INVALID: 'Access Token 已失效',
+      INSUFFICIENT_ACCESS: 'Access Token 权限不足',
+      RATE_LIMITED: 'GitHub 额度暂时受限',
+      UNAVAILABLE: 'Access Token 状态不可用'
+    };
+    return { tone, title: titleByState[access?.state || 'UNAVAILABLE'] || 'Access Token 等待核验', description: access?.anonymousFallback ? '当前已使用匿名请求继续核验，不影响本机服务运行。' : '请重新核验或配置新的只读 Token。', icon: <WarningOutlined /> };
+  }
+  return { tone, title: 'GitHub 匿名请求', description: '未配置 Token 时仍可正常核验公开仓库；匿名额度按当前公网 IP 计算。', icon: <GithubOutlined /> };
+}
+
+function githubAccessSourceLabel(access: AboutGithubAccessStatus | undefined): string {
+  if (access?.source === 'MANAGED') return 'MerchRoute 本机加密托管';
+  if (access?.source === 'ENVIRONMENT') return '运行环境变量（兼容模式）';
+  return '未配置，使用匿名请求';
 }
 
 function ContentComparisonRow({ scope, comparison }: { scope: AboutContentScope; comparison: AboutVersionInfo['contentComparison'][AboutContentScope] }) {

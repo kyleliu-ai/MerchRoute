@@ -1,6 +1,11 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
+  aboutGithubRequestHeaders,
+  type AboutGithubAccessService,
+  type AboutGithubAccessState
+} from './about-github-access.js';
+import {
   CONTENT_FINGERPRINT_CONTRACT_PATH,
   collectGithubTreeSnapshot,
   collectLocalContentSnapshot,
@@ -74,12 +79,15 @@ export type AboutVersionInfo = {
 
 export type AboutVersionService = {
   check: (options?: { refresh?: boolean }) => Promise<AboutVersionInfo>;
+  invalidate: () => void;
 };
 
 type AboutVersionServiceOptions = {
   repoRoot: string;
   configVersion: string;
   productVersion?: string;
+  githubToken?: string;
+  githubAccess?: AboutGithubAccessService;
   fetchImpl?: typeof fetch;
   now?: () => Date;
   timeoutMs?: number;
@@ -114,6 +122,7 @@ type GithubBlob = { encoding?: string; content?: string };
 
 export function createAboutVersionService(options: AboutVersionServiceOptions): AboutVersionService {
   const fetchImpl = options.fetchImpl ?? fetch;
+  const staticGithubToken = options.githubToken?.trim() || process.env.MERCHROUTE_GITHUB_TOKEN?.trim();
   const now = options.now ?? (() => new Date());
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const cacheTtlMs = options.cacheTtlMs ?? DEFAULT_CACHE_TTL_MS;
@@ -123,21 +132,30 @@ export function createAboutVersionService(options: AboutVersionServiceOptions): 
   let cached: { expiresAt: number; value: AboutVersionInfo } | undefined;
   let inFlight: Promise<AboutVersionInfo> | undefined;
 
-  const githubJson = async <T>(endpoint: string, allowNotFound = false): Promise<T | undefined> => {
+  const createGithubJson = (token: string | undefined, fallback: boolean): GithubJson => async <T>(endpoint: string, allowNotFound = false): Promise<T | undefined> => {
+    const authenticated = Boolean(token);
     const response = await fetchImpl(`https://api.github.com/repos/${DEFAULT_REPOSITORY}${endpoint}`, {
-      headers: {
-        accept: 'application/vnd.github+json',
-        'user-agent': 'MerchRoute-content-version-checker',
-        'x-github-api-version': '2022-11-28'
-      },
+      headers: aboutGithubRequestHeaders(token),
       signal: AbortSignal.timeout(timeoutMs)
     });
-    if (allowNotFound && response.status === 404) return undefined;
+    if (allowNotFound && response.status === 404) {
+      options.githubAccess?.recordSuccess(response, { authenticated, fallback });
+      return undefined;
+    }
+    if (response.status === 401 && authenticated) throw new GithubRequestError('GitHub 只读令牌无效或已过期', 'INVALID');
+    if (response.status === 403 && response.headers.get('x-ratelimit-remaining') === '0') {
+      throw new GithubRequestError(authenticated ? 'GitHub 认证 API 配额已耗尽' : 'GitHub 匿名 API 配额已耗尽', 'RATE_LIMITED');
+    }
+    if ((response.status === 403 || response.status === 404) && authenticated) {
+      throw new GithubRequestError('GitHub 只读令牌权限不足或无法访问 MerchRoute 仓库', 'INSUFFICIENT_ACCESS');
+    }
+    if (response.status === 403) throw new GithubRequestError('GitHub 匿名 API 配额已耗尽', 'RATE_LIMITED');
     if (!response.ok) throw new Error(`GitHub API 返回 ${response.status}`);
+    options.githubAccess?.recordSuccess(response, { authenticated, fallback });
     return await response.json() as T;
   };
 
-  const readRemoteTree = async (treeSha: string, contract: FingerprintScopeContract, checkContract: boolean): Promise<ContentFingerprintSnapshot> => {
+  const readRemoteTree = async (treeSha: string, contract: FingerprintScopeContract, checkContract: boolean, githubJson: GithubJson): Promise<ContentFingerprintSnapshot> => {
     const response = await githubJson<GithubTree>(`/git/trees/${encodeURIComponent(treeSha)}?recursive=1`);
     if (!response || response.truncated !== false || !Array.isArray(response.tree)) throw new Error('GitHub 文件树不完整，无法核验内容');
     if (checkContract) await assertRemoteScopeCompatibility(response.tree, contract, githubJson);
@@ -180,10 +198,10 @@ export function createAboutVersionService(options: AboutVersionServiceOptions): 
     const runtimeStatus = resolveRuntimeStatus(buildInfo, localSnapshot, contract.schemaVersion);
     let available: AboutAvailableVersion | null = null;
 
-    try {
+    const checkRemote = async (githubJson: GithubJson): Promise<AboutVersionInfo> => {
       const target = await resolveGithubTarget(githubJson);
       available = target.available;
-      const remoteSnapshot = await readRemoteTree(target.treeSha, contract, true);
+      const remoteSnapshot = await readRemoteTree(target.treeSha, contract, true, githubJson);
       const contentComparison = compareContent(localSnapshot, remoteSnapshot);
       let historyComparison: AboutVersionInfo['historyComparison'] = { status: 'UNKNOWN' };
       let baseSnapshot: ContentFingerprintSnapshot | undefined;
@@ -198,7 +216,7 @@ export function createAboutVersionService(options: AboutVersionServiceOptions): 
             historyComparison = parseHistoryComparison(comparison);
             if (comparison?.html_url) available.compareUrl = comparison.html_url;
             const mergeBaseTreeSha = normalizeObjectId(comparison?.merge_base_commit?.commit?.tree?.sha);
-            if (mergeBaseTreeSha) baseSnapshot = await readRemoteTree(mergeBaseTreeSha, contract, false);
+            if (mergeBaseTreeSha) baseSnapshot = await readRemoteTree(mergeBaseTreeSha, contract, false, githubJson);
           } catch {
             historyComparison = { status: 'UNKNOWN' };
           }
@@ -221,7 +239,25 @@ export function createAboutVersionService(options: AboutVersionServiceOptions): 
         checkedAt,
         ...(error ? { error } : {})
       };
+    };
+
+    const credential = options.githubAccess?.current();
+    const githubToken = credential?.token ?? staticGithubToken;
+    try {
+      return await checkRemote(createGithubJson(githubToken, false));
     } catch (error) {
+      let finalError = error;
+      if (githubToken && error instanceof GithubRequestError) {
+        options.githubAccess?.recordFailure(error.accessState, { authenticated: true });
+        try {
+          return await checkRemote(createGithubJson(undefined, true));
+        } catch (fallbackError) {
+          options.githubAccess?.recordFailure(githubFailureState(fallbackError), { authenticated: false, fallback: true });
+          finalError = fallbackError;
+        }
+      } else {
+        options.githubAccess?.recordFailure(githubFailureState(error), { authenticated: false });
+      }
       return {
         repositoryUrl: DEFAULT_REPOSITORY_URL,
         scopeVersion: contract.schemaVersion,
@@ -232,7 +268,7 @@ export function createAboutVersionService(options: AboutVersionServiceOptions): 
         contentComparison: unavailableContentComparison(),
         historyComparison: { status: 'UNKNOWN' },
         checkedAt,
-        error: localError ?? safeReason(error, 'GitHub 内容暂时无法核验')
+        error: localError ?? safeReason(finalError, 'GitHub 内容暂时无法核验')
       };
     }
   };
@@ -250,8 +286,22 @@ export function createAboutVersionService(options: AboutVersionServiceOptions): 
       if (inFlight) return await inFlight;
       inFlight = performCheck().then(cacheResult).finally(() => { inFlight = undefined; });
       return await inFlight;
-    }
+    },
+    invalidate: () => { cached = undefined; }
   };
+}
+
+type GithubJson = <T>(endpoint: string, allowNotFound?: boolean) => Promise<T | undefined>;
+
+class GithubRequestError extends Error {
+  constructor(message: string, readonly accessState: AboutGithubAccessState) {
+    super(message);
+    this.name = 'GithubRequestError';
+  }
+}
+
+function githubFailureState(error: unknown): AboutGithubAccessState {
+  return error instanceof GithubRequestError ? error.accessState : 'UNAVAILABLE';
 }
 
 async function resolveGithubTarget(githubJson: <T>(endpoint: string, allowNotFound?: boolean) => Promise<T | undefined>): Promise<{ available: AboutAvailableVersion; treeSha: string }> {

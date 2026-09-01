@@ -56,9 +56,12 @@ import { WbSourceMediaCleanupService } from './services/wb-source-media/index.js
 import { WbSourceMediaFiles } from './services/wb-source-media/source-files.js';
 import { LocalImportService, assertStrictDirectory } from './services/local-import/index.js';
 import { createAboutVersionService, type AboutVersionService } from './services/about-version.js';
+import { createAboutGithubAccessService, type AboutGithubAccessService } from './services/about-github-access.js';
+import { registerAboutRoutes } from './routes/about.js';
 
 type Services = {
   aboutVersion: AboutVersionService;
+  aboutGithubAccess: AboutGithubAccessService;
   config: ConfigService;
   store: StateStore;
   scanner: ScannerService;
@@ -102,6 +105,7 @@ declare module 'fastify' {
 export type BuildAppOptions = {
   databaseUrl?: string | null;
   aboutVersion?: AboutVersionService;
+  aboutGithubAccess?: AboutGithubAccessService;
 };
 
 export async function buildApp(options: BuildAppOptions = {}) {
@@ -112,9 +116,12 @@ export async function buildApp(options: BuildAppOptions = {}) {
   const databaseUrl = options.databaseUrl === null ? '' : options.databaseUrl ?? process.env.DATABASE_URL;
   const config = new ConfigService();
   await config.initialize();
+  const aboutGithubAccess = options.aboutGithubAccess ?? createAboutGithubAccessService({ appDataDir: config.appDataDir });
+  await aboutGithubAccess.initialize();
   const aboutVersion = options.aboutVersion ?? createAboutVersionService({
     repoRoot: path.resolve(import.meta.dirname, '../../..'),
-    configVersion: APP_VERSION
+    configVersion: APP_VERSION,
+    githubAccess: aboutGithubAccess
   });
   const store = new StateStore(config.appDataDir);
   await store.initialize();
@@ -241,7 +248,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const rootDirectory = parseOzonMediaOutputRootTemplate(configuredOzonTemplate).rootDirectory;
     await ozonPublishing.synchronizeRootDirectory(rootDirectory).catch((error) => app.log.warn({ err: error, rootDirectory }, 'OZON 共享媒体根目录启动同步失败'));
   }
-  app.decorate('services', { aboutVersion, config, store, scanner, mediaIndex, thumbnails, submissions, purchases, localImports, downloads, shipping, pricing, pricingQuery, productIdentity, wb, wbPresetRepository, wbPresets, wbPublishing, wbTaskStatusSynchronizer, wbAutoPublishRepository, wbAutoPublishing, wbStoreRepository, wbStores, wbStoreGateway, wbSourceMediaCleanup, wbCatalog, ozon, ozonStoreRepository, ozonStores, ozonStoreGateway, ozonSourceMediaCleanup, ozonPublishing, ozonAutoPublishing, ozonCatalog, variantDelivery });
+  app.decorate('services', { aboutVersion, aboutGithubAccess, config, store, scanner, mediaIndex, thumbnails, submissions, purchases, localImports, downloads, shipping, pricing, pricingQuery, productIdentity, wb, wbPresetRepository, wbPresets, wbPublishing, wbTaskStatusSynchronizer, wbAutoPublishRepository, wbAutoPublishing, wbStoreRepository, wbStores, wbStoreGateway, wbSourceMediaCleanup, wbCatalog, ozon, ozonStoreRepository, ozonStores, ozonStoreGateway, ozonSourceMediaCleanup, ozonPublishing, ozonAutoPublishing, ozonCatalog, variantDelivery });
   await app.register(cors, { origin: /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/ });
 
   app.setErrorHandler((error, _request, reply) => {
@@ -251,10 +258,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   });
 
   app.get('/api/v1/health', async () => ({ status: 'ok', version: APP_VERSION, appDataDir: config.appDataDir, now: new Date().toISOString() }));
-  app.get('/api/v1/about/version', async (request) => {
-    const refresh = (request.query as { refresh?: unknown }).refresh;
-    return await aboutVersion.check({ refresh: refresh === '1' || refresh === 'true' });
-  });
+  await registerAboutRoutes(app, { githubAccess: aboutGithubAccess, version: aboutVersion });
   app.get('/api/v1/config', async () => ({
     config: config.get(),
     readiness: await configReadiness(config),

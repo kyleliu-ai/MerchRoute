@@ -857,6 +857,19 @@ export type AboutRuntimeStatus = 'CURRENT' | 'REBUILD_REQUIRED' | 'UNKNOWN';
 export type AboutHistoryStatus = 'IDENTICAL' | 'AHEAD' | 'BEHIND' | 'DIVERGED' | 'UNKNOWN';
 export type AboutContentMatchStatus = 'MATCH' | 'DIFFERENT' | 'UNAVAILABLE';
 export type AboutContentScope = 'runtime' | 'documentation' | 'verification';
+export type AboutGithubAccessMode = 'AUTHENTICATED' | 'ANONYMOUS';
+export type AboutGithubAccessSource = 'MANAGED' | 'ENVIRONMENT' | 'NONE';
+export type AboutGithubAccessState = 'VERIFIED' | 'UNVERIFIED' | 'INVALID' | 'INSUFFICIENT_ACCESS' | 'RATE_LIMITED' | 'UNAVAILABLE';
+
+export type AboutGithubAccessStatus = {
+  mode: AboutGithubAccessMode;
+  source: AboutGithubAccessSource;
+  state: AboutGithubAccessState;
+  anonymousFallback: boolean;
+  canManage: boolean;
+  rateLimit?: { limit: number; remaining: number; resetAt?: string };
+  checkedAt?: string;
+};
 
 export type AboutVersionInfo = {
   repositoryUrl: string;
@@ -918,6 +931,9 @@ export function connectMediaIndexEvents({ onState, onOpen, onError }: MediaIndex
 export const api = {
   health: () => request<{ status: string; version: string; appDataDir: string }>('/api/v1/health'),
   aboutVersion: (refresh = false) => request<AboutVersionInfo>(`/api/v1/about/version${refresh ? '?refresh=1' : ''}`),
+  aboutGithubAccess: () => request<{ access: AboutGithubAccessStatus }>('/api/v1/about/github-access'),
+  saveAboutGithubAccess: (token: string) => request<{ access: AboutGithubAccessStatus }>('/api/v1/about/github-access', { method: 'PUT', body: JSON.stringify({ token }) }),
+  useAnonymousGithubAccess: () => request<{ access: AboutGithubAccessStatus }>('/api/v1/about/github-access', { method: 'DELETE' }),
   config: () => request<ConfigView>('/api/v1/config'),
   saveConfig: (config: AppConfig) => request<ConfigView>('/api/v1/config', { method: 'PUT', body: JSON.stringify(config) }),
   initializeWbPublishing: (input: WbPublishingConfig) => request<{ config: WbAppConfig; wbPublishingReadiness: WbPublishingReadiness }>('/api/v1/config/wb-publishing/initialize', { method: 'POST', body: JSON.stringify(input) }),

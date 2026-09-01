@@ -128,6 +128,62 @@ describe('about content version service', () => {
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
+  it('uses the dedicated read-only GitHub token, records expiry and retries anonymously without exposing it', async () => {
+    const local = snapshot([file('apps/app.ts', '1')]);
+    const token = 'github_pat_test_secret_value';
+    const anonymousFetch = githubFetch({ local, remote: [file('apps/app.ts', '1')] });
+    const fetchImpl = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const authorization = new Headers(init?.headers).get('authorization');
+      if (authorization) {
+        expect(authorization).toBe(`Bearer ${token}`);
+        return json({ message: `bad credentials ${token}` }, 401);
+      }
+      return anonymousFetch(input);
+    });
+    const githubAccess = {
+      initialize: vi.fn(async () => undefined),
+      current: vi.fn(() => ({ token, source: 'MANAGED' as const })),
+      status: vi.fn(() => ({ mode: 'AUTHENTICATED' as const, source: 'MANAGED' as const, state: 'UNVERIFIED' as const, anonymousFallback: false, canManage: true })),
+      save: vi.fn(), useAnonymous: vi.fn(), recordSuccess: vi.fn(), recordFailure: vi.fn()
+    };
+    const service = createAboutVersionService({
+      repoRoot: '.',
+      configVersion: 'v003',
+      productVersion: '0.1.0',
+      githubAccess,
+      fetchImpl: fetchImpl as typeof fetch,
+      now: () => CHECKED_AT,
+      readContract: async () => CONTRACT,
+      collectLocalSnapshot: async () => local,
+      readBuildInfo: async () => buildInfo(local)
+    });
+
+    const result = await service.check();
+    expect(result.syncStatus).toBe('SYNCED');
+    expect(githubAccess.recordFailure).toHaveBeenCalledWith('INVALID', { authenticated: true });
+    expect(githubAccess.recordSuccess).toHaveBeenCalledWith(expect.any(Response), { authenticated: false, fallback: true });
+    expect(JSON.stringify(result)).not.toContain(token);
+  });
+
+  it('explains anonymous GitHub rate-limit failures without retrying', async () => {
+    const local = snapshot([file('apps/app.ts', '1')]);
+    const fetchImpl = vi.fn(async () => json({ message: 'rate limit exceeded' }, 403));
+    const service = createAboutVersionService({
+      repoRoot: '.',
+      configVersion: 'v003',
+      productVersion: '0.1.0',
+      fetchImpl: fetchImpl as typeof fetch,
+      now: () => CHECKED_AT,
+      readContract: async () => CONTRACT,
+      collectLocalSnapshot: async () => local,
+      readBuildInfo: async () => buildInfo(local)
+    });
+
+    const result = await service.check();
+    expect(result.error).toBe('GitHub 匿名 API 配额已耗尽');
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
   it('prefers a stable release target over main', async () => {
     const local = snapshot([file('apps/app.ts', '1')]);
     const fetchImpl = githubFetch({ local, remote: [file('apps/app.ts', '1')], release: true });
