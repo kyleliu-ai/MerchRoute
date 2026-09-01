@@ -86,7 +86,7 @@
 .about-version-panel {
   align-self: center;
   min-width: 0;
-  padding: 24px;
+  padding: 22px;
   color: #e9f8f9;
   border: 1px solid rgba(113, 220, 220, .25);
   border-radius: 15px;
@@ -102,25 +102,43 @@
 .about-version-heading .ant-btn:hover { color: var(--about-cyan-soft) !important; background: rgba(0, 213, 215, .1) !important; }
 .about-version-heading .ant-btn:focus-visible { outline: 2px solid var(--about-cyan-soft); outline-offset: 2px; }
 .about-version-eyebrow { margin: 0; color: var(--about-cyan-soft); font: 650 9px/1.4 "IBM Plex Mono", monospace; letter-spacing: .18em; }
-.about-version-status { display: flex; min-height: 68px; margin-top: 20px; align-items: center; gap: 13px; padding: 13px 14px; border: 1px solid rgba(0, 213, 215, .25); border-radius: 11px; background: rgba(0, 213, 215, .08); }
+.about-version-status { display: flex; min-height: 76px; margin-top: 18px; align-items: center; gap: 13px; padding: 14px; border: 1px solid rgba(0, 213, 215, .25); border-radius: 11px; background: rgba(0, 213, 215, .08); }
 .about-version-status-icon { display: inline-flex; width: 34px; height: 34px; flex: 0 0 34px; align-items: center; justify-content: center; color: var(--about-cyan-soft); border-radius: 50%; background: rgba(0, 213, 215, .14); font-size: 17px; }
 .about-version-status strong, .about-version-status small { display: block; }
 .about-version-status strong { color: #fff; font-size: 14px; }
 .about-version-status small { margin-top: 3px; color: #9fb6c2; font-size: 11px; line-height: 1.45; }
-.about-version-status.is-update_available { border-color: rgba(168, 242, 59, .34); background: rgba(168, 242, 59, .07); }
-.about-version-status.is-update_available .about-version-status-icon { color: var(--about-lime); background: rgba(168, 242, 59, .13); }
-.about-version-status.is-up_to_date .about-version-status-icon { color: var(--about-lime); }
+.about-version-status.is-synced { border-color: rgba(168, 242, 59, .34); background: rgba(168, 242, 59, .07); }
+.about-version-status.is-synced .about-version-status-icon { color: var(--about-lime); background: rgba(168, 242, 59, .13); }
+.about-version-status.is-local_only .about-version-status-icon { color: var(--about-cyan-soft); }
+.about-version-status.is-remote_only { border-color: rgba(100, 183, 232, .36); background: rgba(100, 183, 232, .08); }
+.about-version-status.is-remote_only .about-version-status-icon { color: #8fd1f5; background: rgba(100, 183, 232, .13); }
 .about-version-status.is-diverged,
 .about-version-status.is-unavailable { border-color: rgba(232, 168, 85, .36); background: rgba(232, 168, 85, .08); }
 .about-version-status.is-diverged .about-version-status-icon,
 .about-version-status.is-unavailable .about-version-status-icon { color: #f0ba6e; background: rgba(232, 168, 85, .12); }
-.about-version-builds { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 18px; border: 1px solid rgba(255,255,255,.1); border-radius: 11px; overflow: hidden; }
+.about-runtime-status { display: flex; margin-top: 10px; align-items: center; gap: 8px; padding: 8px 10px; color: #aac1cb; border: 1px solid rgba(255,255,255,.08); border-radius: 8px; background: rgba(255,255,255,.035); font-size: 10px; line-height: 1.45; }
+.about-runtime-status > span { display: inline-flex; color: var(--about-cyan-soft); }
+.about-runtime-status.is-rebuild_required { color: #efc185; border-color: rgba(232,168,85,.22); background: rgba(232,168,85,.06); }
+.about-runtime-status.is-rebuild_required > span { color: #f0ba6e; }
+.about-runtime-status.is-unknown > span { color: #8ea7b3; }
+.about-version-builds { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 12px; border: 1px solid rgba(255,255,255,.1); border-radius: 11px; overflow: hidden; }
 .about-version-build { min-width: 0; padding: 14px; background: rgba(255,255,255,.035); }
 .about-version-build + .about-version-build { border-left: 1px solid rgba(255,255,255,.1); }
 .about-version-build span, .about-version-build strong, .about-version-build code { display: block; }
 .about-version-build span { color: #8ea7b3; font-size: 10px; }
 .about-version-build strong { margin-top: 7px; overflow-wrap: anywhere; color: #fff; font: 650 17px/1.2 "IBM Plex Mono", monospace; }
 .about-version-build code { margin-top: 5px; color: var(--about-cyan-soft); font: 600 11px/1.2 "IBM Plex Mono", monospace; }
+.about-content-comparison { display: grid; margin-top: 12px; grid-template-columns: repeat(3, minmax(0, 1fr)); border: 1px solid rgba(255,255,255,.1); border-radius: 10px; overflow: hidden; }
+.about-content-row { min-width: 0; padding: 10px; background: rgba(255,255,255,.025); }
+.about-content-row + .about-content-row { border-left: 1px solid rgba(255,255,255,.08); }
+.about-content-row > span { display: flex; min-width: 0; align-items: center; gap: 6px; color: #8ea7b3; font-size: 9px; white-space: nowrap; }
+.about-content-row i { display: inline-flex; color: #8ea7b3; font-style: normal; }
+.about-content-row strong { display: block; margin-top: 5px; overflow-wrap: anywhere; color: #d8e9ed; font-size: 10px; line-height: 1.35; }
+.about-content-row.is-match strong { color: var(--about-lime); }
+.about-content-row.is-different strong { color: #f0ba6e; }
+.about-version-diagnostics { margin-top: 12px; padding: 10px 11px; color: #9fb6c2; border-left: 2px solid rgba(51,240,216,.4); background: rgba(0,213,215,.035); font-size: 9px; line-height: 1.55; }
+.about-version-diagnostics p { margin: 0; }
+.about-version-diagnostics p + p { margin-top: 4px; }
 .about-version-details { display: grid; margin: 14px 0 0; gap: 8px; }
 .about-version-details > div { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
 .about-version-details dt { color: #8ea7b3; font-size: 10px; }
@@ -218,6 +236,10 @@
   .about-hero-tags { gap: 6px; }
   .about-version-builds { grid-template-columns: minmax(0, 1fr); }
   .about-version-build + .about-version-build { border-top: 1px solid rgba(255,255,255,.1); border-left: 0; }
+  .about-content-comparison { grid-template-columns: minmax(0, 1fr); }
+  .about-content-row + .about-content-row { border-top: 1px solid rgba(255,255,255,.08); border-left: 0; }
+  .about-content-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .about-content-row strong { margin-top: 0; text-align: right; }
   .about-version-details > div { align-items: flex-start; flex-direction: column; gap: 3px; }
   .about-version-details dd { text-align: left; }
   .about-positioning-grid { grid-template-columns: minmax(0, 1fr); }

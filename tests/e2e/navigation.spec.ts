@@ -5,9 +5,18 @@ test.describe('左侧业务导航', () => {
     await page.route('**/api/v1/about/version', async (route) => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
         repositoryUrl: 'https://github.com/kyleliu-ai/MerchRoute',
+        scopeVersion: 1,
         current: { productVersion: '0.1.0', configVersion: 'v003', commitSha: '7bfb072f548d75744305a2faa38f23722c4b81cf' },
         available: { source: 'main', label: 'main', commitSha: '4d3e4705ad715b700f385c6fa0348644a4a625a9', url: 'https://github.com/kyleliu-ai/MerchRoute', compareUrl: 'https://github.com/kyleliu-ai/MerchRoute/compare/7bfb072...4d3e470' },
-        status: 'UPDATE_AVAILABLE', aheadBy: 5, checkedAt: '2026-08-31T10:00:00.000Z'
+        syncStatus: 'SYNCED',
+        runtimeStatus: 'CURRENT',
+        contentComparison: {
+          runtime: { status: 'MATCH', differenceCount: 0 },
+          documentation: { status: 'MATCH', differenceCount: 0 },
+          verification: { status: 'MATCH', differenceCount: 0 }
+        },
+        historyComparison: { status: 'DIVERGED', localOnlyCommits: 3, remoteOnlyCommits: 8 },
+        checkedAt: '2026-08-31T10:00:00.000Z'
       }) });
     });
     await page.goto('/');

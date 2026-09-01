@@ -852,14 +852,21 @@ export type MediaIndexEventHandlers = {
   onError?: () => void;
 };
 
-export type AboutVersionStatus = 'UPDATE_AVAILABLE' | 'UP_TO_DATE' | 'LOCAL_AHEAD' | 'DIVERGED' | 'UNAVAILABLE';
+export type AboutSyncStatus = 'SYNCED' | 'LOCAL_ONLY' | 'REMOTE_ONLY' | 'DIVERGED' | 'UNAVAILABLE';
+export type AboutRuntimeStatus = 'CURRENT' | 'REBUILD_REQUIRED' | 'UNKNOWN';
+export type AboutHistoryStatus = 'IDENTICAL' | 'AHEAD' | 'BEHIND' | 'DIVERGED' | 'UNKNOWN';
+export type AboutContentMatchStatus = 'MATCH' | 'DIFFERENT' | 'UNAVAILABLE';
+export type AboutContentScope = 'runtime' | 'documentation' | 'verification';
 
 export type AboutVersionInfo = {
   repositoryUrl: string;
+  scopeVersion: number;
   current: {
     productVersion: string;
     configVersion: string;
     commitSha?: string;
+    builtAt?: string;
+    dirty?: boolean;
   };
   available: {
     source: 'release' | 'main';
@@ -869,8 +876,17 @@ export type AboutVersionInfo = {
     url: string;
     compareUrl?: string;
   } | null;
-  status: AboutVersionStatus;
-  aheadBy: number;
+  syncStatus: AboutSyncStatus;
+  runtimeStatus: AboutRuntimeStatus;
+  contentComparison: Record<AboutContentScope, {
+    status: AboutContentMatchStatus;
+    differenceCount?: number;
+  }>;
+  historyComparison: {
+    status: AboutHistoryStatus;
+    localOnlyCommits?: number;
+    remoteOnlyCommits?: number;
+  };
   checkedAt: string;
   error?: string;
 };
@@ -901,7 +917,7 @@ export function connectMediaIndexEvents({ onState, onOpen, onError }: MediaIndex
 
 export const api = {
   health: () => request<{ status: string; version: string; appDataDir: string }>('/api/v1/health'),
-  aboutVersion: () => request<AboutVersionInfo>('/api/v1/about/version'),
+  aboutVersion: (refresh = false) => request<AboutVersionInfo>(`/api/v1/about/version${refresh ? '?refresh=1' : ''}`),
   config: () => request<ConfigView>('/api/v1/config'),
   saveConfig: (config: AppConfig) => request<ConfigView>('/api/v1/config', { method: 'PUT', body: JSON.stringify(config) }),
   initializeWbPublishing: (input: WbPublishingConfig) => request<{ config: WbAppConfig; wbPublishingReadiness: WbPublishingReadiness }>('/api/v1/config/wb-publishing/initialize', { method: 'POST', body: JSON.stringify(input) }),

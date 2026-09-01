@@ -13,12 +13,19 @@ describe.sequential('review and submission integration', () => {
   let config: AppConfig;
   let app: Awaited<ReturnType<typeof buildApp>>;
   const aboutVersion = {
-    check: vi.fn(async () => ({
+    check: vi.fn(async (_options?: { refresh?: boolean }) => ({
       repositoryUrl: 'https://github.com/kyleliu-ai/MerchRoute',
+      scopeVersion: 1,
       current: { productVersion: '0.1.0', configVersion: 'v003', commitSha: '7bfb072f548d75744305a2faa38f23722c4b81cf' },
       available: { source: 'main' as const, label: 'main', commitSha: '4d3e4705ad715b700f385c6fa0348644a4a625a9', url: 'https://github.com/kyleliu-ai/MerchRoute' },
-      status: 'UPDATE_AVAILABLE' as const,
-      aheadBy: 5,
+      syncStatus: 'SYNCED' as const,
+      runtimeStatus: 'CURRENT' as const,
+      contentComparison: {
+        runtime: { status: 'MATCH' as const, differenceCount: 0 },
+        documentation: { status: 'DIFFERENT' as const, differenceCount: 2 },
+        verification: { status: 'MATCH' as const, differenceCount: 0 }
+      },
+      historyComparison: { status: 'DIVERGED' as const, localOnlyCommits: 3, remoteOnlyCommits: 8 },
       checkedAt: '2026-08-31T10:00:00.000Z'
     }))
   };
@@ -45,10 +52,15 @@ describe.sequential('review and submission integration', () => {
     expect(response.json()).toMatchObject({
       current: { productVersion: '0.1.0', configVersion: 'v003' },
       available: { source: 'main', label: 'main' },
-      status: 'UPDATE_AVAILABLE',
-      aheadBy: 5
+      syncStatus: 'SYNCED',
+      runtimeStatus: 'CURRENT',
+      scopeVersion: 1
     });
-    expect(aboutVersion.check).toHaveBeenCalledOnce();
+    expect(aboutVersion.check).toHaveBeenCalledWith({ refresh: false });
+
+    const refreshed = await app.inject({ method: 'GET', url: '/api/v1/about/version?refresh=1' });
+    expect(refreshed.statusCode).toBe(200);
+    expect(aboutVersion.check).toHaveBeenLastCalledWith({ refresh: true });
   });
 
   afterAll(async () => {
