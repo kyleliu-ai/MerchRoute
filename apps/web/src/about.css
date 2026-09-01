@@ -98,9 +98,14 @@
 .about-version-panel .ant-skeleton-paragraph > li { background: rgba(255,255,255,.12) !important; }
 .about-version-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
 .about-version-heading h2 { margin: 2px 0 0; color: white; font-size: 21px; }
+.about-version-heading-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 2px; }
 .about-version-heading .ant-btn { color: #a9c0cb; }
 .about-version-heading .ant-btn:hover { color: var(--about-cyan-soft) !important; background: rgba(0, 213, 215, .1) !important; }
 .about-version-heading .ant-btn:focus-visible { outline: 2px solid var(--about-cyan-soft); outline-offset: 2px; }
+.about-version-heading .about-access-trigger { display: inline-flex; height: 30px; align-items: center; gap: 5px; padding-inline: 8px; color: #c0d5dc; font-size: 10px; }
+.about-access-dot { display: inline-block; width: 6px; height: 6px; flex: 0 0 6px; border-radius: 50%; background: #8296a0; box-shadow: 0 0 0 3px rgba(130,150,160,.1); }
+.about-access-dot.is-verified { background: var(--about-lime); box-shadow: 0 0 0 3px rgba(168,242,59,.13); }
+.about-access-dot.is-warning { background: #f0ba6e; box-shadow: 0 0 0 3px rgba(240,186,110,.12); }
 .about-version-eyebrow { margin: 0; color: var(--about-cyan-soft); font: 650 9px/1.4 "IBM Plex Mono", monospace; letter-spacing: .18em; }
 .about-version-status { display: flex; min-height: 76px; margin-top: 18px; align-items: center; gap: 13px; padding: 14px; border: 1px solid rgba(0, 213, 215, .25); border-radius: 11px; background: rgba(0, 213, 215, .08); }
 .about-version-status-icon { display: inline-flex; width: 34px; height: 34px; flex: 0 0 34px; align-items: center; justify-content: center; color: var(--about-cyan-soft); border-radius: 50%; background: rgba(0, 213, 215, .14); font-size: 17px; }
@@ -149,6 +154,63 @@
 .about-version-empty strong { color: #fff; }
 .about-version-empty span { color: #9fb6c2; font-size: 12px; }
 .about-version-retry { width: 100%; color: #d8f4f5; border-color: rgba(0,213,215,.32); background: rgba(0,213,215,.08); }
+
+.about-access-drawer {
+  --access-navy: #061523;
+  --access-ink: #0a2436;
+  --access-cyan: #00aeb8;
+  --access-cyan-soft: #17cfc8;
+  --access-lime: #91d52f;
+}
+.about-access-drawer .ant-drawer-header { padding: 17px 20px; border-bottom-color: #dbe7e9; background: #f8fbfc; }
+.about-access-drawer .ant-drawer-body { padding: 20px; background: #f3f7f8; }
+.about-access-drawer-title { display: inline-flex; align-items: center; gap: 9px; color: var(--access-ink); }
+.about-access-drawer-title > .anticon { color: #07858e; }
+.about-access-drawer-body { display: flex; flex-direction: column; gap: 16px; }
+.about-access-state { display: flex; min-height: 112px; align-items: center; gap: 14px; padding: 17px; color: #d8eaee; border: 1px solid rgba(23,207,200,.23); border-radius: 14px; background: linear-gradient(135deg, #061523, #0d3042); box-shadow: 0 12px 28px rgba(6,21,35,.12); }
+.about-access-state-icon { display: inline-flex; width: 42px; height: 42px; flex: 0 0 42px; align-items: center; justify-content: center; color: var(--access-cyan-soft); border: 1px solid rgba(23,207,200,.28); border-radius: 50%; background: rgba(23,207,200,.09); font-size: 19px; }
+.about-access-state p { margin: 0; color: #81bfc4; font: 650 9px/1.3 "IBM Plex Mono", monospace; letter-spacing: .14em; text-transform: uppercase; }
+.about-access-state h3 { margin: 5px 0 0; color: #fff; font-size: 17px; line-height: 1.3; }
+.about-access-state div > span { display: block; margin-top: 5px; color: #a7bdc6; font-size: 11px; line-height: 1.55; }
+.about-access-state.is-verified { border-color: rgba(145,213,47,.3); }
+.about-access-state.is-verified .about-access-state-icon { color: var(--access-lime); border-color: rgba(145,213,47,.35); background: rgba(145,213,47,.09); }
+.about-access-state.is-warning { border-color: rgba(232,168,85,.35); }
+.about-access-state.is-warning .about-access-state-icon { color: #f0ba6e; border-color: rgba(232,168,85,.35); background: rgba(232,168,85,.1); }
+.about-access-facts { display: grid; margin: 0; grid-template-columns: repeat(2, minmax(0, 1fr)); border: 1px solid #d9e5e7; border-radius: 11px; overflow: hidden; background: #fff; }
+.about-access-facts > div { min-width: 0; padding: 11px 13px; }
+.about-access-facts > div:nth-child(even) { border-left: 1px solid #e3ecee; }
+.about-access-facts > div:nth-child(n+3) { border-top: 1px solid #e3ecee; }
+.about-access-facts dt { color: #748792; font-size: 10px; }
+.about-access-facts dd { margin: 4px 0 0; overflow-wrap: anywhere; color: var(--access-ink); font: 600 11px/1.4 "IBM Plex Mono", monospace; }
+.about-access-lifecycle,
+.about-access-guide,
+.about-access-form { padding: 17px; border: 1px solid #d9e5e7; border-radius: 13px; background: #fff; }
+.about-access-section-heading p { margin: 0; color: #07858e; font: 650 9px/1.3 "IBM Plex Mono", monospace; letter-spacing: .15em; }
+.about-access-section-heading h3 { margin: 4px 0 0; color: var(--access-ink); font-size: 16px; line-height: 1.35; }
+.about-access-rail { position: relative; display: grid; margin-top: 18px; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.about-access-rail::before { position: absolute; top: 14px; right: 13%; left: 13%; height: 1px; content: ""; background: linear-gradient(90deg, #a8cfd2, var(--access-cyan-soft), var(--access-lime)); }
+.about-access-rail > span { position: relative; z-index: 1; min-width: 0; text-align: center; }
+.about-access-rail i { display: inline-flex; width: 29px; height: 29px; align-items: center; justify-content: center; color: #067982; border: 1px solid #aad4d6; border-radius: 50%; background: #f2fbfb; font: 700 9px/1 "IBM Plex Mono", monospace; }
+.about-access-rail strong,
+.about-access-rail small { display: block; }
+.about-access-rail strong { margin-top: 9px; color: var(--access-ink); font-size: 11px; }
+.about-access-rail small { margin-top: 3px; color: #7d8e98; font-size: 9px; line-height: 1.4; }
+.about-access-guide ol { display: flex; margin: 15px 0 0; padding: 0; flex-direction: column; gap: 10px; list-style: none; }
+.about-access-guide li { display: grid; grid-template-columns: 25px minmax(0, 1fr); align-items: start; gap: 9px; }
+.about-access-guide li > span { display: inline-flex; width: 23px; height: 23px; align-items: center; justify-content: center; color: #067982; border-radius: 6px; background: #e8f7f7; font: 700 9px/1 "IBM Plex Mono", monospace; }
+.about-access-guide li p { margin: 1px 0 0; color: #506775; font-size: 11px; line-height: 1.65; }
+.about-access-guide code { padding: 1px 4px; color: #075f68; border-radius: 4px; background: #edf7f7; font: 600 10px/1.4 "IBM Plex Mono", monospace; }
+.about-access-external-actions { display: flex; margin-top: 15px; flex-wrap: wrap; gap: 8px; }
+.about-access-external-actions .ant-btn-primary { border-color: #07858e; background: #07858e; }
+.about-access-form { display: flex; flex-direction: column; gap: 11px; }
+.about-access-form > label { margin-top: 2px; color: #344e5d; font-size: 11px; font-weight: 650; }
+.about-access-form .ant-input-affix-wrapper:focus-within { border-color: #07858e; box-shadow: 0 0 0 2px rgba(7,133,142,.12); }
+.about-access-input-error { margin: -6px 0 0; color: #c84d55; font-size: 10px; }
+.about-access-form-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.about-access-form-actions .ant-btn-primary { border-color: #07858e; background: #07858e; }
+.about-access-drawer .ant-btn:focus-visible,
+.about-access-drawer a:focus-visible,
+.about-access-drawer .ant-input-affix-wrapper:focus-visible { outline: 2px solid #07858e; outline-offset: 2px; }
 
 .about-section { padding: clamp(26px, 4vw, 46px); border: 1px solid #dce5e9; border-radius: 16px; background: #fff; box-shadow: 0 10px 32px rgba(23, 32, 51, .045); }
 .about-section-heading { display: flex; align-items: end; justify-content: space-between; gap: 28px; }
@@ -214,6 +276,7 @@
   .about-hero h1 { font-size: clamp(31px, 9vw, 44px); }
   .about-lead { margin-top: 17px; font-size: 14px; line-height: 1.75; }
   .about-version-panel { width: 100%; padding: 19px; }
+  .about-access-drawer .ant-drawer-body { padding: 16px; }
   .about-section { padding: 24px 19px; border-radius: 14px; }
   .about-section-heading { align-items: flex-start; flex-direction: column; gap: 8px; }
   .about-section-heading > p { text-align: left; }
@@ -234,6 +297,9 @@
 @media (max-width: 420px) {
   .about-brand-signature small { max-width: 200px; line-height: 1.45; }
   .about-hero-tags { gap: 6px; }
+  .about-version-heading { align-items: stretch; flex-direction: column; gap: 10px; }
+  .about-version-heading-actions { width: 100%; justify-content: space-between; }
+  .about-version-heading .about-access-trigger { flex: 1 1 auto; justify-content: flex-start; }
   .about-version-builds { grid-template-columns: minmax(0, 1fr); }
   .about-version-build + .about-version-build { border-top: 1px solid rgba(255,255,255,.1); border-left: 0; }
   .about-content-comparison { grid-template-columns: minmax(0, 1fr); }
@@ -247,6 +313,19 @@
   .about-github-icon { width: 42px; height: 42px; flex-basis: 42px; font-size: 20px; }
   .about-github-actions { flex-direction: column; }
   .about-github-actions .ant-btn { width: 100%; }
+  .about-access-state { align-items: flex-start; padding: 15px; }
+  .about-access-facts { grid-template-columns: minmax(0, 1fr); }
+  .about-access-facts > div:nth-child(even) { border-left: 0; }
+  .about-access-facts > div + div { border-top: 1px solid #e3ecee; }
+  .about-access-rail { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .about-access-rail::before { top: 12px; bottom: 12px; left: 14px; width: 1px; height: auto; background: linear-gradient(180deg, #a8cfd2, var(--access-cyan-soft), var(--access-lime)); }
+  .about-access-rail > span { display: grid; grid-template-columns: 29px minmax(0, 1fr); align-items: center; column-gap: 10px; text-align: left; }
+  .about-access-rail strong { margin-top: 0; }
+  .about-access-rail small { grid-column: 2; }
+  .about-access-external-actions,
+  .about-access-form-actions { align-items: stretch; flex-direction: column; }
+  .about-access-external-actions .ant-btn,
+  .about-access-form-actions .ant-btn { width: 100%; }
 }
 
 @media (prefers-reduced-motion: reduce) {

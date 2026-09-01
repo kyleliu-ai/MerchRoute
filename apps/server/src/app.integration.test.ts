@@ -13,6 +13,7 @@ describe.sequential('review and submission integration', () => {
   let config: AppConfig;
   let app: Awaited<ReturnType<typeof buildApp>>;
   const aboutVersion = {
+    invalidate: vi.fn(),
     check: vi.fn(async (_options?: { refresh?: boolean }) => ({
       repositoryUrl: 'https://github.com/kyleliu-ai/MerchRoute',
       scopeVersion: 1,

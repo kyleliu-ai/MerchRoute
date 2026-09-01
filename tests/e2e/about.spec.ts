@@ -114,10 +114,73 @@ test.describe('关于 MerchRoute', () => {
     expect(health.ok()).toBe(true);
     expect((await health.json()).status).toBe('ok');
   });
+
+  test('可在内容同步状态中生成、验证、替换并停用只读 Token', async ({ page }) => {
+    const submittedToken = `github_pat_${'a'.repeat(40)}`;
+    let access = githubAccess('ANONYMOUS', 'NONE', 'UNVERIFIED');
+    let savedBody: unknown;
+    let versionChecks = 0;
+    await mockAboutVersion(page, () => { versionChecks += 1; return SYNCED; });
+    await page.route('**/api/v1/about/github-access', async (route) => {
+      const method = route.request().method();
+      if (method === 'PUT') {
+        savedBody = route.request().postDataJSON();
+        access = {
+          ...githubAccess('AUTHENTICATED', 'MANAGED', 'VERIFIED'),
+          checkedAt: '2026-09-01T08:00:00.000Z',
+          rateLimit: { remaining: 4997, limit: 5000, resetAt: '2026-09-01T09:00:00.000Z' }
+        };
+      } else if (method === 'DELETE') {
+        access = githubAccess('ANONYMOUS', 'NONE', 'UNVERIFIED');
+      }
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ access }) });
+    });
+    await page.goto('/about');
+
+    await page.getByRole('button', { name: '配置 Access Token' }).click();
+    await expect(page.getByRole('heading', { name: 'GitHub 匿名请求' })).toBeVisible();
+    const createLink = page.getByRole('link', { name: '生成 90 天只读 Token' });
+    await expect(createLink).toHaveAttribute('href', /personal-access-tokens\/new\?/);
+    await expect(createLink).toHaveAttribute('href', /expires_in=90/);
+    await expect(createLink).toHaveAttribute('href', /contents=read/);
+    await expect(createLink).toHaveAttribute('target', '_blank');
+    await expect(page.getByRole('link', { name: '管理 GitHub Tokens' })).toHaveAttribute('href', 'https://github.com/settings/personal-access-tokens');
+
+    const input = page.getByLabel('GitHub fine-grained Access Token');
+    await input.fill(submittedToken);
+    await page.getByRole('button', { name: '验证并保存' }).click();
+    await expect(page.getByRole('heading', { name: '专用只读 Token 已验证' })).toBeVisible();
+    await expect(page.getByText('4997 / 5000')).toBeVisible();
+    await expect(input).toHaveValue('');
+    expect(savedBody).toEqual({ token: submittedToken });
+    await expect(page.getByText(submittedToken)).toHaveCount(0);
+    await expect.poll(() => versionChecks).toBeGreaterThanOrEqual(2);
+
+    await page.getByRole('button', { name: '停用 Token，切换匿名模式' }).click();
+    await page.getByRole('button', { name: '停用并切换匿名模式' }).click();
+    await expect(page.getByRole('heading', { name: 'GitHub 匿名请求' })).toBeVisible();
+  });
+
+  test('Token 失效回退时保留告警，320px 抽屉不横向溢出', async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 720 });
+    await mockAboutVersion(page, () => SYNCED);
+    await page.route('**/api/v1/about/github-access', async (route) => route.fulfill({ json: {
+      access: { ...githubAccess('ANONYMOUS', 'MANAGED', 'INVALID'), anonymousFallback: true, canManage: true }
+    } }));
+    await page.goto('/about');
+    await page.getByRole('button', { name: '配置 Access Token' }).click();
+    await expect(page.getByRole('heading', { name: 'Access Token 已失效' })).toBeVisible();
+    await expect(page.getByText('已自动回退匿名请求')).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  });
 });
 
 async function mockAboutVersion(page: Page, body: (url: URL) => unknown): Promise<void> {
   await page.route('**/api/v1/about/version*', async (route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body(new URL(route.request().url()))) });
   });
+}
+
+function githubAccess(mode: 'AUTHENTICATED' | 'ANONYMOUS', source: 'MANAGED' | 'ENVIRONMENT' | 'NONE', state: 'VERIFIED' | 'UNVERIFIED' | 'INVALID') {
+  return { mode, source, state, anonymousFallback: false, canManage: true };
 }
