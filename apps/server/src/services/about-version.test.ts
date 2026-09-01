@@ -128,6 +128,50 @@ describe('about content version service', () => {
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
+  it('uses the dedicated read-only GitHub token without exposing it in failures', async () => {
+    const local = snapshot([file('apps/app.ts', '1')]);
+    const token = 'github_pat_test_secret_value';
+    const fetchImpl = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      expect(new Headers(init?.headers).get('authorization')).toBe(`Bearer ${token}`);
+      return json({ message: `bad credentials ${token}` }, 401);
+    });
+    const service = createAboutVersionService({
+      repoRoot: '.',
+      configVersion: 'v003',
+      productVersion: '0.1.0',
+      githubToken: token,
+      fetchImpl: fetchImpl as typeof fetch,
+      now: () => CHECKED_AT,
+      readContract: async () => CONTRACT,
+      collectLocalSnapshot: async () => local,
+      readBuildInfo: async () => buildInfo(local)
+    });
+
+    const result = await service.check();
+    expect(result.syncStatus).toBe('UNAVAILABLE');
+    expect(result.error).toBe('GitHub 只读令牌无效或已过期');
+    expect(JSON.stringify(result)).not.toContain(token);
+  });
+
+  it('explains anonymous GitHub rate-limit failures without retrying', async () => {
+    const local = snapshot([file('apps/app.ts', '1')]);
+    const fetchImpl = vi.fn(async () => json({ message: 'rate limit exceeded' }, 403));
+    const service = createAboutVersionService({
+      repoRoot: '.',
+      configVersion: 'v003',
+      productVersion: '0.1.0',
+      fetchImpl: fetchImpl as typeof fetch,
+      now: () => CHECKED_AT,
+      readContract: async () => CONTRACT,
+      collectLocalSnapshot: async () => local,
+      readBuildInfo: async () => buildInfo(local)
+    });
+
+    const result = await service.check();
+    expect(result.error).toBe('GitHub 匿名 API 配额已耗尽');
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
   it('prefers a stable release target over main', async () => {
     const local = snapshot([file('apps/app.ts', '1')]);
     const fetchImpl = githubFetch({ local, remote: [file('apps/app.ts', '1')], release: true });
