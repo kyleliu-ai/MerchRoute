@@ -75,6 +75,28 @@ test.describe.serial('E000 local import and E001 delivery', () => {
     await expect(page.getByLabel('零售价格(RUB)')).toHaveAttribute('readonly', '');
     await expect(page.getByLabel('汇率')).toHaveValue('不适用或未提供');
     await expect(page.getByLabel('国内采购价(CNY)')).toHaveValue('39.8');
+    await expect(page.getByText('产品名称仅允许汉字、数字 0-9 及中文常用标点')).toBeVisible();
+    await expect(page.locator('.local-import-product-name-count')).toHaveText('8 / 20');
+    await expect(page.getByRole('button', { name: '确认导入' })).toBeDisabled();
+
+    const directPreviewResponse = await page.request.post('/api/v1/local-import/preview', {
+      data: { directories: ['PDD/E2E红色', 'PDD/E2E蓝色'], primaryDirectory: 'PDD/E2E红色' }
+    });
+    expect(directPreviewResponse.ok()).toBeTruthy();
+    const directPreview = await directPreviewResponse.json() as { token: string; fields: Record<string, unknown> };
+    const bypassResponse = await page.request.post('/api/v1/local-import/imports', {
+      data: { previewToken: directPreview.token, idempotencyKey: `invalid-product-name-${Date.now()}`, fields: directPreview.fields }
+    });
+    expect(bypassResponse.status()).toBe(409);
+    expect(await bypassResponse.text()).toContain('LOCAL_IMPORT_INFORMATION_INVALID');
+
+    await page.getByLabel('产品名称').fill('包'.repeat(21));
+    await expect(page.locator('.local-import-product-name-count')).toHaveText('21 / 20');
+    await expect(page.getByText('产品名称最多 20 个字符，当前 21 个')).toBeVisible();
+    await expect(page.getByRole('button', { name: '确认导入' })).toBeDisabled();
+    await page.getByLabel('产品名称').fill('本地导入测试包（2）');
+    await expect(page.locator('.local-import-product-name-count')).toHaveText('10 / 20');
+    await expect(page.getByRole('button', { name: '确认导入' })).toBeEnabled();
     await page.setViewportSize({ width: 320, height: 760 });
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true);
     await page.getByRole('button', { name: '确认导入' }).click();
@@ -124,12 +146,12 @@ test.describe.serial('E000 local import and E001 delivery', () => {
     await filteredRow.getByRole('button', { name: /编辑/ }).click();
     const editDrawer = page.getByRole('dialog').filter({ hasText: `编辑采购信息 · ${sku}` });
     await expect(editDrawer).toContainText('不会重新复制媒体或启动 n8n');
-    await editDrawer.getByLabel('产品名称').fill('E2E本地导入包-已编辑');
+    await editDrawer.getByLabel('产品名称').fill('本地导入测试包已编辑');
     await editDrawer.getByLabel('零售价格(RUB)').fill('88');
     await expect(editDrawer.getByLabel('国内采购价(CNY)')).toHaveValue('39.8000');
     await editDrawer.getByRole('button', { name: '保存采购信息' }).click();
     await expect(page.getByText('采购信息已保存，新版本已创建')).toBeVisible();
-    await expect(filteredRow).toContainText('E2E本地导入包-已编辑');
+    await expect(filteredRow).toContainText('本地导入测试包已编辑');
 
     const updatedPurchase = await page.request.get(`/api/v1/purchases/${sku}`);
     const updatedDetail = (await updatedPurchase.json()).purchase;
@@ -226,7 +248,7 @@ test.describe.serial('E000 local import and E001 delivery', () => {
     sourceFolderName = imported.sourceFolderName;
     const taskResponse = await page.request.get(`/api/v1/tasks/${taskId}`);
     const task = await taskResponse.json();
-    expect(task.productIdentity).toMatchObject({ status: 'RESOLVED', sku, productName: 'E2E本地导入包-已编辑', source: 'TASK_CONTEXT' });
+    expect(task.productIdentity).toMatchObject({ status: 'RESOLVED', sku, productName: '本地导入测试包已编辑', source: 'TASK_CONTEXT' });
     const selected = [
       task.images.find((item: { relativePath: string }) => item.relativePath.includes('E2E蓝色/详情图/image.png')).relativePath,
       task.images.find((item: { relativePath: string }) => item.relativePath.includes('E2E红色/主图/image.png')).relativePath
@@ -257,7 +279,7 @@ test.describe.serial('E000 local import and E001 delivery', () => {
     const manifest = JSON.parse(await readFile(path.join(target, 'selection-manifest.json'), 'utf8'));
     expect(manifest.selectedFiles.map((item: { sourceRelativePath: string }) => item.sourceRelativePath)).toEqual(selected);
     const parameters = JSON.parse(await readFile(path.join(target, parameterName!), 'utf8'));
-    expect(parameters).toMatchObject({ SKU: sku, productName: 'E2E本地导入包-已编辑' });
+    expect(parameters).toMatchObject({ SKU: sku, productName: '本地导入测试包已编辑' });
     expect(parameters).toHaveProperty('downloadFatherFolder');
     expect(JSON.parse(await readFile(path.join(target, '_READY.json'), 'utf8'))).toMatchObject({ ready: true, sourceStageId: 'E000', targetStageId: 'E001', imageCount: 2 });
     const archive = path.resolve('.e2e-data', 'roots', 'E000', 'archive', targetName!);

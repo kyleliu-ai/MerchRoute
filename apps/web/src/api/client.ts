@@ -347,8 +347,19 @@ export type TaskNotification = {
   productName?: string; workflowCode?: string; details: Record<string, unknown>; readAt?: string; resolvedAt?: string;
   createdAt: string; updatedAt: string;
 };
+export type PurchaseEntryOrigin = {
+  methodKey: string;
+  label: string;
+  platform?: string;
+  workflowCode?: string;
+  sourceType: 'LOCAL_IMPORT' | 'URL_DOWNLOAD' | 'OTHER';
+  sourceId?: string;
+  recordedAt: string;
+};
+export type PurchaseEntryMethodFacet = Omit<PurchaseEntryOrigin, 'methodKey' | 'sourceId' | 'recordedAt'> & { value: string; count: number };
 export type PurchaseSummary = {
   sku: string; productName: string; variants: string[]; createdAt: string; updatedAt: string; procurement: ProcurementVersion;
+  entryOrigin: PurchaseEntryOrigin; localMediaFolder?: string;
   latestDownloadJob?: Pick<PurchaseDownloadJob, 'id' | 'status' | 'workflowCode' | 'outputDir' | 'createdAt' | 'finishedAt' | 'errorMessage' | 'nextAttemptAt' | 'retryReason' | 'resourceRetryCount'>;
 };
 export type PurchaseDetail = { sku: string; productName: string; variants: string[]; createdAt: string; updatedAt: string; procurementVersions: ProcurementVersion[]; downloadJobs: PurchaseDownloadJob[] };
@@ -952,7 +963,7 @@ export const api = {
   localImport: (id: string) => request<{ import: LocalImportRecord }>(`/api/v1/local-import/imports/${id}`),
   updateLocalImportPurchase: (id: string, input: Omit<PurchaseInput, 'downloadWorkflowCode'>) => request<{ import: LocalImportRecord }>(`/api/v1/local-import/imports/${id}/purchase`, { method: 'PATCH', body: JSON.stringify(input) }),
   retryLocalImport: (id: string) => request<{ import: LocalImportRecord }>(`/api/v1/local-import/imports/${id}/retry`, { method: 'POST' }),
-  purchases: (params: URLSearchParams) => request<{ items: PurchaseSummary[]; total: number; page: number; pageSize: number }>(`/api/v1/purchases?${params}`),
+  purchases: (params: URLSearchParams) => request<{ items: PurchaseSummary[]; total: number; page: number; pageSize: number; facets: { entryMethods: PurchaseEntryMethodFacet[] } }>(`/api/v1/purchases?${params}`),
   purchase: (sku: string) => request<{ purchase: PurchaseDetail }>(`/api/v1/purchases/${sku}`),
   createPurchase: (input: PurchaseInput) => request<{ purchase: PurchaseDetail }>('/api/v1/purchases', { method: 'POST', body: JSON.stringify(input) }),
   updatePurchase: (sku: string, input: PurchaseInput) => request<{ purchase: PurchaseDetail }>(`/api/v1/purchases/${sku}`, { method: 'PATCH', body: JSON.stringify(input) }),

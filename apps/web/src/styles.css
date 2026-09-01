@@ -16,6 +16,7 @@
 
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 320px; background: var(--porcelain); }
+html:has(.purchase-product-query-page), body:has(.purchase-product-query-page) { overflow-x: clip; }
 button, input { font: inherit; }
 .app-frame { min-height: 100vh; }
 .app-sider { position: sticky !important; top: 0; height: 100vh; overflow: hidden; background: #172033 !important; }
@@ -329,6 +330,10 @@ button, input { font: inherit; }
 .purchase-product-cell strong { font-size: 14px; }
 .purchase-product-cell span { color: var(--steel); font-size: 12px; }
 .purchase-product-cell small { color: #8492a3; font: 10px "IBM Plex Mono", monospace; }
+.purchase-product-query-page { min-width: 0; overflow-x: hidden; }
+.purchase-product-query-page .purchase-table-card .ant-table-content { contain: paint; max-width: 100%; }
+.purchase-query-folder { display: flex; max-width: 100%; }
+.purchase-query-folder .ant-typography { min-width: 0; max-width: 264px; margin: 0; overflow: hidden; color: var(--steel); font: 10px/1.35 "IBM Plex Mono", monospace; text-overflow: ellipsis; white-space: nowrap; }
 .provider-url { display: block; overflow: hidden; color: var(--cyan); text-decoration: none; text-overflow: ellipsis; white-space: nowrap; }
 .provider-url:hover { text-decoration: underline; }
 .latest-download-job { display: flex; min-width: 0; flex-direction: column; gap: 5px; }
@@ -842,6 +847,8 @@ button, input { font: inherit; }
 .local-source-summary > div { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 7px; padding: 12px; border: 1px solid #dce7ea; border-radius: 8px; background: #f8fbfc; }
 .local-source-summary small { grid-column: 1 / -1; color: #6d7b89; overflow-wrap: anywhere; }
 .local-import-form { padding-top: 8px; }
+.local-import-product-name-count { color: #66788a; font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.local-import-product-name-count.is-invalid { color: #c43d4b; }
 .local-import-price-flow { position: relative; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; margin-bottom: 16px; overflow: hidden; border: 1px solid #263b55; border-top: 3px solid #39bdcd; border-radius: 10px; background: #31425a; box-shadow: 0 10px 24px rgba(17, 31, 49, .12); }
 .local-import-price-flow.is-manual_required { border-top-color: #d89b32; }
 .local-import-price-flow > .ant-form-item { min-width: 0; margin: 0; padding: 14px; background: #172033; }

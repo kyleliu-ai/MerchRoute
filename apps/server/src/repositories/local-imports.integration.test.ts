@@ -8,6 +8,7 @@ const schema = `local_imports_test_${randomUUID().replaceAll('-', '')}`;
 let admin: Pool;
 let isolated: Pool;
 let purchases: PurchaseRepository;
+let isolatedConnectionString: string;
 
 const input = (idempotencyKey: string, urls = ['https://example.com/local/red', 'https://example.com/local/blue'], platform = 'PDD'): ReserveLocalImportInput => ({
   idempotencyKey, previewHash: 'a'.repeat(64),
@@ -29,8 +30,9 @@ describe.runIf(Boolean(connectionString))('local import PostgreSQL integration',
     await admin.query(`CREATE SCHEMA ${schema}`);
     const isolatedUrl = new URL(connectionString!);
     isolatedUrl.searchParams.set('options', `-c search_path=${schema},public`);
-    isolated = new Pool({ connectionString: isolatedUrl.toString(), max: 1 });
-    purchases = new PurchaseRepository(isolatedUrl.toString());
+    isolatedConnectionString = isolatedUrl.toString();
+    isolated = new Pool({ connectionString: isolatedConnectionString, max: 1 });
+    purchases = new PurchaseRepository(isolatedConnectionString);
     const snapshotRoot = process.platform === 'win32' ? 'C:\\MerchRouteTests\\local-import-downloads' : '/srv/merchroute-tests/local-import-downloads';
     await purchases.initialize({ code: 'E006', displayName: '测试下载', webhookUrl: 'http://127.0.0.1:5678/webhook/test', parentOutputDir: snapshotRoot, enabled: true, isDefault: true });
   });
@@ -53,6 +55,24 @@ describe.runIf(Boolean(connectionString))('local import PostgreSQL integration',
     expect(constraint.rows[0]?.definition).toContain('retail_price >=');
   });
 
+  it('installs the product entry-origin migration and indexes', async () => {
+    const migration = await isolated.query(`SELECT id FROM purchase_schema_migrations WHERE id='017_product_entry_origins'`);
+    const columns = await isolated.query(`SELECT column_name,is_nullable FROM information_schema.columns
+      WHERE table_schema=current_schema() AND table_name='product_entry_origins' ORDER BY ordinal_position`);
+    const indexes = await isolated.query<{ indexname: string }>(`SELECT indexname FROM pg_indexes
+      WHERE schemaname=current_schema() AND tablename='product_entry_origins' ORDER BY indexname`);
+    expect(migration.rows).toEqual([{ id: '017_product_entry_origins' }]);
+    expect(columns.rows).toEqual(expect.arrayContaining([
+      { column_name: 'sku', is_nullable: 'NO' },
+      { column_name: 'method_key', is_nullable: 'NO' },
+      { column_name: 'source_type', is_nullable: 'NO' },
+      { column_name: 'recorded_at', is_nullable: 'NO' }
+    ]));
+    expect(indexes.rows.map((row) => row.indexname)).toEqual(expect.arrayContaining([
+      'product_entry_origins_method_recorded', 'product_entry_origins_source'
+    ]));
+  });
+
   it('creates one SKU for multiple sources and URLs without a download workflow, and replays idempotently', async () => {
     const first = await purchases.reserveLocalImport(input('local-once'));
     const replay = await purchases.reserveLocalImport(input('local-once'));
@@ -68,6 +88,9 @@ describe.runIf(Boolean(connectionString))('local import PostgreSQL integration',
       { provider_url_key: 'https://example.com/local/red', sku: '0000001' }
     ]);
     expect((await isolated.query<{ count: string }>('SELECT COUNT(*)::text count FROM download_jobs')).rows[0]!.count).toBe('0');
+    expect((await isolated.query('SELECT method_key,method_label,platform,source_type,source_id FROM product_entry_origins WHERE sku=$1', ['0000001'])).rows).toEqual([
+      { method_key: 'LOCAL_IMAGE_IMPORT:PDD', method_label: '本地图片导入-PDD', platform: 'PDD', source_type: 'LOCAL_IMPORT', source_id: first.import.id }
+    ]);
   });
 
   it('skips an entire conflicting import without creating a product or media source', async () => {
@@ -127,7 +150,6 @@ describe.runIf(Boolean(connectionString))('local import PostgreSQL integration',
       { version_no: 2, purchase_price: '31.2500', retail_price: '342.0000', currency: 'CNY' }
     ]);
     expect((await isolated.query<{ count: string }>('SELECT COUNT(*)::text count FROM download_jobs WHERE sku=$1', ['0000001'])).rows[0]!.count).toBe('0');
-
     const duplicate = (await purchases.listLocalImports({ status: 'SKIPPED_DUPLICATE', page: 1, pageSize: 10 })).items[0]!;
     await expect(purchases.updateLocalImportPurchase(duplicate.id, {
       productName: '禁止编辑', purchasePrice: '1', currency: 'CNY', providerUrl: 'https://example.com/local/forbidden'
@@ -170,6 +192,43 @@ describe.runIf(Boolean(connectionString))('local import PostgreSQL integration',
     expect((await isolated.query('SELECT retail_price FROM procurement_versions WHERE sku=$1', [urlPurchase.sku])).rows).toEqual([{ retail_price: null }]);
   });
 
+  it('queries every product by entry method and product creation date, with dynamic facets and resolved media folders', async () => {
+    const urlProduct = (await purchases.listPurchases({ query: 'URL下载来源产品', page: 1, pageSize: 10 })).items[0]!;
+    const urlOutput = process.platform === 'win32' ? 'C:\\MerchRouteTests\\downloads\\url-e006' : '/srv/merchroute-tests/downloads/url-e006';
+    await isolated.query(`UPDATE download_jobs SET status='SUCCEEDED',output_dir=$2,finished_at='2026-08-25T03:00:00.000Z' WHERE sku=$1`, [urlProduct.sku, urlOutput]);
+    await isolated.query(`UPDATE products SET created_at='2026-08-20T02:00:00.000Z' WHERE sku='0000003'`);
+    await isolated.query(`UPDATE products SET created_at='2026-08-25T02:00:00.000Z' WHERE sku=$1`, [urlProduct.sku]);
+
+    const all = await purchases.listPurchases({ page: 1, pageSize: 100, sort: 'RECORDED_DESC' });
+    const local1688 = all.items.find((item) => item.sku === '0000003');
+    const e006 = all.items.find((item) => item.sku === urlProduct.sku);
+    expect(local1688).toMatchObject({
+      localMediaFolder: '/tmp/candidate/0000003-local',
+      entryOrigin: { methodKey: 'LOCAL_IMAGE_IMPORT:1688', label: '本地图片导入-1688', platform: '1688', sourceType: 'LOCAL_IMPORT' }
+    });
+    expect(new Date(local1688!.entryOrigin.recordedAt).toISOString()).toBe('2026-08-20T02:00:00.000Z');
+    expect(e006).toMatchObject({
+      localMediaFolder: urlOutput,
+      entryOrigin: { methodKey: 'URL_DOWNLOAD:E006', label: 'PDD下载E006', platform: 'PDD', workflowCode: 'E006', sourceType: 'URL_DOWNLOAD' }
+    });
+    expect(new Date(e006!.entryOrigin.recordedAt).toISOString()).toBe('2026-08-25T02:00:00.000Z');
+    expect(all.items.indexOf(e006!)).toBeLessThan(all.items.indexOf(local1688!));
+    expect(all.facets.entryMethods).toEqual(expect.arrayContaining([
+      expect.objectContaining({ value: 'LOCAL_IMAGE_IMPORT:1688', label: '本地图片导入-1688', sourceType: 'LOCAL_IMPORT' }),
+      expect.objectContaining({ value: 'URL_DOWNLOAD:E006', label: 'PDD下载E006', sourceType: 'URL_DOWNLOAD' })
+    ]));
+
+    const byMethod = await purchases.listPurchases({ entryMethodKey: 'LOCAL_IMAGE_IMPORT:1688', page: 1, pageSize: 10 });
+    expect(byMethod.items.map((item) => item.sku)).toEqual(['0000003']);
+    const byDate = await purchases.listPurchases({
+      createdFrom: '2026-08-25T00:00:00.000Z', createdTo: '2026-08-26T00:00:00.000Z', page: 1, pageSize: 10, sort: 'RECORDED_DESC'
+    });
+    expect(byDate.items.map((item) => item.sku)).toContain(urlProduct.sku);
+    expect(byDate.items.map((item) => item.sku)).not.toContain('0000003');
+    await expect(purchases.listPurchases({ entryMethodKey: 'x'.repeat(201) })).rejects.toMatchObject({ code: 'CONFIG_INVALID' });
+    await expect(purchases.listPurchases({ sort: 'UPDATED_ASC' })).rejects.toMatchObject({ code: 'CONFIG_INVALID' });
+  });
+
   it('persists a RUB retail price with a forced CNY purchase currency while pricing ignores retailPrice', async () => {
     const rubInput = input('local-rub-price', ['https://example.com/local/rub-price'], 'WB');
     rubInput.purchase = { ...rubInput.purchase, purchasePrice: '115.3333', retailPrice: '1384', currency: 'RUB' };
@@ -181,5 +240,35 @@ describe.runIf(Boolean(connectionString))('local import PostgreSQL integration',
     expect(stored.rows).toEqual([{ purchase_price: '115.3333', retail_price: '1384.0000', currency: 'CNY' }]);
     expect(pricing[0]?.procurement).toMatchObject({ purchasePrice: '115.3333', currency: 'CNY' });
     expect(pricing[0]?.procurement).not.toHaveProperty('retailPrice');
+  });
+
+  it('backfills local-import, E006 and E007 origins for an existing database', async () => {
+    const downloadRoot = process.platform === 'win32' ? 'C:\\MerchRouteTests\\local-import-downloads' : '/srv/merchroute-tests/local-import-downloads';
+    await purchases.saveWorkflow({
+      code: 'E007', displayName: '1688下载E007', webhookUrl: 'http://127.0.0.1:5678/webhook/e007',
+      parentOutputDir: downloadRoot, enabled: true, isDefault: false
+    });
+    const e007 = await purchases.createPurchase({
+      productName: '1688 回填产品', purchasePrice: '21', currency: 'CNY',
+      providerUrl: 'https://example.com/e007-backfill', downloadWorkflowCode: 'E007'
+    });
+    await isolated.query(`DELETE FROM product_entry_origins`);
+    await isolated.query(`DELETE FROM purchase_schema_migrations WHERE id='017_product_entry_origins'`);
+    await purchases.close();
+    purchases = new PurchaseRepository(isolatedConnectionString);
+    await purchases.initialize();
+
+    const origins = await isolated.query(`SELECT p.product_name,o.method_key,o.method_label,o.platform,o.workflow_code,o.source_type
+      FROM product_entry_origins o JOIN products p ON p.sku=o.sku
+      WHERE p.product_name IN('本地多颜色产品','URL下载来源产品','1688 回填产品')
+      ORDER BY p.product_name,o.method_key`);
+    expect(origins.rows).toEqual(expect.arrayContaining([
+      expect.objectContaining({ method_key: 'LOCAL_IMAGE_IMPORT:1688', method_label: '本地图片导入-1688', platform: '1688', workflow_code: null, source_type: 'LOCAL_IMPORT' }),
+      expect.objectContaining({ method_key: 'URL_DOWNLOAD:E006', method_label: 'PDD下载E006', platform: 'PDD', workflow_code: 'E006', source_type: 'URL_DOWNLOAD' }),
+      { product_name: '1688 回填产品', method_key: 'URL_DOWNLOAD:E007', method_label: '1688下载E007', platform: '1688', workflow_code: 'E007', source_type: 'URL_DOWNLOAD' }
+    ]));
+    expect((await purchases.listPurchases({ query: e007.sku, entryMethodKey: 'URL_DOWNLOAD:E007' })).items[0]).toMatchObject({
+      sku: e007.sku, entryOrigin: { label: '1688下载E007', platform: '1688', sourceType: 'URL_DOWNLOAD' }
+    });
   });
 });

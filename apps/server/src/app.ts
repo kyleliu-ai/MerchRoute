@@ -405,8 +405,12 @@ export async function buildApp(options: BuildAppOptions = {}) {
   app.post('/api/v1/local-import/imports/:id/retry', async (request) => ({ import: await localImports.retry((request.params as { id: string }).id) }));
 
   app.get('/api/v1/purchases', async (request) => {
-    const query = request.query as { page?: string; pageSize?: string; query?: string; status?: string; workflowCode?: string; createdFrom?: string; createdTo?: string; source?: string };
-    return purchases.listPurchases({ page: Number(query.page), pageSize: Number(query.pageSize), query: query.query, status: query.status, workflowCode: query.workflowCode, createdFrom: query.createdFrom, createdTo: query.createdTo, source: query.source });
+    const query = request.query as { page?: string; pageSize?: string; query?: string; status?: string; workflowCode?: string; createdFrom?: string; createdTo?: string; source?: string; entryMethodKey?: string; sort?: string };
+    return purchases.listPurchases({
+      page: Number(query.page), pageSize: Number(query.pageSize), query: query.query, status: query.status,
+      workflowCode: query.workflowCode, createdFrom: query.createdFrom, createdTo: query.createdTo,
+      source: query.source, entryMethodKey: query.entryMethodKey, sort: query.sort
+    });
   });
   app.post('/api/v1/purchases', async (request) => ({
     purchase: await purchases.createPurchase(applyPurchaseUrlDownloadWorkflow(request.body as PurchaseInput))
