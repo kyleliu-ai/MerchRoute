@@ -80,6 +80,7 @@ type AboutVersionServiceOptions = {
   repoRoot: string;
   configVersion: string;
   productVersion?: string;
+  githubToken?: string;
   fetchImpl?: typeof fetch;
   now?: () => Date;
   timeoutMs?: number;
@@ -114,6 +115,7 @@ type GithubBlob = { encoding?: string; content?: string };
 
 export function createAboutVersionService(options: AboutVersionServiceOptions): AboutVersionService {
   const fetchImpl = options.fetchImpl ?? fetch;
+  const githubToken = options.githubToken?.trim() || process.env.MERCHROUTE_GITHUB_TOKEN?.trim();
   const now = options.now ?? (() => new Date());
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const cacheTtlMs = options.cacheTtlMs ?? DEFAULT_CACHE_TTL_MS;
@@ -124,15 +126,20 @@ export function createAboutVersionService(options: AboutVersionServiceOptions): 
   let inFlight: Promise<AboutVersionInfo> | undefined;
 
   const githubJson = async <T>(endpoint: string, allowNotFound = false): Promise<T | undefined> => {
+    const headers: Record<string, string> = {
+      accept: 'application/vnd.github+json',
+      'user-agent': 'MerchRoute-content-version-checker',
+      'x-github-api-version': '2022-11-28'
+    };
+    if (githubToken) headers.authorization = `Bearer ${githubToken}`;
     const response = await fetchImpl(`https://api.github.com/repos/${DEFAULT_REPOSITORY}${endpoint}`, {
-      headers: {
-        accept: 'application/vnd.github+json',
-        'user-agent': 'MerchRoute-content-version-checker',
-        'x-github-api-version': '2022-11-28'
-      },
+      headers,
       signal: AbortSignal.timeout(timeoutMs)
     });
     if (allowNotFound && response.status === 404) return undefined;
+    if (response.status === 401 && githubToken) throw new Error('GitHub 只读令牌无效或已过期');
+    if (response.status === 403 && githubToken) throw new Error('GitHub 只读令牌权限不足或受到访问限制');
+    if (response.status === 403) throw new Error('GitHub 匿名 API 配额已耗尽');
     if (!response.ok) throw new Error(`GitHub API 返回 ${response.status}`);
     return await response.json() as T;
   };
