@@ -893,6 +893,11 @@ function TaskList() {
   const deliveryTargets = stage ? resolveStageReviewDeliveryTargets(stage, stages.data?.stages || []) : [];
   const query = useQuery({ queryKey: ['tasks', stageId, search, status, page], queryFn: () => api.tasks(stageId, params), enabled: stage?.enabled === true });
   const rescan = useMutation({ mutationFn: () => api.rescan(stageId), onSuccess: () => { message.success('扫描完成'); void query.refetch(); } });
+  const openFolder = useMutation({
+    mutationFn: api.openTaskFolder,
+    onSuccess: () => message.success('正在打开产品文件夹'),
+    onError: (error) => message.error(error instanceof ApiError ? error.userMessage : '打开产品文件夹失败')
+  });
   if (stages.isLoading) return <Skeleton active />;
   if (!stage?.enabled) return <DisabledStageNotice stageId={stageId} returnTo={isDownloadReviewStage(stage) ? '/review/downloads' : '/'} returnLabel={isDownloadReviewStage(stage) ? '返回下载中心' : '返回流程工作台'} />;
   const breadcrumbItems = isDownloadReviewStage(stage)
@@ -907,28 +912,41 @@ function TaskList() {
       {!isFixedTableView && <Radio.Group value={view} onChange={(event) => setView(event.target.value)} optionType="button" options={[{ label: '卡片', value: 'cards' }, { label: '表格', value: 'table' }]} />}
       <Text type="secondary">共 {query.data?.total || 0} 个产品</Text>
     </Flex></Card>
-    {query.isLoading ? <Skeleton active /> : !query.data?.items.length ? <Empty description="当前目录没有可审核的产品文件夹" /> : effectiveView === 'cards' ? <Row gutter={[16, 16]}>{query.data.items.map((task) => <Col xs={24} md={12} xl={8} key={task.taskId}><ProductCard task={task} /></Col>)}</Row> : <TaskTable tasks={query.data.items} />}
+    {query.isLoading ? <Skeleton active /> : !query.data?.items.length ? <Empty description="当前目录没有可审核的产品文件夹" /> : effectiveView === 'cards' ? <Row gutter={[16, 16]}>{query.data.items.map((task) => <Col xs={24} md={12} xl={8} key={task.taskId}><ProductCard task={task} opening={openFolder.isPending && openFolder.variables === task.taskId} onOpenFolder={openFolder.mutate} /></Col>)}</Row> : <TaskTable tasks={query.data.items} openingTaskId={openFolder.isPending ? openFolder.variables : undefined} onOpenFolder={openFolder.mutate} />}
     <Pagination current={page} pageSize={24} total={query.data?.total || 0} showSizeChanger={false} onChange={setPage} />
   </div>;
 }
 
-function ProductCard({ task }: { task: ProductTask }) {
+function ProductCard({ task, opening, onOpenFolder }: { task: ProductTask; opening: boolean; onOpenFolder: (taskId: string) => void }) {
   const meta = statusMeta[task.status] ?? { label: '待审核', color: 'default' };
   const representatives = task.representativeMedia || task.representativeImages.map((relativePath) => ({ relativePath, mediaType: 'image' as const }));
   return <Card className="product-card" cover={<div className="contact-sheet-mini">
     {representatives.map((media) => media.mediaType === 'video' ? <div className="image-placeholder video-placeholder" key={media.relativePath}><VideoCameraOutlined /><small>视频</small></div> : <img key={media.relativePath} loading="lazy" src={api.thumbnailUrl(task.taskId, media.relativePath)} alt={media.relativePath} />)}
     {Array.from({ length: Math.max(0, 4 - representatives.length) }).map((_, index) => <div className="image-placeholder" key={index}><PictureOutlined /></div>)}
   </div>}>
-    <Flex justify="space-between" align="start" gap={8}><Title level={5} ellipsis={{ tooltip: task.sourceFolderName }}>{task.sourceFolderName}</Title><Tag color={meta.color}>{meta.label}</Tag></Flex>
+    <Flex justify="space-between" align="start" gap={8}><ProductFolderButton task={task} opening={opening} onOpenFolder={onOpenFolder} card /><Tag color={meta.color}>{meta.label}</Tag></Flex>
     <Space size="large"><Text type="secondary">{task.imageCount} 图{task.videoCount ? ` · ${task.videoCount} 视频` : ''}</Text><Text type="secondary">{task.subfolderCount} 个子目录</Text></Space>
     <Text className="modified-time" type="secondary"><ClockCircleOutlined /> {dayjs(task.lastModifiedAt).format('YYYY-MM-DD HH:mm')}</Text>
     <Link to={`/task/${task.taskId}`}><Button type="primary" block>{task.status === 'DRAFT' ? '继续草稿' : '进入审核'}</Button></Link>
   </Card>;
 }
 
-function TaskTable({ tasks }: { tasks: ProductTask[] }) {
+function ProductFolderButton({ task, opening, onOpenFolder, card = false }: { task: ProductTask; opening: boolean; onOpenFolder: (taskId: string) => void; card?: boolean }) {
+  return <Button
+    type="link"
+    className={`product-folder-trigger${card ? ' product-folder-trigger-card' : ''}`}
+    icon={<FolderOpenOutlined />}
+    loading={opening}
+    disabled={opening}
+    onClick={() => onOpenFolder(task.taskId)}
+    aria-label={`打开产品文件夹 ${task.sourceFolderName}`}
+    title={task.sourceFolderName}
+  ><span className="product-folder-name">{task.sourceFolderName}</span></Button>;
+}
+
+function TaskTable({ tasks, openingTaskId, onOpenFolder }: { tasks: ProductTask[]; openingTaskId?: string; onOpenFolder: (taskId: string) => void }) {
   return <Table className="task-table" rowKey="taskId" pagination={false} dataSource={tasks} scroll={{ x: 760 }} columns={[
-    { title: '产品文件夹', dataIndex: 'sourceFolderName', width: 260, render: (value, record) => <Link to={`/task/${record.taskId}`}>{value}</Link> },
+    { title: '产品文件夹', dataIndex: 'sourceFolderName', width: 260, render: (_, record) => <ProductFolderButton task={record} opening={openingTaskId === record.taskId} onOpenFolder={onOpenFolder} /> },
     { title: '状态', dataIndex: 'status', width: 110, render: (value) => <Tag color={statusMeta[value]?.color}>{statusMeta[value]?.label || value}</Tag> },
     { title: '媒体', width: 120, render: (_, record) => `${record.imageCount} 图${record.videoCount ? ` / ${record.videoCount} 视频` : ''}` }, { title: '子目录', dataIndex: 'subfolderCount', width: 90 },
     { title: '最后修改', dataIndex: 'lastModifiedAt', width: 150, render: (value) => dayjs(value).format('YYYY-MM-DD HH:mm') },
