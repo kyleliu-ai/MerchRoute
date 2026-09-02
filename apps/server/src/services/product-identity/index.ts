@@ -17,7 +17,7 @@ export class ProductIdentityService {
   constructor(private readonly purchases: PurchaseRepository, private readonly store: StateStore) {}
 
   async resolveTask(task: IdentityTask): Promise<ProductIdentity> {
-    const review = this.store.read().reviews.find((item) => item.taskId === task.taskId);
+    const review = this.store.getReview(task.taskId);
     if (!this.purchases.configured) return this.databaseUnavailable(review?.productSku, review?.productNameSnapshot);
     try {
       if (review?.productSku) {
@@ -52,22 +52,23 @@ export class ProductIdentityService {
 
   async assignTask(task: IdentityTask, sku: string): Promise<ProductIdentity> {
     if (!/^\d{7}$/.test(String(sku || '').trim())) throw new AppError('CONFIG_INVALID', 'SKU 必须是 7 位数字字符串', { sku });
-    if (this.store.read().pendingSubmissions.some((item) => item.taskId === task.taskId && item.status === 'PACKAGING')) {
+    const persistedTaskId = this.store.resolvePersistedTaskId(task.taskId);
+    if (this.store.read().pendingSubmissions.some((item) => item.taskId === persistedTaskId && item.status === 'PACKAGING')) {
       throw new AppError('TASK_LOCKED', '任务已进入打包状态，不能重新关联产品身份', { taskId: task.taskId }, 409);
     }
     const product = await this.requireProduct(sku);
     const now = new Date().toISOString();
     await this.store.update((db) => {
-      let review = db.reviews.find((item) => item.taskId === task.taskId);
+      let review = db.reviews.find((item) => item.taskId === persistedTaskId);
       if (!review) {
         review = {
-          taskId: task.taskId, stageId: task.stageId, sourceFolder: task.sourceFolder, sourceFolderName: task.sourceFolderName,
+          taskId: persistedTaskId, stageId: task.stageId, sourceFolder: task.sourceFolder, sourceFolderName: task.sourceFolderName,
           selectedRelativePaths: [], selectedTargetStageIds: [], status: 'DRAFT', createdAt: now, updatedAt: now
         };
         db.reviews.push(review);
       }
       Object.assign(review, { productSku: product.sku, productNameSnapshot: product.productName, productIdentitySource: 'USER_CONFIRMED', updatedAt: now });
-      for (const pending of db.pendingSubmissions.filter((item) => item.taskId === task.taskId)) {
+      for (const pending of db.pendingSubmissions.filter((item) => item.taskId === persistedTaskId)) {
         pending.productSku = product.sku;
         pending.productNameSnapshot = product.productName;
         pending.n8nTaskParameters = pending.variantName ? this.injectVariant(pending.n8nTaskParameters, product, pending.variantName) : this.inject(pending.n8nTaskParameters, product);

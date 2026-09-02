@@ -55,6 +55,40 @@ describe('WbSourceMediaCleanupService worker gates', () => {
     });
   });
 
+  it('maps a persisted legacy root only for orphan-batch filesystem inspection', async () => {
+    const legacyRoot = 'G:\\01_n8n-global';
+    const currentRoot = 'G:\\01_MerchRoute';
+    const batch = Object.freeze({
+      ...cleanupBatch(),
+      source: 'AUTOMATION' as const,
+      rootDirectory: legacyRoot,
+      mediaBatchId: 'batch-a',
+      deliveredAt: '2026-08-14T00:00:00.000Z'
+    });
+    const repository = {
+      configured: true,
+      inspectOrphanAutomationBatch: vi.fn(async () => ({ batch, targets: [], reasons: [] })),
+      hasNewerOrActiveWork: vi.fn(async () => ({ blocked: false, reasons: [] }))
+    };
+    const files = { snapshot: vi.fn(async () => ({
+      exists: true, stagingEmpty: true, mediaSignature: batch.mediaSignature, files: []
+    })) };
+    const canonicalizePath = vi.fn((value: string) => value === legacyRoot ? currentRoot : value);
+    const service = new WbSourceMediaCleanupService(
+      repository as unknown as WbSourceMediaCleanupRepository,
+      files as unknown as WbSourceMediaFiles,
+      { warn: vi.fn() } as unknown as FastifyBaseLogger,
+      canonicalizePath
+    );
+
+    const inspection = await service.inspectOrphanAutomaticBatch(batch.id);
+
+    expect(files.snapshot).toHaveBeenCalledWith(currentRoot, batch.sku);
+    expect(repository.hasNewerOrActiveWork).toHaveBeenCalledWith(batch);
+    expect(inspection.batch).toBe(batch);
+    expect(inspection.batch.rootDirectory).toBe(legacyRoot);
+  });
+
   it.each([
     ['RUNNING', 'SUCCEEDED'],
     ['FAILED', 'SUCCEEDED'],

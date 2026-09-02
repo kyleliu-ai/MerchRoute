@@ -53,6 +53,25 @@ describe('LocalDirectoryOpener', () => {
     }
   });
 
+  it('canonicalizes a historical root before filesystem and containment checks', async () => {
+    const legacyRoot = path.join(path.dirname(root), 'legacy-merchroute-root');
+    const legacyProduct = path.join(legacyRoot, path.basename(product));
+    const launch = vi.fn(async () => undefined);
+    const canonicalizePath = vi.fn((value: string) => {
+      const relative = path.relative(legacyRoot, value);
+      return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
+        ? path.join(root, relative)
+        : value;
+    });
+
+    await new LocalDirectoryOpener({ platform: 'win32', launch, canonicalizePath })
+      .openTaskDirectory({ candidateRoot: legacyRoot, sourceFolder: legacyProduct });
+
+    expect(canonicalizePath).toHaveBeenCalledWith(legacyRoot);
+    expect(canonicalizePath).toHaveBeenCalledWith(legacyProduct);
+    expect(launch).toHaveBeenCalledWith('explorer.exe', [await realpath(product)], { windowsHide: false });
+  });
+
   it('rejects symbolic-link product directories', async () => {
     const outside = await mkdtemp(path.join(os.tmpdir(), 'merchroute-open-folder-target-'));
     const linkedProduct = path.join(root, 'linked-product');

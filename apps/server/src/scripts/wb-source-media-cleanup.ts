@@ -6,6 +6,7 @@ import { WbStoreRepository } from '../repositories/wb-stores.js';
 import { WbSourceMediaCleanupRepository } from '../repositories/wb-source-media-cleanup.js';
 import { WbSourceMediaCleanupService } from '../services/wb-source-media/index.js';
 import { WbSourceMediaFiles } from '../services/wb-source-media/source-files.js';
+import { LegacyRootCompatibility } from '../utils/legacy-root-compatibility.js';
 
 const projectRoot = path.resolve(import.meta.dirname, '../../../..');
 loadRuntimeEnvironment({ projectRoot });
@@ -22,7 +23,13 @@ const storeRepository = new WbStoreRepository(databaseUrl);
 await storeRepository.initialize();
 await cleanupRepository.initialize();
 const logger = pino({ level: 'silent' }) as unknown as FastifyBaseLogger;
-const service = new WbSourceMediaCleanupService(cleanupRepository, new WbSourceMediaFiles(), logger);
+const legacyRootCompatibility = LegacyRootCompatibility.fromEnvironment();
+const service = new WbSourceMediaCleanupService(
+  cleanupRepository,
+  new WbSourceMediaFiles(),
+  logger,
+  (value) => legacyRootCompatibility.canonicalizePath(value)
+);
 
 try {
   if (args.has('--inspect-orphan') || args.has('--supersede-orphan')) {

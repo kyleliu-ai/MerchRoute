@@ -316,7 +316,30 @@ export type WbStorePublication = {
   completedAt?: string;
 };
 export type WbAppConfig = AppConfig & { version: 'v002' | 'v003'; wbPublishing?: WbPublishingConfig };
-export type ConfigView = { config: WbAppConfig; readiness: { complete: boolean; paths: PathValidation[] }; downloadSync?: DownloadSyncState; wbPublishingReadiness?: WbPublishingReadiness; ozonPublishingReadiness?: OzonReadiness };
+export type LegacyRootCompatibilityView = {
+  enabled: boolean;
+  required: boolean;
+  status: 'DISABLED' | 'READY' | 'BLOCKED';
+  legacyRoot?: string;
+  canonicalRoot?: string;
+  legacyPathPresent: boolean;
+  canonicalRootReady: boolean;
+  mappingSelfTest: boolean;
+  legacyPathTargetsCanonicalRoot?: boolean;
+  checkedAt: string;
+  issues: string[];
+  referenceCounts: {
+    stateStore: Record<string, number>;
+    purchases: {
+      databaseConfigured: boolean;
+      downloadJobs: number;
+      nonterminalDownloadJobs: number;
+      notifications: number;
+      unresolvedNotifications: number;
+    };
+  };
+};
+export type ConfigView = { config: WbAppConfig; readiness: { complete: boolean; paths: PathValidation[]; legacyRootCompatibility: LegacyRootCompatibilityView; maintenanceMode: { active: boolean; acceptingNewTasks: boolean; reason?: string } }; downloadSync?: DownloadSyncState; wbPublishingReadiness?: WbPublishingReadiness; ozonPublishingReadiness?: OzonReadiness };
 export type ProcurementVersion = {
   id: string; versionNo: number; downloadWorkflowCode?: string; purchasePrice: string; retailPrice?: string | null; courierFee: string; currency: string;
   grossWeightGrams?: string | null; lengthCm?: string | null; widthCm?: string | null; heightCm?: string | null;

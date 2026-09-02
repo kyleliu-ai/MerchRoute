@@ -35,6 +35,7 @@ describe('OZON known post-platform min-price recovery service', () => {
     const productBefore = await readFile(fixture.productJsonPath, 'utf8');
     const recover = recoveryRepositoryMethod(fixture.job, fixture.listing, fixture.mappings);
     const repository = {
+      getJob: vi.fn(async () => fixture.job),
       getSettings: vi.fn(async () => ({
         rootDirectory: fixture.root,
         adminApiWebhookUrl: 'http://n8n.test/webhook/ozon-admin',
@@ -138,6 +139,7 @@ describe('OZON known post-platform min-price recovery service', () => {
 
     for (const fixture of [missing, duplicate, drifted]) {
       const repository = {
+        getJob: vi.fn(async () => fixture.job),
         getSettings: vi.fn(async () => ({
           rootDirectory: fixture.root,
           adminApiWebhookUrl: 'http://n8n.test/webhook/ozon-admin',

@@ -3213,7 +3213,8 @@ export class OzonRepository {
   async recoverKnownPrePlatformFailure(
     id: string,
     input: OzonKnownPrePlatformFailureRecoveryInput,
-    beforeCommit?: (job: OzonPublishJob) => Promise<OzonKnownPrePlatformFailureRecoveryChecks>
+    beforeCommit?: (job: OzonPublishJob) => Promise<OzonKnownPrePlatformFailureRecoveryChecks>,
+    runtimePathProjection?: OzonPublishJob
   ): Promise<OzonKnownPrePlatformFailureRecoveryResult> {
     return this.transaction(async (client) => {
       const identity = await client.query<SqlRow>('SELECT sku FROM ozon_publish_jobs WHERE id=$1', [id]);
@@ -3226,7 +3227,8 @@ export class OzonRepository {
       if (!row) throw new AppError('NOT_FOUND', 'OZON 上品任务不存在', { id }, 404);
       const listingResult = await client.query<SqlRow>('SELECT * FROM ozon_listing_drafts WHERE sku=$1 FOR UPDATE', [sku]);
       const listingRow = listingResult.rows[0];
-      const job = toJob(row);
+      const effectiveRow = applyRuntimePathProjection(row, runtimePathProjection);
+      const job = toJob(effectiveRow);
       const listing = listingRow ? toListing(listingRow) : undefined;
       const payload = jsonObject(row.payload);
       const priorRecovery = jsonObject(payload.knownPrePlatformFailureRecovery);
@@ -3306,10 +3308,10 @@ export class OzonRepository {
           [id, ['OZON_STATE_MACHINE_FAILED', 'MEDIA_DELIVERED', 'AUTOMATION_STOPPED']])).rows
         : [];
       const validated = input.reason === 'IMPORT_INTENT_URL_MISSING'
-        ? validateImportIntentUrlMissingRecovery(row, listingRow, input, importFailureHistory)
+        ? validateImportIntentUrlMissingRecovery(effectiveRow, listingRow, input, importFailureHistory)
         : input.reason === 'DESCRIPTION_KEYWORD_STUFFING_FALSE_POSITIVE_V1_TO_V2'
-          ? validateDescriptionKeywordStuffingFalsePositiveRecovery(row, listingRow, input)
-          : validateTitleTranslationLimitRecovery(row, listingRow, input);
+          ? validateDescriptionKeywordStuffingFalsePositiveRecovery(effectiveRow, listingRow, input)
+          : validateTitleTranslationLimitRecovery(effectiveRow, listingRow, input);
       const proposed = validated.proposed;
       if (input.dryRun) {
         return knownPrePlatformRecoveryResult({
@@ -3356,6 +3358,7 @@ export class OzonRepository {
         ...(validated.nextPresetBinding ? { presetBinding: validated.nextPresetBinding } : {}),
         knownPrePlatformFailureRecovery: recovery
       };
+      const persistedNextPayload = runtimePathProjection ? nextPayload : sanitizePersistentJobPayload(nextPayload);
       const nextStageStates = isKnownPreSubmitRecoveryReason(input.reason)
         ? {
             ...(row.stage_states || {}),
@@ -3369,13 +3372,17 @@ export class OzonRepository {
       const updatedJob = isLateTitleMigration
         ? await client.query<SqlRow>(`
             UPDATE ozon_publish_jobs
-            SET payload=$2::jsonb,retry_count=$3,row_version=row_version+1,updated_at=NOW()
-            WHERE id=$1 AND row_version=$4 AND state='SUBMITTING'
+            SET payload=$2::jsonb,retry_count=$3,
+                directory_stage=COALESCE($4,directory_stage),work_rel_path=COALESCE($5,work_rel_path),
+                row_version=row_version+1,updated_at=NOW()
+            WHERE id=$1 AND row_version=$6 AND state='SUBMITTING'
             RETURNING *`,
           [
             id,
-            JSON.stringify(nextPayload),
+            JSON.stringify(persistedNextPayload),
             proposed.retryCount,
+            runtimePathProjection?.directoryStage || null,
+            runtimePathProjection?.workRelPath || null,
             input.rowVersion
           ])
         : await client.query<SqlRow>(`
@@ -3384,16 +3391,19 @@ export class OzonRepository {
                 last_error_code=NULL,last_error_message=NULL,next_attempt_at=$5,
                 retry_count=$6,finished_at=NULL,
                 lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,
+                directory_stage=COALESCE($7,directory_stage),work_rel_path=COALESCE($8,work_rel_path),
                 row_version=row_version+1,updated_at=NOW()
-            WHERE id=$1 AND row_version=$7
+            WHERE id=$1 AND row_version=$9
             RETURNING *`,
           [
             id,
             proposed.jobState,
-            JSON.stringify(sanitizePersistentJobPayload(nextPayload)),
+            JSON.stringify(persistedNextPayload),
             JSON.stringify(nextStageStates),
             proposed.jobState === 'SUBMITTING' ? now : null,
             proposed.retryCount,
+            runtimePathProjection?.directoryStage || null,
+            runtimePathProjection?.workRelPath || null,
             input.rowVersion
           ]);
       if (!updatedJob.rows[0]) {
@@ -3455,7 +3465,8 @@ export class OzonRepository {
       job: OzonPublishJob;
       listing: OzonListingDraft;
       mappings: OzonProductMapping[];
-    }) => Promise<OzonKnownPostPlatformMinPriceRecoveryChecks>
+    }) => Promise<OzonKnownPostPlatformMinPriceRecoveryChecks>,
+    runtimePathProjection?: OzonPublishJob
   ): Promise<OzonKnownPostPlatformMinPriceRecoveryResult> {
     assertLegacyAutomaticTaskReadOnly();
     return this.transaction(async (client) => {
@@ -3477,7 +3488,8 @@ export class OzonRepository {
         WHERE store_alias=$1 AND sku=$2
         ORDER BY offer_id
         FOR UPDATE`, [requiredStoreAlias(row.store_alias), sku]);
-      const job = toJob(row);
+      const effectiveRow = applyRuntimePathProjection(row, runtimePathProjection);
+      const job = toJob(effectiveRow);
       const listing = toListing(listingRow);
       const mappings = mappingResult.rows.map(toProductMapping);
       const payload = jsonObject(row.payload);
@@ -3534,7 +3546,7 @@ export class OzonRepository {
         }, 409);
       }
 
-      const validated = validateKnownPostPlatformMinPriceFailureShape(row, listingRow, mappingResult.rows, input);
+      const validated = validateKnownPostPlatformMinPriceFailureShape(effectiveRow, listingRow, mappingResult.rows, input);
       if (input.dryRun) {
         return knownPostPlatformMinPriceRecoveryResult({
           status: 'DRY_RUN',
@@ -3553,20 +3565,20 @@ export class OzonRepository {
         );
       }
       const checks = await beforeCommit({ job, listing, mappings });
-      assertKnownPostPlatformMinPriceCommitChecks(row, checks);
+      assertKnownPostPlatformMinPriceCommitChecks(effectiveRow, checks);
       const now = new Date().toISOString();
       const resolvedStage = checks.productJson.resolvedDirectoryStage;
       const resolvedWorkRelPath = checks.productJson.resolvedWorkRelPath;
-      const pathChanged = resolvedStage !== row.directory_stage || resolvedWorkRelPath !== row.work_rel_path;
+      const pathChanged = resolvedStage !== effectiveRow.directory_stage || resolvedWorkRelPath !== effectiveRow.work_rel_path;
       if (pathChanged && (id !== '50bff6f2-9801-4080-8183-2b37b4953d13'
-        || row.directory_stage !== 'PROCESSING'
-        || row.work_rel_path !== 'processing/0000105__r2'
+        || effectiveRow.directory_stage !== 'PROCESSING'
+        || effectiveRow.work_rel_path !== 'processing/0000105__r2'
         || resolvedStage !== 'SUCCESS'
         || !/^success\/\d{4}-\d{2}-\d{2}\/0000105__r2$/.test(resolvedWorkRelPath)
         || checks.productJson.location !== 'UNIQUE_ORPHAN_SUCCESS')) {
         throw new AppError('VERSION_CONFLICT', 'OZON 最低价恢复返回了不允许的任务目录变化', {
           id,
-          previous: { directoryStage: row.directory_stage, workRelPath: row.work_rel_path },
+            previous: { directoryStage: effectiveRow.directory_stage, workRelPath: effectiveRow.work_rel_path },
           resolved: { directoryStage: resolvedStage, workRelPath: resolvedWorkRelPath }
         }, 409);
       }
@@ -3608,12 +3620,14 @@ export class OzonRepository {
         },
         checks
       };
-      const nextPayload = sanitizePersistentJobPayload({
+      const nextPayloadInput = {
         ...payload,
-        workRelPath: resolvedWorkRelPath,
-        directoryStage: resolvedStage,
-        workDirectory: checks.productJson.resolvedWorkDirectory,
-        productJsonPath: checks.productJson.resolvedProductJsonPath,
+        ...(runtimePathProjection ? {} : {
+          workRelPath: resolvedWorkRelPath,
+          directoryStage: resolvedStage,
+          workDirectory: checks.productJson.resolvedWorkDirectory,
+          productJsonPath: checks.productJson.resolvedProductJsonPath
+        }),
         priceStockWriteProgress: nextPriceStockWriteProgress,
         priceStockWriteFailures: [],
         priceStockConsistencyRetry: 0,
@@ -3624,7 +3638,8 @@ export class OzonRepository {
         finalVerificationLeaseUntil: null,
         finalConsistencyRecovery: null,
         knownPostPlatformMinPriceRecovery: recovery
-      });
+      };
+      const nextPayload = runtimePathProjection ? nextPayloadInput : sanitizePersistentJobPayload(nextPayloadInput);
       const nextStageStates = {
         ...jsonObject(row.stage_states),
         price: 'PENDING'
@@ -11791,6 +11806,33 @@ function sanitizePersistentJobPayload(value: unknown): Record<string, unknown> {
   delete payload.productJsonPath;
   delete payload.workDirectory;
   return payload;
+}
+
+function applyRuntimePathProjection(row: SqlRow, projection?: OzonPublishJob): SqlRow {
+  if (!projection) return row;
+  if (String(row.id || '') !== projection.id
+    || String(row.sku || '') !== projection.sku
+    || Number(row.listing_revision || 0) !== Number(projection.revision || 0)
+    || (nonBlank(row.work_rel_path) && String(row.work_rel_path) !== String(projection.workRelPath || ''))) {
+    throw new AppError('VERSION_CONFLICT', '历史 OZON 任务路径投影与持久化任务身份不一致', { jobId: row.id }, 409);
+  }
+  const workRelPath = normalizeOptionalRelativePath(projection.workRelPath);
+  if (!workRelPath || projection.directoryStage !== 'PROCESSING') {
+    throw new AppError('VERSION_CONFLICT', '历史 OZON 任务无法派生安全的 processing 相对路径', { jobId: row.id }, 409);
+  }
+  const projectionPayload = jsonObject(projection.payload);
+  return {
+    ...row,
+    directory_stage: projection.directoryStage,
+    work_rel_path: workRelPath,
+    payload: {
+      ...jsonObject(row.payload),
+      workRelPath,
+      directoryStage: projection.directoryStage,
+      workDirectory: projectionPayload.workDirectory,
+      productJsonPath: projectionPayload.productJsonPath
+    }
+  };
 }
 
 function portableRelPath(...segments: string[]): string {

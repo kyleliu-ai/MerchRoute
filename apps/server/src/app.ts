@@ -7,7 +7,7 @@ import cors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';
 import pino from 'pino';
 import sharp from 'sharp';
-import { APP_VERSION, AppError, E001_VARIANT_MAX_IMAGE_COUNT, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, appConfigSchema, workflowParameterFileName, workflowParameterOptionsFileName, pricingBatchCalculationInputSchema, pricingCalculationInputSchema, pricingProductQueryInputSchema, shippingCalculationInputSchema, type AppConfig, type OzonCatalogDictionaryValue, type OzonColorIdentity, type PendingSubmission, type ProductVariant, type ReviewRecord, type StageConfig, type VariantSelectionGroup, type WbColorIdentity, type WorkflowParameterOptions, type WorkflowParameters } from '@n8n-media-review/shared';
+import { APP_VERSION, AppError, E001_VARIANT_MAX_IMAGE_COUNT, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, appConfigSchema, workflowParameterFileName, workflowParameterOptionsFileName, pricingBatchCalculationInputSchema, pricingCalculationInputSchema, pricingProductQueryInputSchema, shippingCalculationInputSchema, type AppConfig, type OzonCatalogDictionaryValue, type OzonColorIdentity, type PendingSubmission, type ProductVariant, type ReviewRecord, type StageConfig, type SubmissionRecord, type VariantSelectionGroup, type WbColorIdentity, type WorkflowParameterOptions, type WorkflowParameters } from '@n8n-media-review/shared';
 import { ConfigService, parseOzonMediaOutputRootTemplate, parseWbMediaOutputRootTemplate } from './config/service.js';
 import { StateStore } from './repositories/store.js';
 import { ScannerService } from './services/scanner/index.js';
@@ -59,6 +59,7 @@ import { createAboutVersionService, type AboutVersionService } from './services/
 import { createAboutGithubAccessService, type AboutGithubAccessService } from './services/about-github-access.js';
 import { registerAboutRoutes } from './routes/about.js';
 import { LocalDirectoryOpener } from './services/local-directory-opener.js';
+import { LegacyRootCompatibility } from './utils/legacy-root-compatibility.js';
 
 type Services = {
   aboutVersion: AboutVersionService;
@@ -98,6 +99,7 @@ type Services = {
   ozonAutoPublishing: OzonAutoPublishingCoordinator;
   ozonCatalog: OzonCatalogService;
   variantDelivery: VariantMediaDeliveryService;
+  legacyRootCompatibility: LegacyRootCompatibility;
 };
 
 declare module 'fastify' {
@@ -109,6 +111,7 @@ export type BuildAppOptions = {
   aboutVersion?: AboutVersionService;
   aboutGithubAccess?: AboutGithubAccessService;
   localDirectoryOpener?: LocalDirectoryOpener;
+  legacyRootCompatibility?: LegacyRootCompatibility;
 };
 
 export async function buildApp(options: BuildAppOptions = {}) {
@@ -119,6 +122,11 @@ export async function buildApp(options: BuildAppOptions = {}) {
   const databaseUrl = options.databaseUrl === null ? '' : options.databaseUrl ?? process.env.DATABASE_URL;
   const config = new ConfigService();
   await config.initialize();
+  const legacyRetirementMarker = path.join(config.appDataDir, '.legacy-root-retirement-required-v1.json');
+  const junctionMaintenanceMarker = path.join(config.appDataDir, '.junction-retirement-maintenance-v1.json');
+  const legacyRetirementRequired = Boolean(await stat(legacyRetirementMarker).catch(() => undefined));
+  const legacyRootCompatibility = options.legacyRootCompatibility
+    ?? LegacyRootCompatibility.fromEnvironment(process.env, legacyRetirementRequired);
   const aboutGithubAccess = options.aboutGithubAccess ?? createAboutGithubAccessService({ appDataDir: config.appDataDir });
   await aboutGithubAccess.initialize();
   const aboutVersion = options.aboutVersion ?? createAboutVersionService({
@@ -126,10 +134,12 @@ export async function buildApp(options: BuildAppOptions = {}) {
     configVersion: APP_VERSION,
     githubAccess: aboutGithubAccess
   });
-  const store = new StateStore(config.appDataDir);
+  const store = new StateStore(config.appDataDir, (value) => legacyRootCompatibility.canonicalizeJson(value));
   await store.initialize();
-  const scanner = new ScannerService(config, store);
-  const localDirectoryOpener = options.localDirectoryOpener ?? new LocalDirectoryOpener();
+  const scanner = new ScannerService(config, store, (value) => legacyRootCompatibility.canonicalizePath(value));
+  const localDirectoryOpener = options.localDirectoryOpener ?? new LocalDirectoryOpener({
+    canonicalizePath: (value) => legacyRootCompatibility.canonicalizePath(value)
+  });
   const thumbnails = new ThumbnailService(config, scanner);
   const logDirectory = path.join(config.appDataDir, 'logs');
   await mkdir(logDirectory, { recursive: true });
@@ -153,18 +163,46 @@ export async function buildApp(options: BuildAppOptions = {}) {
   const synchronizeMediaIndexConfig = async (): Promise<void> => {
     await mediaIndex.syncConfig().catch((error) => app.log.warn({ err: error }, '媒体索引配置同步失败，将保留上一份可用索引'));
   };
-  const purchases = new PurchaseRepository(databaseUrl);
+  const purchases = new PurchaseRepository(databaseUrl, {
+    pathLookupCandidates: (value) => legacyRootCompatibility.lookupCandidates(value),
+    inspectLegacyReferences: (value) => legacyRootCompatibility.canonicalizeJsonWithStats(value)
+  });
   await purchases.initialize();
+  const assertLegacyRootOperationsReady = async (): Promise<void> => {
+    await legacyRootCompatibility.assertOperational();
+    const references = await purchases.legacyRootReferenceCounts(legacyRootCompatibility.legacyRoot);
+    if (references.nonterminalDownloadJobs > 0) {
+      throw new AppError('LEGACY_NONTERMINAL_DOWNLOAD_JOB', '仍有包含旧数据根的非终态下载任务，已阻止继续处理或创建相关任务', {
+        nonterminalDownloadJobs: references.nonterminalDownloadJobs
+      }, 503);
+    }
+  };
   if (purchases.configured && config.didMigrateLegacyConfig) await config.mergeLegacyDownloadWorkflows(await purchases.listWorkflows(true));
   await migratePendingWorkflowParameters(config, store);
   const productIdentity = new ProductIdentityService(purchases, store);
   await productIdentity.backfillLegacyPending();
   await productIdentity.backfillLegacyVariants();
   const submissions = new SubmissionService(config, store, scanner, productIdentity, app.log);
-  const localImports = new LocalImportService(config, purchases, () => mediaIndex.refreshStage('E000'));
+  const localImports = new LocalImportService(
+    config,
+    purchases,
+    () => mediaIndex.refreshStage('E000'),
+    (value) => legacyRootCompatibility.canonicalizePath(value)
+  );
   let downloadSync = await synchronizeDownloadProjection(config, purchases);
   if (!purchases.configured) app.log.warn('未配置 DATABASE_URL；采购管理暂不可用，下载工作流配置将在数据库连接后同步');
   const downloads = new DownloadWorker(purchases, app.log, () => downloadWorkflowInputs(config.get()));
+  const startDownloadsIfOperational = async (): Promise<boolean> => {
+    if (downloadSync.status !== 'synced') return false;
+    try {
+      await assertLegacyRootOperationsReady();
+      downloads.start();
+      return true;
+    } catch (error) {
+      app.log.error({ err: error }, '旧数据根兼容门禁未通过，下载 Worker 保持停止');
+      return false;
+    }
+  };
   const shipping = new ShippingRepository(databaseUrl);
   await shipping.initialize();
   if (!shipping.configured) app.log.warn('未配置 DATABASE_URL；运费模板与运费计算暂不可用');
@@ -185,7 +223,12 @@ export async function buildApp(options: BuildAppOptions = {}) {
   await wbAutoPublishRepository.initialize();
   const wbSourceMediaCleanupRepository = new WbSourceMediaCleanupRepository(databaseUrl);
   await wbSourceMediaCleanupRepository.initialize();
-  const wbSourceMediaCleanup = new WbSourceMediaCleanupService(wbSourceMediaCleanupRepository, new WbSourceMediaFiles(), app.log);
+  const wbSourceMediaCleanup = new WbSourceMediaCleanupService(
+    wbSourceMediaCleanupRepository,
+    new WbSourceMediaFiles(),
+    app.log,
+    (value) => legacyRootCompatibility.canonicalizePath(value)
+  );
   const wbStores = new WbStoreService(wbStoreRepository, wbPresets, wbPublishing, wbSourceMediaCleanup);
   const wbStoreGateway = new WbStoreGatewayService(wbStoreRepository, wbStores);
   const wbAutoPublishing = new WbAutoPublishingCoordinator(
@@ -193,7 +236,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   );
   const wbTaskStatusSynchronizer = new WbTaskStatusSynchronizer(wb, wbPublishing, app.log, {}, wbSourceMediaCleanup);
   wbPresets.setAutomationChangeHandler(() => wbAutoPublishing.handlePresetChanged());
-  const variantDelivery = new VariantMediaDeliveryService(config);
+  const variantDelivery = new VariantMediaDeliveryService(config, (value) => legacyRootCompatibility.canonicalizePath(value));
   const backfillVariantColors = async (colors: WbColorIdentity[]) => {
     const updated = await purchases.backfillProductVariantColors(colors);
     if (updated) app.log.info({ updated }, '历史产品变体 WB 颜色身份回填完成');
@@ -213,7 +256,9 @@ export async function buildApp(options: BuildAppOptions = {}) {
     app.log,
     pricing,
     ozonDescriptions,
-    ozonTitleTranslator
+    ozonTitleTranslator,
+    undefined,
+    { canonicalizePath: (value) => legacyRootCompatibility.canonicalizePath(value) }
   );
   const ozonStoreRepository = new OzonStoreRepository(databaseUrl);
   await ozonStoreRepository.initialize();
@@ -222,7 +267,10 @@ export async function buildApp(options: BuildAppOptions = {}) {
   const ozonSourceMediaCleanup = new OzonSourceMediaCleanupService(
     ozonSourceMediaCleanupRepository,
     new OzonSourceMediaFiles(),
-    app.log
+    app.log,
+    60_000,
+    5,
+    (value) => legacyRootCompatibility.canonicalizePath(value)
   );
   const ozonStores = new OzonStoreService(ozonStoreRepository, ozon, ozonPublishing);
   ozonStores.setSourceMediaCleanup(ozonSourceMediaCleanup);
@@ -252,8 +300,20 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const rootDirectory = parseOzonMediaOutputRootTemplate(configuredOzonTemplate).rootDirectory;
     await ozonPublishing.synchronizeRootDirectory(rootDirectory).catch((error) => app.log.warn({ err: error, rootDirectory }, 'OZON 共享媒体根目录启动同步失败'));
   }
-  app.decorate('services', { aboutVersion, aboutGithubAccess, config, store, scanner, localDirectoryOpener, mediaIndex, thumbnails, submissions, purchases, localImports, downloads, shipping, pricing, pricingQuery, productIdentity, wb, wbPresetRepository, wbPresets, wbPublishing, wbTaskStatusSynchronizer, wbAutoPublishRepository, wbAutoPublishing, wbStoreRepository, wbStores, wbStoreGateway, wbSourceMediaCleanup, wbCatalog, ozon, ozonStoreRepository, ozonStores, ozonStoreGateway, ozonSourceMediaCleanup, ozonPublishing, ozonAutoPublishing, ozonCatalog, variantDelivery });
+  app.decorate('services', { aboutVersion, aboutGithubAccess, config, store, scanner, localDirectoryOpener, mediaIndex, thumbnails, submissions, purchases, localImports, downloads, shipping, pricing, pricingQuery, productIdentity, wb, wbPresetRepository, wbPresets, wbPublishing, wbTaskStatusSynchronizer, wbAutoPublishRepository, wbAutoPublishing, wbStoreRepository, wbStores, wbStoreGateway, wbSourceMediaCleanup, wbCatalog, ozon, ozonStoreRepository, ozonStores, ozonStoreGateway, ozonSourceMediaCleanup, ozonPublishing, ozonAutoPublishing, ozonCatalog, variantDelivery, legacyRootCompatibility });
   await app.register(cors, { origin: /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/ });
+
+  app.addHook('preHandler', async (request) => {
+    if (isMutatingRequest(request.method) && await stat(junctionMaintenanceMarker).then(() => true).catch(() => false)) {
+      throw new AppError('JUNCTION_RETIREMENT_MAINTENANCE', 'MerchRoute 正在执行旧 Junction 退役维护，暂不接收新任务或配置变更', undefined, 503);
+    }
+    if (isLegacyRootSensitiveRequest(request.method, request.url)) await assertLegacyRootOperationsReady();
+  });
+
+  app.addHook('preSerialization', async (request, _reply, payload) => {
+    const pathname = request.url.split('?', 1)[0] || '';
+    return pathname === '/api/v1/config' ? payload : legacyRootCompatibility.canonicalizeJson(payload);
+  });
 
   app.setErrorHandler((error, _request, reply) => {
     const appError = error instanceof AppError ? error : new AppError('INTERNAL_ERROR', error instanceof Error ? error.message : '服务器内部错误', undefined, 500);
@@ -265,7 +325,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   await registerAboutRoutes(app, { githubAccess: aboutGithubAccess, version: aboutVersion });
   app.get('/api/v1/config', async () => ({
     config: config.get(),
-    readiness: await configReadiness(config),
+    readiness: await configReadiness(config, legacyRootCompatibility, store, purchases, wbSourceMediaCleanupRepository, ozonSourceMediaCleanupRepository, junctionMaintenanceMarker),
     downloadSync,
     wbPublishingReadiness: await wbPublishing.readiness(false),
     ozonPublishingReadiness: ozon.configured ? await ozonPublishing.readiness(false) : undefined
@@ -297,11 +357,11 @@ export async function buildApp(options: BuildAppOptions = {}) {
     await synchronizeMediaIndexConfig();
     downloads.stop();
     downloadSync = await synchronizeDownloadProjection(config, purchases, true);
-    if (downloadSync.status === 'synced') downloads.start();
+    await startDownloadsIfOperational();
     await store.addEvent('CONFIG_SAVED', '系统配置已保存');
     return {
       config: saved,
-      readiness: await configReadiness(config),
+      readiness: await configReadiness(config, legacyRootCompatibility, store, purchases, wbSourceMediaCleanupRepository, ozonSourceMediaCleanupRepository, junctionMaintenanceMarker),
       downloadSync,
       wbPublishingReadiness: await wbPublishing.readiness(false),
       ozonPublishingReadiness: ozon.configured ? await ozonPublishing.readiness(false) : undefined
@@ -317,7 +377,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     if (downloadProjectionChanged(previous, saved)) {
       downloads.stop();
       downloadSync = await synchronizeDownloadProjection(config, purchases, true);
-      if (downloadSync.status === 'synced') downloads.start();
+      await startDownloadsIfOperational();
     }
     const stage = saved.stages.at(-1)!;
     await store.addEvent('WORKFLOW_CREATED', `工作流 ${stage.id} 已创建`, { stageId: stage.id, copyFromStageId: body.copyFromStageId });
@@ -334,7 +394,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     if (downloadProjectionChanged(previous, saved)) {
       downloads.stop();
       downloadSync = await synchronizeDownloadProjection(config, purchases, true);
-      if (downloadSync.status === 'synced') downloads.start();
+      await startDownloadsIfOperational();
     }
     await store.addEvent('WORKFLOW_UPDATED', `工作流 ${stageId} 已更新`, { stageId });
     return { config: saved, workflow: saved.stages.find((stage) => stage.id === stageId), downloadSync };
@@ -350,7 +410,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     if (downloadProjectionChanged(previous, saved)) {
       downloads.stop();
       downloadSync = await synchronizeDownloadProjection(config, purchases, true);
-      if (downloadSync.status === 'synced') downloads.start();
+      await startDownloadsIfOperational();
     }
     await store.addEvent('WORKFLOW_DELETED', `工作流 ${stageId} 配置已删除`, { stageId });
     return { config: saved, deletedStageId: stageId, downloadSync };
@@ -659,6 +719,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const { taskId } = request.params as { taskId: string };
     const body = request.body as { selectedRelativePaths?: string[]; selectedTargets?: string[]; variantSelectionGroups?: VariantSelectionGroup[] };
     const task = await scanner.getTask(taskId);
+    const persistedTaskId = store.resolvePersistedTaskId(taskId);
     const variantSelectionGroups = task.stageId === 'E001' ? await normalizeVariantSelectionGroupsDraft(task, body.variantSelectionGroups || [], wb, ozonCatalog) : undefined;
     const selected = variantSelectionGroups ? [...new Set(variantSelectionGroups.flatMap((group) => group.selectedRelativePaths))] : validateSelected(task, body.selectedRelativePaths || [], false);
     if (variantSelectionGroups?.length && variantSelectionGroups.every((group) => group.wbColor)) {
@@ -675,8 +736,8 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const now = new Date().toISOString();
     let saved!: ReviewRecord;
     await store.update((db) => {
-      const existing = db.reviews.find((item) => item.taskId === taskId);
-      saved = existing || { taskId, stageId: task.stageId, sourceFolder: task.sourceFolder, sourceFolderName: task.sourceFolderName, selectedRelativePaths: [], selectedTargetStageIds: [], status: 'DRAFT', createdAt: now, updatedAt: now };
+      const existing = db.reviews.find((item) => item.taskId === persistedTaskId);
+      saved = existing || { taskId: persistedTaskId, stageId: task.stageId, sourceFolder: task.sourceFolder, sourceFolderName: task.sourceFolderName, selectedRelativePaths: [], selectedTargetStageIds: [], status: 'DRAFT', createdAt: now, updatedAt: now };
       Object.assign(saved, { selectedRelativePaths: selected, selectedTargetStageIds: body.selectedTargets || saved.selectedTargetStageIds, variantSelectionGroups, status: 'DRAFT', updatedAt: now });
       if (!existing) db.reviews.push(saved);
     });
@@ -687,6 +748,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const { taskId } = request.params as { taskId: string };
     const body = request.body as { selectedRelativePaths?: string[]; targetStageIds?: string[]; variantSelectionGroups?: VariantSelectionGroup[] };
     const task = await scanner.getTask(taskId);
+    const persistedTaskId = store.resolvePersistedTaskId(taskId);
     const resolvedProduct = await productIdentity.requireResolvedTask(task);
     const stage = requireEnabledStage(config, task.stageId);
     assertTaskContextIdentity(task, resolvedProduct.identity);
@@ -731,9 +793,9 @@ export async function buildApp(options: BuildAppOptions = {}) {
       const now = new Date().toISOString();
       await store.update((db) => {
         db.submissionHistory.unshift(...records, ...failures);
-        let review = db.reviews.find((item) => item.taskId === taskId);
+        let review = db.reviews.find((item) => item.taskId === persistedTaskId);
         if (!review) {
-          review = { taskId, stageId: stage.id, sourceFolder: task.sourceFolder, sourceFolderName: task.sourceFolderName, selectedRelativePaths: selected, selectedTargetStageIds: targets, status: records.length ? 'SUBMITTED' : 'DRAFT', createdAt: now, updatedAt: now };
+          review = { taskId: persistedTaskId, stageId: stage.id, sourceFolder: task.sourceFolder, sourceFolderName: task.sourceFolderName, selectedRelativePaths: selected, selectedTargetStageIds: targets, status: records.length ? 'SUBMITTED' : 'DRAFT', createdAt: now, updatedAt: now };
           db.reviews.push(review);
         }
         Object.assign(review, { selectedRelativePaths: selected, selectedTargetStageIds: targets, status: records.length ? 'SUBMITTED' : 'DRAFT', updatedAt: now, ...(records.length ? { approvedAt: now } : {}), productSku: resolvedProduct.identity.sku, productNameSnapshot: resolvedProduct.identity.productName, productIdentitySource: resolvedProduct.source, variantId: variant.variantId, variantName: variant.name });
@@ -784,23 +846,23 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const now = new Date().toISOString();
     const pendingCreated: PendingSubmission[] = [];
     await store.update((db) => {
-      let review = db.reviews.find((item) => item.taskId === taskId);
+      let review = db.reviews.find((item) => item.taskId === persistedTaskId);
       if (!review) {
-        review = { taskId, stageId: task.stageId, sourceFolder: task.sourceFolder, sourceFolderName: task.sourceFolderName, selectedRelativePaths: selected, selectedTargetStageIds: targets, status: 'APPROVED_PENDING_SUBMISSION', createdAt: now, updatedAt: now, approvedAt: now, productSku: resolvedProduct.identity.sku, productNameSnapshot: resolvedProduct.identity.productName, productIdentitySource: resolvedProduct.source, variantSelectionGroups: variantGroups, variantId: inheritedVariant?.variantId, variantName: inheritedVariant?.name };
+        review = { taskId: persistedTaskId, stageId: task.stageId, sourceFolder: task.sourceFolder, sourceFolderName: task.sourceFolderName, selectedRelativePaths: selected, selectedTargetStageIds: targets, status: 'APPROVED_PENDING_SUBMISSION', createdAt: now, updatedAt: now, approvedAt: now, productSku: resolvedProduct.identity.sku, productNameSnapshot: resolvedProduct.identity.productName, productIdentitySource: resolvedProduct.source, variantSelectionGroups: variantGroups, variantId: inheritedVariant?.variantId, variantName: inheritedVariant?.name };
         db.reviews.push(review);
       } else Object.assign(review, { selectedRelativePaths: selected, selectedTargetStageIds: targets, status: 'APPROVED_PENDING_SUBMISSION', updatedAt: now, approvedAt: now, productSku: resolvedProduct.identity.sku, productNameSnapshot: resolvedProduct.identity.productName, productIdentitySource: resolvedProduct.source, variantSelectionGroups: variantGroups, variantId: inheritedVariant?.variantId, variantName: inheritedVariant?.name });
       const desiredGroupIds = new Set(variantGroups?.map((group) => group.groupId) || []);
-      db.pendingSubmissions = db.pendingSubmissions.filter((item) => !(item.taskId === taskId && (!targets.includes(item.targetStageId) || (variantGroups && (!item.variantGroupId || !desiredGroupIds.has(item.variantGroupId))))));
+      db.pendingSubmissions = db.pendingSubmissions.filter((item) => !(item.taskId === persistedTaskId && (!targets.includes(item.targetStageId) || (variantGroups && (!item.variantGroupId || !desiredGroupIds.has(item.variantGroupId))))));
       const work = variantGroups || [{ groupId: undefined, variantName: inheritedVariant?.name, selectedRelativePaths: selected }];
       for (const group of work) {
         const variant = group.groupId && 'wbColor' in group && group.wbColor ? groupVariants.get(group.wbColor.colorKey) : inheritedVariant;
         if ((stage.id === 'E001' || stage.id === 'E002' || stage.id === 'E003') && !variant) throw new AppError('CONFIG_INVALID', '无法解析审核任务变体');
         for (const targetStageId of targets) {
-          let pending = db.pendingSubmissions.find((item) => item.taskId === taskId && item.targetStageId === targetStageId && item.variantGroupId === group.groupId);
+          let pending = db.pendingSubmissions.find((item) => item.taskId === persistedTaskId && item.targetStageId === targetStageId && item.variantGroupId === group.groupId);
           const template = targetParameterDefaults.get(targetStageId)!;
           const parameters = variant ? productIdentity.injectVariant(template.parameters, resolvedProduct.identity, variant.name) : productIdentity.inject(template.parameters, resolvedProduct.identity);
           if (!pending) {
-            pending = { id: randomUUID(), taskId, sourceStageId: task.stageId, targetStageId, selectedRelativePaths: group.selectedRelativePaths, n8nTaskParameters: structuredClone(parameters), n8nTaskParameterOptions: structuredClone(template.parameterOptions), conflictPolicy: 'new-revision', status: 'PENDING', productSku: resolvedProduct.identity.sku, productNameSnapshot: resolvedProduct.identity.productName, variantGroupId: group.groupId, variantId: variant?.variantId, variantName: variant?.name, createdAt: now, updatedAt: now };
+            pending = { id: randomUUID(), taskId: persistedTaskId, sourceStageId: task.stageId, targetStageId, selectedRelativePaths: group.selectedRelativePaths, n8nTaskParameters: structuredClone(parameters), n8nTaskParameterOptions: structuredClone(template.parameterOptions), conflictPolicy: 'new-revision', status: 'PENDING', productSku: resolvedProduct.identity.sku, productNameSnapshot: resolvedProduct.identity.productName, variantGroupId: group.groupId, variantId: variant?.variantId, variantName: variant?.name, createdAt: now, updatedAt: now };
             db.pendingSubmissions.push(pending);
           } else Object.assign(pending, { selectedRelativePaths: group.selectedRelativePaths, n8nTaskParameters: parameters, productSku: resolvedProduct.identity.sku, productNameSnapshot: resolvedProduct.identity.productName, variantId: variant?.variantId, variantName: variant?.name, status: 'PENDING', lastError: undefined, updatedAt: now });
           pendingCreated.push(pending);
@@ -812,21 +874,23 @@ export async function buildApp(options: BuildAppOptions = {}) {
   });
   app.post('/api/v1/tasks/:taskId/reopen', async (request) => {
     const { taskId } = request.params as { taskId: string };
-    const existingReview = store.read().reviews.find((item) => item.taskId === taskId);
+    const persistedTaskId = store.resolvePersistedTaskId(taskId);
+    const existingReview = store.getReview(taskId);
     if (!existingReview) throw new AppError('CONFIG_INVALID', '审核记录不存在', { taskId }, 404);
     requireEnabledStage(config, existingReview.stageId);
     await store.update((db) => {
-      const review = db.reviews.find((item) => item.taskId === taskId);
+      const review = db.reviews.find((item) => item.taskId === persistedTaskId);
       if (!review) throw new AppError('CONFIG_INVALID', '审核记录不存在', { taskId }, 404);
       if (review.status === 'SUBMITTED') throw new AppError('CONFIG_INVALID', '已投递任务不能直接重新打开');
       review.status = 'DRAFT'; review.updatedAt = new Date().toISOString();
-      db.pendingSubmissions = db.pendingSubmissions.filter((item) => item.taskId !== taskId);
+      db.pendingSubmissions = db.pendingSubmissions.filter((item) => item.taskId !== persistedTaskId);
     });
     return { ok: true };
   });
   app.delete('/api/v1/tasks/:taskId/draft', async (request) => {
     const { taskId } = request.params as { taskId: string };
-    await store.update((db) => { db.reviews = db.reviews.filter((item) => item.taskId !== taskId); db.pendingSubmissions = db.pendingSubmissions.filter((item) => item.taskId !== taskId); });
+    const persistedTaskId = store.resolvePersistedTaskId(taskId);
+    await store.update((db) => { db.reviews = db.reviews.filter((item) => item.taskId !== persistedTaskId); db.pendingSubmissions = db.pendingSubmissions.filter((item) => item.taskId !== persistedTaskId); });
     return { ok: true };
   });
 
@@ -934,14 +998,21 @@ export async function buildApp(options: BuildAppOptions = {}) {
         throw new AppError('CONFIG_INVALID', '这条共享媒体记录缺少冻结重试信息，不能自动重试', { submissionId }, 409);
       }
       const stage = requireEnabledStage(config, existing.sourceStageId);
-      const task = await scanner.getTask(existing.taskId);
+      const effectiveSourceFolder = legacyRootCompatibility.canonicalizePath(existing.sourceFolder);
+      const runtimeTaskId = scanner.taskId(existing.sourceStageId, effectiveSourceFolder);
+      const task = await scanner.getTask(runtimeTaskId).catch(async (error) => {
+        if (runtimeTaskId === existing.taskId) throw error;
+        return scanner.getTask(existing.taskId);
+      });
+      const historicalIdentityTask = { ...task, taskId: existing.taskId, sourceFolder: effectiveSourceFolder };
       const platform = existing.deliveryType === 'WB_MEDIA' ? 'WB' : 'OZON';
-      const alreadyArchived = store.read().submissionHistory.some((item) => item.taskId === existing.taskId && item.submissionId !== submissionId && item.status === 'SUCCESS' && Boolean(item.archiveFolder));
+      const compatibleTaskIds = new Set([existing.taskId, task.taskId]);
+      const alreadyArchived = store.read().submissionHistory.some((item) => compatibleTaskIds.has(item.taskId) && item.submissionId !== submissionId && item.status === 'SUCCESS' && Boolean(item.archiveFolder));
       try {
-        const record = await variantDelivery.deliver({ platform, task, stage, selectedRelativePaths: existing.selectedRelativePaths, productSku: existing.productSku, productName: existing.productNameSnapshot, variantId: existing.variantId, variantName: existing.variantName, sourceSubmissionId: existing.sourceSubmissionId, archiveMedia: !alreadyArchived, retry: { submissionId, outputRootTemplateSnapshot: existing.outputRootTemplateSnapshot, resolvedOutputRoot: existing.resolvedOutputRoot } });
+        const record = await variantDelivery.deliver({ platform, task: historicalIdentityTask, stage, selectedRelativePaths: existing.selectedRelativePaths, productSku: existing.productSku, productName: existing.productNameSnapshot, variantId: existing.variantId, variantName: existing.variantName, sourceSubmissionId: existing.sourceSubmissionId, archiveMedia: !alreadyArchived, retry: { submissionId, outputRootTemplateSnapshot: existing.outputRootTemplateSnapshot, resolvedOutputRoot: existing.resolvedOutputRoot } });
         await store.update((db) => {
-          const index = db.submissionHistory.findIndex((item) => item.submissionId === submissionId);
-          if (index >= 0) db.submissionHistory[index] = record;
+          const persisted = db.submissionHistory.find((item) => item.submissionId === submissionId);
+          if (persisted) applySharedMediaRetryOutcome(persisted, record);
           const review = db.reviews.find((item) => item.taskId === existing.taskId);
           if (review) Object.assign(review, { status: 'SUBMITTED', updatedAt: new Date().toISOString(), approvedAt: new Date().toISOString() });
         });
@@ -952,10 +1023,13 @@ export async function buildApp(options: BuildAppOptions = {}) {
           await ozonAutoPublishing.onMediaDelivered({ sku: existing.productSku, stageId: existing.sourceStageId as 'E004' | 'E005', submissionId: record.submissionId, variantId: existing.variantId, deliveredAt: record.completedAt || record.startedAt, resolvedOutputRoot: record.resolvedOutputRoot, selectedRelativePaths: existing.selectedRelativePaths })
             .catch((error) => app.log.warn({ err: error, sku: existing.productSku, submissionId }, 'OZON 自动上品重试媒体事件入队失败'));
         }
-        return record;
+        return store.read().submissionHistory.find((item) => item.submissionId === submissionId) || record;
       } catch (error) {
         if (error instanceof TerminalDeliveryError) {
-          await store.update((db) => { const index = db.submissionHistory.findIndex((item) => item.submissionId === submissionId); if (index >= 0) db.submissionHistory[index] = error.record; });
+          await store.update((db) => {
+            const persisted = db.submissionHistory.find((item) => item.submissionId === submissionId);
+            if (persisted) applySharedMediaRetryOutcome(persisted, error.record);
+          });
           throw new AppError(error.record.errorCode || 'COPY_FAILED', error.message, { submissionId }, 409);
         }
         throw error;
@@ -988,13 +1062,22 @@ export async function buildApp(options: BuildAppOptions = {}) {
       return reply.code(404).send({ error: { code: 'NOT_FOUND', message: '请求的资源不存在' } });
     });
   }
-  if (downloadSync.status === 'synced') downloads.start();
+  let legacyBackgroundWorkersReady = true;
+  try {
+    await assertLegacyRootOperationsReady();
+  } catch (error) {
+    legacyBackgroundWorkersReady = false;
+    app.log.error({ err: error }, '旧数据根兼容门禁未通过，下载与发布后台 Worker 保持停止');
+  }
+  if (downloadSync.status === 'synced' && legacyBackgroundWorkersReady) downloads.start();
   await wbCatalog.start();
   await ozonCatalog.start();
-  wbTaskStatusSynchronizer.start();
-  wbAutoPublishing.start();
-  ozonAutoPublishing.start();
-  ozonSourceMediaCleanup.start();
+  if (legacyBackgroundWorkersReady) {
+    wbTaskStatusSynchronizer.start();
+    wbAutoPublishing.start();
+    ozonAutoPublishing.start();
+    ozonSourceMediaCleanup.start();
+  }
   await store.addEvent('APP_STARTED', '应用服务已启动', { appDataDir: config.appDataDir });
   app.addHook('onClose', async () => {
     downloads.stop();
@@ -1286,7 +1369,52 @@ function assertTaskContextIdentity(task: Awaited<ReturnType<ScannerService['getT
   }
 }
 
-async function configReadiness(config: ConfigService): Promise<{ complete: boolean; paths: Awaited<ReturnType<ConfigService['validatePath']>>[] }> {
+export function isLegacyRootSensitiveRequest(method: string, url: string): boolean {
+  const pathname = url.split('?', 1)[0] || '';
+  if (method === 'GET') {
+    return /^\/api\/v1\/(?:wb|ozon)\/listings\/[^/]+\/media\//.test(pathname)
+      || /^\/api\/v1\/tasks\/[^/]+\/images\/(?:thumbnail|original|metadata)$/.test(pathname);
+  }
+  if (pathname.startsWith('/api/v1/wb/')) {
+    if (/^\/api\/v1\/wb\/runtime\/(?:errors|gateway)$/.test(pathname)) return false;
+    if (/^\/api\/v1\/wb\/runtime\/jobs\/[^/]+\/(?:transition|registry)$/.test(pathname)) return false;
+    if (/^\/api\/v1\/wb\/runtime\/stores\/[^/]+\/preflight-report$/.test(pathname)) return false;
+    return true;
+  }
+  if (pathname.startsWith('/api/v1/ozon/')) {
+    if (/^\/api\/v1\/ozon\/runtime\/(?:gateway(?:\/legacy-receipt)?|stores\/[^/]+\/preflight-result)$/.test(pathname)) return false;
+    if (/^\/api\/v1\/ozon\/runtime\/jobs\/[^/]+\/(?:transition|lease\/(?:renew|release))$/.test(pathname)) return false;
+    return true;
+  }
+  return /^\/api\/v1\/local-import\/(?:preview|imports(?:\/[^/]+\/retry)?)$/.test(pathname)
+    || /^\/api\/v1\/submissions\/(?:batch|[^/]+\/retry)$/.test(pathname)
+    || pathname === '/api/v1/purchase-download-jobs/batch'
+    || /^\/api\/v1\/purchases\/[^/]+\/downloads$/.test(pathname)
+    || /^\/api\/v1\/notifications\/[^/]+\/retry$/.test(pathname)
+    || /^\/api\/v1\/tasks\/[^/]+\/(?:open-folder|approve|reopen)$/.test(pathname);
+}
+
+function isMutatingRequest(method: string): boolean {
+  return !['GET', 'HEAD', 'OPTIONS'].includes(method.toUpperCase());
+}
+
+export function applySharedMediaRetryOutcome(target: SubmissionRecord, outcome: SubmissionRecord): void {
+  target.status = outcome.status;
+  for (const key of ['targetFolder', 'archiveFolder', 'mediaManifestPath', 'errorCode', 'errorMessage', 'completedAt'] as const) {
+    if (outcome[key] === undefined) delete target[key];
+    else target[key] = outcome[key] as never;
+  }
+}
+
+async function configReadiness(
+  config: ConfigService,
+  legacyRootCompatibility: LegacyRootCompatibility,
+  store: StateStore,
+  purchases: PurchaseRepository,
+  wbCleanup: WbSourceMediaCleanupRepository,
+  ozonCleanup: OzonSourceMediaCleanupRepository,
+  junctionMaintenanceMarker: string
+) {
   const stages = config.get().stages;
   const enabledStageIds = new Set(stages.filter((stage) => stage.enabled).map((stage) => stage.id));
   const paths = stages.filter((stage) => stage.enabled).flatMap((stage) => [
@@ -1299,7 +1427,37 @@ async function configReadiness(config: ConfigService): Promise<{ complete: boole
   const unique = [...new Set(paths)];
   const validations = await Promise.all(unique.map((item) => config.validatePath(item)));
   const candidateRoots = new Set(stages.filter((stage) => stage.enabled && stage.reviewEnabled).map((stage) => stage.candidateRoot));
-  return { complete: validations.filter((item) => candidateRoots.has(item.path)).every((item) => item.exists && item.readable), paths: validations };
+  const legacyStatus = await legacyRootCompatibility.readiness();
+  const stateStore = store.legacyRootReferenceCounts((value) => legacyRootCompatibility.canonicalizeJsonWithStats(value));
+  const [purchasesReferences, wbCleanupReferences, ozonCleanupReferences] = await Promise.all([
+    purchases.legacyRootReferenceCounts(legacyRootCompatibility.legacyRoot),
+    wbCleanup.legacyRootReferenceCounts((value) => legacyRootCompatibility.canonicalizePath(value) !== value),
+    ozonCleanup.legacyRootReferenceCounts((value) => legacyRootCompatibility.canonicalizePath(value) !== value)
+  ]);
+  const pathsComplete = validations.filter((item) => candidateRoots.has(item.path)).every((item) => item.exists && item.readable);
+  const maintenanceActive = await stat(junctionMaintenanceMarker).then(() => true).catch(() => false);
+  const actionableDatabaseReferences = purchasesReferences.nonterminalDownloadJobs
+    + wbCleanupReferences.actionableBatches
+    + ozonCleanupReferences.actionableBatches;
+  return {
+    complete: pathsComplete && legacyStatus.status !== 'BLOCKED' && actionableDatabaseReferences === 0,
+    paths: validations,
+    maintenanceMode: {
+      active: maintenanceActive,
+      acceptingNewTasks: !maintenanceActive,
+      ...(maintenanceActive ? { reason: 'RETIRE_N8N_GLOBAL_JUNCTION' } : {})
+    },
+    legacyRootCompatibility: {
+      ...legacyStatus,
+      referenceCounts: {
+        stateStore,
+        purchases: purchasesReferences,
+        wbSourceMediaCleanup: wbCleanupReferences,
+        ozonSourceMediaCleanup: ozonCleanupReferences,
+        actionableDatabaseReferences
+      }
+    }
+  };
 }
 
 function mimeForExtension(extension: string): string {

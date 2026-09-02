@@ -62,9 +62,29 @@ type VariantMediaManifest = {
 export class VariantMediaDeliveryService {
   private readonly locks = new Map<string, Promise<void>>();
 
-  constructor(private readonly config: ConfigService) {}
+  constructor(
+    private readonly config: ConfigService,
+    private readonly canonicalizePath: (value: string) => string = (value) => value
+  ) {}
 
   async deliver(input: DeliveryInput): Promise<SubmissionRecord> {
+    input = {
+      ...input,
+      task: { ...input.task, sourceFolder: this.canonicalizePath(input.task.sourceFolder) },
+      stage: {
+        ...input.stage,
+        ...(input.stage.approvedArchiveRoot ? { approvedArchiveRoot: this.canonicalizePath(input.stage.approvedArchiveRoot) } : {}),
+        ...(input.stage.outputRoot ? { outputRoot: this.canonicalizePath(input.stage.outputRoot) } : {}),
+        ...(input.stage.ozonOutputRoot ? { ozonOutputRoot: this.canonicalizePath(input.stage.ozonOutputRoot) } : {})
+      },
+      ...(input.retry ? {
+        retry: {
+          ...input.retry,
+          outputRootTemplateSnapshot: this.canonicalizePath(input.retry.outputRootTemplateSnapshot),
+          resolvedOutputRoot: this.canonicalizePath(input.retry.resolvedOutputRoot)
+        }
+      } : {})
+    };
     if (input.stage.id !== 'E004' && input.stage.id !== 'E005') throw new AppError('CONFIG_INVALID', '只有 E004 和 E005 支持共享媒体终端投递');
     const outputRootTemplate = input.retry?.outputRootTemplateSnapshot || (input.platform === 'WB' ? input.stage.outputRoot : input.stage.ozonOutputRoot);
     if (!outputRootTemplate) throw new AppError('CONFIG_INVALID', `${input.stage.id} 尚未配置 ${input.platform} 共享媒体输出目录模板`, { stageId: input.stage.id, platform: input.platform }, 409);

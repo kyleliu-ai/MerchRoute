@@ -1,6 +1,7 @@
 import path from 'node:path';
 import os from 'node:os';
-import { mkdtemp, mkdir, rm, symlink, utimes, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdtemp, mkdir, readFile, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ConfigService } from '../../config/service.js';
 import type { PurchaseRepository } from '../../repositories/purchases.js';
@@ -216,6 +217,54 @@ describe('LocalImportService', () => {
     expect(purchases.reserveLocalImport).not.toHaveBeenCalled();
   });
 
+  it('retries a historical failed import through canonical roots and writes only canonical paths to the new manifest', async () => {
+    const mediaDirectory = path.join(sourceRoot, 'PDD', 'legacy-product');
+    const mediaFile = path.join(mediaDirectory, 'main.jpg');
+    await mkdir(mediaDirectory, { recursive: true });
+    await writeFile(mediaFile, 'historical-media');
+    const sha256 = createHash('sha256').update(await readFile(mediaFile)).digest('hex');
+    const legacyBase = path.join(root, 'legacy-root');
+    const legacySourceRoot = path.join(legacyBase, 'source');
+    const legacyCandidateRoot = path.join(legacyBase, 'candidate');
+    const canonicalizePath = (value: string) => {
+      const relative = path.relative(legacyBase, value);
+      return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative)) ? path.join(root, relative) : value;
+    };
+    const hash = (kind: string, value: string) => createHash('sha256').update(stableTestJson({
+      stageId: 'E000', kind, root: process.platform === 'win32' ? path.normalize(path.resolve(value)).toLocaleLowerCase('en-US') : path.normalize(path.resolve(value))
+    })).digest('hex');
+    const record = {
+      id: '11111111-1111-4111-8111-111111111111', idempotencyKey: 'legacy-retry', sku: '0000001',
+      status: 'COPY_FAILED_RETRYABLE', sourcePlatform: 'PDD', importWorkflowLabel: '本地导入-PDD',
+      sourceConfigSnapshot: { stageId: 'E000', inputQueueRoot: legacySourceRoot, configHash: hash('source', legacySourceRoot) },
+      targetConfigSnapshot: { stageId: 'E000', candidateRoot: legacyCandidateRoot, configHash: hash('target', legacyCandidateRoot) },
+      previewHash: 'preview-hash', retryCount: 1, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      sources: [{
+        id: 'source-1', platform: 'PDD', relativePath: 'PDD/legacy-product', normalizedPathKey: 'pdd/legacy-product',
+        isPrimary: true, targetSubdirectory: 'legacy-product', copyManifest: { files: [{ relativePath: 'main.jpg', sha256, sizeBytes: 16 }] }
+      }]
+    } as any;
+    const completeLocalImport = vi.fn(async (_id, targetFolder) => ({ ...record, status: 'IMPORTED', targetFolder }));
+    const purchases = {
+      getLocalImport: vi.fn(async () => record),
+      markLocalImportCopying: vi.fn(async () => ({ ...record, status: 'COPYING' })),
+      getPurchase: vi.fn(async () => ({ sku: '0000001', productName: '历史商品' })),
+      completeLocalImport,
+      failLocalImport: vi.fn()
+    } as unknown as PurchaseRepository;
+    const service = new LocalImportService(config as unknown as ConfigService, purchases, vi.fn(), canonicalizePath);
+
+    await expect(service.retry(record.id)).resolves.toMatchObject({ status: 'IMPORTED' });
+
+    const target = path.join(candidateRoot, '0000001-历史商品');
+    const manifest = JSON.parse(await readFile(path.join(target, 'local-import-manifest.json'), 'utf8'));
+    expect(manifest.sourceConfigSnapshot).toMatchObject({ inputQueueRoot: sourceRoot, configHash: hash('source', sourceRoot) });
+    expect(manifest.targetConfigSnapshot).toMatchObject({ candidateRoot, configHash: hash('target', candidateRoot) });
+    expect(JSON.stringify(manifest)).not.toContain(legacyBase);
+    expect(record.sourceConfigSnapshot.inputQueueRoot).toBe(legacySourceRoot);
+    expect(completeLocalImport).toHaveBeenCalledWith(record.id, target);
+  });
+
   it('validates current-platform absolute paths and refuses a volume root', async () => {
     expect(isAbsolutePathForPlatform('C:\\media\\source', 'win32')).toBe(true);
     expect(isAbsolutePathForPlatform('/Volumes/media/source', 'darwin')).toBe(true);
@@ -224,3 +273,9 @@ describe('LocalImportService', () => {
     await expect(assertStrictDirectory(sourceRoot, false, '测试目录')).resolves.toBeUndefined();
   });
 });
+
+function stableTestJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableTestJson).join(',')}]`;
+  if (value && typeof value === 'object') return `{${Object.entries(value as Record<string, unknown>).sort(([left], [right]) => left.localeCompare(right)).map(([key, item]) => `${JSON.stringify(key)}:${stableTestJson(item)}`).join(',')}}`;
+  return JSON.stringify(value);
+}

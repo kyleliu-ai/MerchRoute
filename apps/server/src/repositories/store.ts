@@ -2,7 +2,7 @@ import path from 'node:path';
 import { mkdir, readFile } from 'node:fs/promises';
 import writeFileAtomic from 'write-file-atomic';
 import { randomUUID } from 'node:crypto';
-import type { AppDatabase, AppEvent, ReviewRecord, ReviewStatus } from '@n8n-media-review/shared';
+import { AppError, type AppDatabase, type AppEvent, type ReviewRecord, type ReviewStatus } from '@n8n-media-review/shared';
 
 const EMPTY_DB: AppDatabase = {
   schemaVersion: '1.0',
@@ -17,7 +17,11 @@ export class StateStore {
   private data: AppDatabase = structuredClone(EMPTY_DB);
   private saveChain: Promise<void> = Promise.resolve();
   private readonly listeners = new Set<() => void>();
-  constructor(private readonly appDataDir: string) {}
+  private taskIdResolver?: (stageId: string, sourceFolder: string) => string;
+  constructor(
+    private readonly appDataDir: string,
+    private readonly canonicalizeRead: (value: unknown) => unknown = (value) => value
+  ) {}
 
   private get file(): string { return path.join(this.appDataDir, 'db.json'); }
 
@@ -32,15 +36,35 @@ export class StateStore {
     }
   }
 
-  read(): AppDatabase { return structuredClone(this.data); }
+  read(): AppDatabase { return this.readView(this.data); }
+
+  configureTaskIdResolver(resolver: (stageId: string, sourceFolder: string) => string): void {
+    this.taskIdResolver = resolver;
+    this.taskIdAliases();
+  }
+
+  resolveRuntimeTaskId(taskId: string): string {
+    return this.taskIdAliases().storedToRuntime.get(taskId) || taskId;
+  }
+
+  resolvePersistedTaskId(taskId: string): string {
+    return this.taskIdAliases().runtimeToStored.get(taskId) || taskId;
+  }
 
   getReview(taskId: string): ReviewRecord | undefined {
-    const review = this.data.reviews.find((item) => item.taskId === taskId);
-    return review ? structuredClone(review) : undefined;
+    const storedTaskId = this.resolvePersistedTaskId(taskId);
+    const review = this.data.reviews.find((item) => item.taskId === storedTaskId);
+    return review ? this.readView(review) : undefined;
   }
 
   reviewStatuses(): Map<string, ReviewStatus> {
-    return new Map(this.data.reviews.map((review) => [review.taskId, review.status]));
+    const aliases = this.taskIdAliases();
+    const statuses = new Map<string, ReviewStatus>();
+    for (const review of this.data.reviews) {
+      statuses.set(review.taskId, review.status);
+      statuses.set(aliases.storedToRuntime.get(review.taskId) || review.taskId, review.status);
+    }
+    return statuses;
   }
 
   pendingSubmissionCountsBySourceStage(): Map<string, number> {
@@ -70,6 +94,51 @@ export class StateStore {
       db.appEvents = db.appEvents.slice(0, 2000);
     });
     return event;
+  }
+
+  legacyRootReferenceCounts(inspect: (value: unknown) => { changedStrings: number; changedKeys: number }): Record<string, number> {
+    return Object.fromEntries(Object.entries({
+      reviews: this.data.reviews,
+      pendingSubmissions: this.data.pendingSubmissions,
+      submissionHistory: this.data.submissionHistory,
+      submissionBatches: this.data.submissionBatches,
+      appEvents: this.data.appEvents
+    }).map(([section, value]) => {
+      const result = inspect(value);
+      return [section, result.changedStrings + result.changedKeys];
+    }));
+  }
+
+  private readView<T>(value: T): T {
+    return this.canonicalizeRead(structuredClone(value)) as T;
+  }
+
+  private taskIdAliases(): { storedToRuntime: Map<string, string>; runtimeToStored: Map<string, string> } {
+    const storedToRuntime = new Map<string, string>();
+    const runtimeToStored = new Map<string, string>();
+    if (!this.taskIdResolver) return { storedToRuntime, runtimeToStored };
+    const reviews = this.data.reviews.map((item) => ({ taskId: item.taskId, stageId: item.stageId, sourceFolder: item.sourceFolder }));
+    for (const reference of reviews) {
+      if (!reference.taskId || !reference.stageId || !reference.sourceFolder) continue;
+      const canonicalSourceFolder = this.canonicalizeRead(reference.sourceFolder) as string;
+      const runtimeTaskId = this.taskIdResolver(reference.stageId, canonicalSourceFolder);
+      const previous = runtimeToStored.get(runtimeTaskId);
+      if (previous && previous !== reference.taskId) {
+        throw new AppError('LEGACY_TASK_ID_COLLISION', '历史任务路径映射产生重复任务 ID，已停止读取以避免覆盖审核记录', {
+          runtimeTaskId,
+          firstPersistedTaskId: previous,
+          conflictingPersistedTaskId: reference.taskId
+        }, 409);
+      }
+      storedToRuntime.set(reference.taskId, runtimeTaskId);
+      runtimeToStored.set(runtimeTaskId, reference.taskId);
+    }
+    for (const reference of this.data.submissionHistory) {
+      if (!reference.taskId || !reference.sourceStageId || !reference.sourceFolder) continue;
+      const canonicalSourceFolder = this.canonicalizeRead(reference.sourceFolder) as string;
+      storedToRuntime.set(reference.taskId, this.taskIdResolver(reference.sourceStageId, canonicalSourceFolder));
+    }
+    return { storedToRuntime, runtimeToStored };
   }
 
   private async persist(): Promise<void> {

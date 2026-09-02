@@ -1,16 +1,19 @@
 import os from 'node:os';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createDefaultConfig, type AppConfig } from '@n8n-media-review/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ConfigService } from '../../config/service.js';
 import { StateStore } from '../../repositories/store.js';
 import { ScannerService } from './index.js';
+import { normalizedTaskPath } from '../../utils/paths.js';
 
 describe('ScannerService stage index replacement', () => {
   let root: string;
   let config: AppConfig;
   let scanner: ScannerService;
+  let store: StateStore;
 
   beforeEach(async () => {
     root = await mkdtemp(path.join(os.tmpdir(), 'pixroute-scanner-index-'));
@@ -18,7 +21,7 @@ describe('ScannerService stage index replacement', () => {
     config.stages = config.stages.filter((stage) => ['E006', 'E001', 'E005'].includes(stage.id));
     for (const stage of config.stages) stage.candidateRoot = path.join(root, stage.id);
     const configService = { get: () => structuredClone(config) } as ConfigService;
-    const store = new StateStore(path.join(root, 'app-data'));
+    store = new StateStore(path.join(root, 'app-data'));
     await store.initialize();
     scanner = new ScannerService(configService, store);
   });
@@ -120,6 +123,43 @@ describe('ScannerService stage index replacement', () => {
       images: [{ relativePath: 'image.png' }]
     });
     expect(scanImages).not.toHaveBeenCalled();
+  });
+
+  it('hydrates a historical-root snapshot under the canonical root and resolves both historical and runtime task IDs', async () => {
+    const folder = await createProduct(root, 'E006', '01-legacy-alias');
+    const currentSnapshot = await scanner.buildStageSnapshot('E006');
+    const historicalFolder = 'G:\\01_n8n-global\\02_generateFolder\\E006\\01-legacy-alias';
+    const historicalTaskId = createHash('sha256').update(`E006${normalizedTaskPath(historicalFolder)}`).digest('hex');
+    await store.update((db) => {
+      db.reviews.push({
+        taskId: historicalTaskId,
+        stageId: 'E006',
+        sourceFolder: historicalFolder,
+        sourceFolderName: '01-legacy-alias',
+        selectedRelativePaths: ['image.png'],
+        selectedTargetStageIds: [],
+        status: 'DRAFT',
+        createdAt: '2026-09-01T00:00:00.000Z',
+        updatedAt: '2026-09-01T00:00:00.000Z'
+      });
+    });
+    const compatibleScanner = new ScannerService(
+      { get: () => structuredClone(config) } as ConfigService,
+      store,
+      (value) => value === historicalFolder ? folder : value
+    );
+    const historicalSnapshot = {
+      ...currentSnapshot,
+      tasks: currentSnapshot.tasks.map((task) => ({ ...task, taskId: historicalTaskId, sourceFolder: historicalFolder }))
+    };
+
+    const [listed] = compatibleScanner.hydrateStage(historicalSnapshot);
+    expect(listed).toMatchObject({ taskId: compatibleScanner.taskId('E006', folder), status: 'DRAFT', sourceFolder: folder });
+    await expect(compatibleScanner.getTask(historicalTaskId)).resolves.toMatchObject({
+      taskId: compatibleScanner.taskId('E006', folder),
+      selectedRelativePaths: ['image.png'],
+      sourceFolder: folder
+    });
   });
 
   it('treats a persistent-index miss as authoritative and never falls back to scanAll', async () => {

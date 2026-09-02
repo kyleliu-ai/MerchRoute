@@ -37,6 +37,259 @@ import {
 
 const roots: string[] = [];
 
+describe('OZON legacy runtime path compatibility', () => {
+  it('derives the current work directory from a historical productJsonPath without changing the stored payload', async () => {
+    const rootDirectory = 'G:\\01_MerchRoute\\OZON-Auto-Publish';
+    const configuredLegacyRootDirectory = 'G:\\01_n8n-global\\OZON-Auto-Publish';
+    const historicalProductJsonPath = 'G:\\01_n8n-global\\OZON-Auto-Publish\\processing\\0000123__r4\\product.json';
+    const job = {
+      id: '11111111-1111-4111-8111-111111111111',
+      sku: '0000123',
+      workRelPath: '',
+      payload: { productJsonPath: historicalProductJsonPath }
+    } as any;
+    const repository = {
+      getSettings: vi.fn(async () => ({ enabled: true, rootDirectory: configuredLegacyRootDirectory })),
+      listRuntimeJobs: vi.fn(async () => ({ items: [job], total: 1, page: 1, pageSize: 20 }))
+    } as unknown as OzonRepository;
+    const canonicalizePath = (value: string) => value.toLocaleLowerCase('en-US').startsWith('g:\\01_n8n-global\\')
+      ? `G:\\01_MerchRoute\\${value.slice('G:\\01_n8n-global\\'.length)}`
+      : value;
+    const service = new OzonPublishingService(
+      repository,
+      {} as PurchaseRepository,
+      {} as FastifyBaseLogger,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { canonicalizePath }
+    );
+
+    const result = await service.listRuntimeJobs({ page: 1, pageSize: 20 });
+
+    expect(result.items[0]).toMatchObject({
+      workRelPath: 'processing/0000123__r4',
+      payload: {
+        productJsonPath: path.join(rootDirectory, 'processing', '0000123__r4', 'product.json'),
+        workDirectory: path.join(rootDirectory, 'processing', '0000123__r4')
+      }
+    });
+    expect(job.payload.productJsonPath).toBe(historicalProductJsonPath);
+  });
+
+  it.each([
+    'G:\\01_n8n-global-copy\\OZON-Auto-Publish\\processing\\0000123__r4\\product.json',
+    'D:\\foreign-root\\processing\\0000123__r4\\product.json',
+    'G:\\01_n8n-global\\..\\foreign-root\\0000123__r4\\product.json'
+  ])('fails closed instead of redirecting an unsupported absolute history path into inbox: %s', async (productJsonPath) => {
+    const rootDirectory = 'G:\\01_MerchRoute\\OZON-Auto-Publish';
+    const job = { id: '22222222-2222-4222-8222-222222222222', sku: '0000123', workRelPath: '', payload: { productJsonPath } } as any;
+    const repository = {
+      getSettings: vi.fn(async () => ({ enabled: true, rootDirectory })),
+      listRuntimeJobs: vi.fn(async () => ({ items: [job], total: 1, page: 1, pageSize: 20 }))
+    } as unknown as OzonRepository;
+    const canonicalizePath = (value: string) => value.toLocaleLowerCase('en-US').startsWith('g:\\01_n8n-global\\')
+      && !value.includes('..')
+      ? `G:\\01_MerchRoute\\${value.slice('G:\\01_n8n-global\\'.length)}`
+      : value;
+    const service = new OzonPublishingService(
+      repository, {} as PurchaseRepository, {} as FastifyBaseLogger,
+      undefined, undefined, undefined, undefined, { canonicalizePath }
+    );
+
+    await expect(service.listRuntimeJobs({ page: 1, pageSize: 20 })).rejects.toMatchObject({
+      code: 'VERSION_CONFLICT',
+      statusCode: 409
+    });
+  });
+});
+
+describe('OZON historical recovery legacy runtime projection', () => {
+  const rootDirectory = 'G:\\01_MerchRoute\\OZON-Auto-Publish';
+  const legacyDataRoot = 'G:\\01_n8n-global';
+  const currentDataRoot = 'G:\\01_MerchRoute';
+  const historicalProductJsonPath = `${legacyDataRoot}\\OZON-Auto-Publish\\processing\\0000123__r4\\product.json`;
+  const expectedWorkDirectory = path.join(rootDirectory, 'processing', '0000123__r4');
+
+  const canonicalizePath = (value: string): string => {
+    const normalized = value.replaceAll('/', '\\');
+    const legacyIdentity = legacyDataRoot.toLocaleLowerCase('en-US');
+    const normalizedIdentity = normalized.toLocaleLowerCase('en-US');
+    if (normalized.split('\\').includes('..')) return value;
+    if (normalizedIdentity === legacyIdentity) return currentDataRoot;
+    if (!normalizedIdentity.startsWith(`${legacyIdentity}\\`)) return value;
+    return `${currentDataRoot}${normalized.slice(legacyDataRoot.length)}`;
+  };
+
+  const historicalJob = (productJsonPath = historicalProductJsonPath) => ({
+    id: '33333333-3333-4333-8333-333333333333',
+    sku: '0000123',
+    rowVersion: 9,
+    state: 'NEEDS_ATTENTION',
+    workRelPath: '',
+    directoryStage: 'PROCESSING',
+    payload: { productJsonPath, immutableAuditValue: 'keep-verbatim' }
+  }) as any;
+
+  const expectedProjection = (job: ReturnType<typeof historicalJob>) => expect.objectContaining({
+    ...job,
+    workRelPath: 'processing/0000123__r4',
+    payload: expect.objectContaining({
+      productJsonPath: path.join(expectedWorkDirectory, 'product.json'),
+      workDirectory: expectedWorkDirectory,
+      workRelPath: 'processing/0000123__r4',
+      immutableAuditValue: 'keep-verbatim'
+    })
+  });
+
+  it('projects a persisted legacy path only for historical network recovery callbacks and results', async () => {
+    const job = historicalJob();
+    const originalJob = structuredClone(job);
+    const isHistoricalNetworkRecoveryCandidate = vi.fn(() => true);
+    const recoverHistoricalNetworkJob = vi.fn(async (
+      _id: string,
+      _rowVersion: number,
+      beforeCommit?: (lockedJob: any) => Promise<void>
+    ) => {
+      expect(job).toEqual(originalJob);
+      await beforeCommit?.(job);
+      expect(job).toEqual(originalJob);
+      return job;
+    });
+    const repository = {
+      getJob: vi.fn(async () => job),
+      getSettings: vi.fn(async () => ({ enabled: true, rootDirectory })),
+      isHistoricalNetworkRecoveryCandidate,
+      recoverHistoricalNetworkJob
+    } as unknown as OzonRepository;
+    const service = new OzonPublishingService(
+      repository, {} as PurchaseRepository, {} as FastifyBaseLogger,
+      undefined, undefined, undefined, undefined, { canonicalizePath }
+    );
+    const clearTerminalDirectoryMarker = vi.spyOn(service as any, 'clearTerminalDirectoryMarker')
+      .mockResolvedValue(undefined);
+
+    const result = await service.recoverHistoricalNetworkJob(job.id, job.rowVersion);
+
+    expect(isHistoricalNetworkRecoveryCandidate).toHaveBeenCalledWith(expectedProjection(job));
+    expect(clearTerminalDirectoryMarker).toHaveBeenCalledWith(expectedProjection(job));
+    expect(result.job).toEqual(expectedProjection(job));
+    expect(result.job).not.toBe(job);
+    expect(job).toEqual(originalJob);
+  });
+
+  it('passes the safe legacy runtime projection as the fourth argument for known pre-platform recovery', async () => {
+    const job = historicalJob();
+    const originalJob = structuredClone(job);
+    const input = {
+      reason: 'TITLE_TRANSLATION_MAX_LENGTH_60_TO_200' as const,
+      rowVersion: job.rowVersion,
+      listingRowVersion: 4,
+      dryRun: false
+    };
+    const preview = {
+      status: 'DRY_RUN',
+      reason: input.reason,
+      dryRun: true,
+      previous: { jobRowVersion: job.rowVersion, listingRowVersion: input.listingRowVersion },
+      proposed: { jobState: 'READY', listingState: 'READY', retryCount: 0 },
+      job
+    } as any;
+    const recoverKnownPrePlatformFailure = vi.fn()
+      .mockResolvedValueOnce(preview)
+      .mockImplementationOnce(async (
+        _id: string,
+        _input: typeof input,
+        beforeCommit?: (lockedJob: any) => Promise<Record<string, unknown>>
+      ) => {
+        const checks = await beforeCommit?.(job);
+        return { ...preview, status: 'RECOVERED', dryRun: false, checks, job };
+      });
+    const repository = {
+      getJob: vi.fn(async () => job),
+      getSettings: vi.fn(async () => ({ enabled: true, rootDirectory })),
+      recoverKnownPrePlatformFailure
+    } as unknown as OzonRepository;
+    const service = new OzonPublishingService(
+      repository, {} as PurchaseRepository, {} as FastifyBaseLogger,
+      undefined, undefined, undefined, undefined, { canonicalizePath }
+    );
+    vi.spyOn(service as any, 'validateKnownPrePlatformFailureChecks').mockResolvedValue({
+      remoteState: { status: 'NOT_APPLICABLE', offerIds: [], checkedAt: '2026-09-02T00:00:00.000Z' },
+      productJson: { status: 'NOT_APPLICABLE', checkedAt: '2026-09-02T00:00:00.000Z' }
+    });
+
+    const result = await service.recoverKnownPrePlatformFailure(job.id, input);
+
+    expect(recoverKnownPrePlatformFailure).toHaveBeenCalledTimes(2);
+    expect(recoverKnownPrePlatformFailure.mock.calls[0]?.[3]).toEqual(expectedProjection(job));
+    expect(recoverKnownPrePlatformFailure.mock.calls[1]?.[3]).toEqual(expectedProjection(job));
+    expect(result.job).toEqual(expectedProjection(job));
+    expect(job).toEqual(originalJob);
+  });
+
+  it.each([
+    'G:\\01_n8n-global-copy\\OZON-Auto-Publish\\processing\\0000123__r4\\product.json',
+    'D:\\foreign-root\\processing\\0000123__r4\\product.json',
+    'G:\\01_n8n-global\\..\\foreign-root\\0000123__r4\\product.json'
+  ])('fails closed before known pre-platform recovery for an unsafe persisted path: %s', async (productJsonPath) => {
+    const job = historicalJob(productJsonPath);
+    const recoverKnownPrePlatformFailure = vi.fn();
+    const repository = {
+      getJob: vi.fn(async () => job),
+      getSettings: vi.fn(async () => ({ enabled: true, rootDirectory })),
+      recoverKnownPrePlatformFailure
+    } as unknown as OzonRepository;
+    const service = new OzonPublishingService(
+      repository, {} as PurchaseRepository, {} as FastifyBaseLogger,
+      undefined, undefined, undefined, undefined, { canonicalizePath }
+    );
+
+    await expect(service.recoverKnownPrePlatformFailure(job.id, {
+      reason: 'TITLE_TRANSLATION_MAX_LENGTH_60_TO_200',
+      rowVersion: job.rowVersion,
+      listingRowVersion: 4,
+      dryRun: true
+    })).rejects.toMatchObject({ code: 'VERSION_CONFLICT', statusCode: 409 });
+    expect(recoverKnownPrePlatformFailure).not.toHaveBeenCalled();
+  });
+
+  it('passes the safe legacy runtime projection to known post-platform recovery without mutating history', async () => {
+    const job = historicalJob();
+    const originalJob = structuredClone(job);
+    const input = {
+      reason: 'MIN_PRICE_WRITE_OMITTED_V1' as const,
+      rowVersion: job.rowVersion,
+      listingRowVersion: 4,
+      dryRun: true
+    };
+    const recoverKnownPostPlatformMinPriceFailure = vi.fn(async () => ({
+      status: 'ALREADY_RECOVERED',
+      dryRun: false,
+      previous: { jobRowVersion: job.rowVersion, listingRowVersion: input.listingRowVersion },
+      proposed: { jobState: 'IMPORTING', listingState: 'SUBMITTING' },
+      job
+    }));
+    const repository = {
+      getJob: vi.fn(async () => job),
+      getSettings: vi.fn(async () => ({ enabled: true, rootDirectory })),
+      recoverKnownPostPlatformMinPriceFailure
+    } as unknown as OzonRepository;
+    const service = new OzonPublishingService(
+      repository, {} as PurchaseRepository, {} as FastifyBaseLogger,
+      undefined, undefined, undefined, undefined, { canonicalizePath }
+    );
+
+    const result = await service.recoverKnownPostPlatformMinPriceFailure(job.id, input);
+
+    expect(recoverKnownPostPlatformMinPriceFailure).toHaveBeenCalledTimes(1);
+    expect(recoverKnownPostPlatformMinPriceFailure.mock.calls[0]?.[3]).toEqual(expectedProjection(job));
+    expect(result.job).toEqual(expectedProjection(job));
+    expect(job).toEqual(originalJob);
+  });
+});
+
 describe('OZON store-owned settings binding', () => {
   const base = {
     rowVersion: 17,

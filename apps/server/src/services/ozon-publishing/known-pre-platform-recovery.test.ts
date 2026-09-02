@@ -26,6 +26,7 @@ describe('OZON known pre-platform failure recovery service', () => {
     const fixture = await importRecoveryFixture();
     const recoverKnownPrePlatformFailure = recoveryRepositoryMethod(fixture.job);
     const repository = {
+      getJob: vi.fn(async () => fixture.job),
       getSettings: vi.fn(async () => ({
         rootDirectory: fixture.root,
         adminApiWebhookUrl: 'http://n8n.test/webhook/ozon-admin'
@@ -90,6 +91,7 @@ describe('OZON known pre-platform failure recovery service', () => {
     const fixture = await importRecoveryFixture();
     await writeFile(path.join(fixture.directory, 'product.json'), JSON.stringify({ productCode: fixture.job.sku, changed: true }));
     const repository = {
+      getJob: vi.fn(async () => fixture.job),
       getSettings: vi.fn(async () => ({
         rootDirectory: fixture.root,
         adminApiWebhookUrl: 'http://n8n.test/webhook/ozon-admin'
@@ -111,6 +113,7 @@ describe('OZON known pre-platform failure recovery service', () => {
   it('rejects network and unknown readback instead of treating it as an empty platform state', async () => {
     const fixture = await importRecoveryFixture();
     const repository = {
+      getJob: vi.fn(async () => fixture.job),
       getSettings: vi.fn(async () => ({
         rootDirectory: fixture.root,
         adminApiWebhookUrl: 'http://n8n.test/webhook/ozon-admin'
@@ -140,7 +143,11 @@ describe('OZON known pre-platform failure recovery service', () => {
       payload: {}, createdAt: '2026-08-08T00:00:00.000Z', updatedAt: '2026-08-08T00:00:00.000Z'
     } as OzonPublishJob;
     const recoverKnownPrePlatformFailure = recoveryRepositoryMethod(job);
-    const repository = { recoverKnownPrePlatformFailure } as unknown as OzonRepository;
+    const repository = {
+      getJob: vi.fn(async () => job),
+      getSettings: vi.fn(async () => ({ rootDirectory: '' })),
+      recoverKnownPrePlatformFailure
+    } as unknown as OzonRepository;
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
     const service = new OzonPublishingService(repository, {} as PurchaseRepository, {} as FastifyBaseLogger);
@@ -168,6 +175,7 @@ describe('OZON known pre-platform failure recovery service', () => {
       jobState: 'SUBMITTING', retryCount: 0, titleTranslationMaxLength: 200
     });
     const repository = {
+      getJob: vi.fn(async () => fixture.job),
       getSettings: vi.fn(async () => ({
         rootDirectory: fixture.root,
         adminApiWebhookUrl: 'http://n8n.test/webhook/ozon-admin'
@@ -224,6 +232,7 @@ describe('OZON known pre-platform failure recovery service', () => {
     for (const product of invalidProducts) {
       const fixture = await importRecoveryFixture(product, { sku: '0000107', offerIds, state: 'SUBMITTING' });
       const repository = {
+        getJob: vi.fn(async () => fixture.job),
         getSettings: vi.fn(async () => ({
           rootDirectory: fixture.root,
           adminApiWebhookUrl: 'http://n8n.test/webhook/ozon-admin'
@@ -259,6 +268,7 @@ describe('OZON known pre-platform failure recovery service', () => {
     });
     const recoverKnownPrePlatformFailure = recoveryRepositoryMethod(fixture.job);
     const repository = {
+      getJob: vi.fn(async () => fixture.job),
       getSettings: vi.fn(async () => ({
         rootDirectory: fixture.root,
         adminApiWebhookUrl: 'http://n8n.test/webhook/ozon-admin'
@@ -317,6 +327,7 @@ describe('OZON known pre-platform failure recovery service', () => {
     for (const product of products) {
       const fixture = await importRecoveryFixture({ schemaVersion: 2, productCode: '0000105', revision: 2, ...product });
       const repository = {
+        getJob: vi.fn(async () => fixture.job),
         getSettings: vi.fn(async () => ({
           rootDirectory: fixture.root,
           adminApiWebhookUrl: 'http://n8n.test/webhook/ozon-admin'
