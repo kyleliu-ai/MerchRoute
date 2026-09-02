@@ -554,16 +554,14 @@ function Assert-RestrictedAcl {
 
 function Set-RestrictedRuntimeFileAcl {
   param([Parameter(Mandatory)][string]$Path)
-  $runtimeSid = [Security.Principal.WindowsIdentity]::GetCurrent().User
-  $systemSid = [Security.Principal.SecurityIdentifier]::new('S-1-5-18')
-  $acl = [Security.AccessControl.FileSecurity]::new()
-  $acl.SetAccessRuleProtection($true, $false)
-  $acl.SetOwner($runtimeSid)
-  $allow = [Security.AccessControl.AccessControlType]::Allow
-  $rights = [Security.AccessControl.FileSystemRights]::FullControl
-  $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($runtimeSid, $rights, $allow))
-  $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($systemSid, $rights, $allow))
-  Set-Acl -LiteralPath $Path -AclObject $acl
+  if (-not [IO.File]::Exists($Path)) { throw "运行配置文件不存在：$Path" }
+  $runtimeSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+  # Set-Acl with a newly-created FileSecurity object attempts to persist SACL
+  # sections and requires SeSecurityPrivilege. icacls changes only the DACL:
+  # inherited entries are removed, then the exact runtime and SYSTEM SIDs are
+  # granted FullControl. Assert-RestrictedAcl independently reads it back.
+  & icacls.exe $Path /inheritance:r /grant:r "*$($runtimeSid):(F)" '*S-1-5-18:(F)' /Q | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "运行配置文件 ACL 收紧失败：$Path" }
   Assert-RestrictedAcl $Path
 }
 

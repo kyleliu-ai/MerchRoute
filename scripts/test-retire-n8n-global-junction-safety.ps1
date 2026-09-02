@@ -171,6 +171,11 @@ if ($IncludeTemporaryNativeMutationTest) {
   [IO.Directory]::CreateDirectory($temporaryTarget) | Out-Null
   [IO.File]::WriteAllText((Join-Path $temporaryTarget 'proof.txt'), 'target-must-survive')
   try {
+    $aclProbe = Join-Path $temporaryRoot 'runtime-file-acl-probe.tmp'
+    [IO.File]::WriteAllText($aclProbe, 'restricted')
+    Set-RestrictedRuntimeFileAcl $aclProbe
+    Assert-RestrictedAcl $aclProbe
+    [IO.File]::Delete($aclProbe)
     New-Item -ItemType Junction -Path $temporaryLink -Target $temporaryTarget | Out-Null
     $beforeTarget = [MerchRoute.JunctionRetirement.NativeFs]::GetFileIdentity($temporaryTarget, $true)
     $link = [MerchRoute.JunctionRetirement.NativeFs]::GetMountPointIdentity($temporaryLink)
@@ -197,6 +202,8 @@ if ($IncludeTemporaryNativeMutationTest) {
       [MerchRoute.JunctionRetirement.NativeFs]::RemoveJunctionNoRedirects($temporaryLink)
     }
     $proof = Join-Path $temporaryTarget 'proof.txt'
+    $aclProbe = Join-Path $temporaryRoot 'runtime-file-acl-probe.tmp'
+    if ([IO.File]::Exists($aclProbe)) { [IO.File]::Delete($aclProbe) }
     if ([IO.File]::Exists($proof)) { [IO.File]::Delete($proof) }
     if ([IO.Directory]::Exists($temporaryTarget)) {
       [MerchRoute.JunctionRetirement.NativeFs]::RemoveJunctionNoRedirects($temporaryTarget)
