@@ -58,6 +58,7 @@ import { LocalImportService, assertStrictDirectory } from './services/local-impo
 import { createAboutVersionService, type AboutVersionService } from './services/about-version.js';
 import { createAboutGithubAccessService, type AboutGithubAccessService } from './services/about-github-access.js';
 import { registerAboutRoutes } from './routes/about.js';
+import { LocalDirectoryOpener } from './services/local-directory-opener.js';
 
 type Services = {
   aboutVersion: AboutVersionService;
@@ -65,6 +66,7 @@ type Services = {
   config: ConfigService;
   store: StateStore;
   scanner: ScannerService;
+  localDirectoryOpener: LocalDirectoryOpener;
   mediaIndex: MediaIndexService;
   thumbnails: ThumbnailService;
   submissions: SubmissionService;
@@ -106,6 +108,7 @@ export type BuildAppOptions = {
   databaseUrl?: string | null;
   aboutVersion?: AboutVersionService;
   aboutGithubAccess?: AboutGithubAccessService;
+  localDirectoryOpener?: LocalDirectoryOpener;
 };
 
 export async function buildApp(options: BuildAppOptions = {}) {
@@ -126,6 +129,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   const store = new StateStore(config.appDataDir);
   await store.initialize();
   const scanner = new ScannerService(config, store);
+  const localDirectoryOpener = options.localDirectoryOpener ?? new LocalDirectoryOpener();
   const thumbnails = new ThumbnailService(config, scanner);
   const logDirectory = path.join(config.appDataDir, 'logs');
   await mkdir(logDirectory, { recursive: true });
@@ -248,7 +252,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const rootDirectory = parseOzonMediaOutputRootTemplate(configuredOzonTemplate).rootDirectory;
     await ozonPublishing.synchronizeRootDirectory(rootDirectory).catch((error) => app.log.warn({ err: error, rootDirectory }, 'OZON 共享媒体根目录启动同步失败'));
   }
-  app.decorate('services', { aboutVersion, aboutGithubAccess, config, store, scanner, mediaIndex, thumbnails, submissions, purchases, localImports, downloads, shipping, pricing, pricingQuery, productIdentity, wb, wbPresetRepository, wbPresets, wbPublishing, wbTaskStatusSynchronizer, wbAutoPublishRepository, wbAutoPublishing, wbStoreRepository, wbStores, wbStoreGateway, wbSourceMediaCleanup, wbCatalog, ozon, ozonStoreRepository, ozonStores, ozonStoreGateway, ozonSourceMediaCleanup, ozonPublishing, ozonAutoPublishing, ozonCatalog, variantDelivery });
+  app.decorate('services', { aboutVersion, aboutGithubAccess, config, store, scanner, localDirectoryOpener, mediaIndex, thumbnails, submissions, purchases, localImports, downloads, shipping, pricing, pricingQuery, productIdentity, wb, wbPresetRepository, wbPresets, wbPublishing, wbTaskStatusSynchronizer, wbAutoPublishRepository, wbAutoPublishing, wbStoreRepository, wbStores, wbStoreGateway, wbSourceMediaCleanup, wbCatalog, ozon, ozonStoreRepository, ozonStores, ozonStoreGateway, ozonSourceMediaCleanup, ozonPublishing, ozonAutoPublishing, ozonCatalog, variantDelivery });
   await app.register(cors, { origin: /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/ });
 
   app.setErrorHandler((error, _request, reply) => {
@@ -601,6 +605,16 @@ export async function buildApp(options: BuildAppOptions = {}) {
   app.get('/api/v1/tasks/:taskId', taskDetailHandler);
   app.get('/api/v1/tasks/:taskId/tree', taskDetailHandler);
   app.get('/api/v1/tasks/:taskId/images', taskDetailHandler);
+  app.post('/api/v1/tasks/:taskId/open-folder', async (request, reply) => {
+    const { taskId } = request.params as { taskId: string };
+    const task = await scanner.getTask(taskId);
+    const stage = requireEnabledStage(config, task.stageId);
+    if (!stage.reviewEnabled || !stage.candidateRoot) {
+      throw new AppError('STAGE_DISABLED', `流程 ${task.stageId} 未启用人工审核`, { stageId: task.stageId }, 409);
+    }
+    await localDirectoryOpener.openTaskDirectory({ candidateRoot: stage.candidateRoot, sourceFolder: task.sourceFolder });
+    return reply.code(202).send({ accepted: true });
+  });
   app.put('/api/v1/tasks/:taskId/product-identity', async (request) => {
     const { taskId } = request.params as { taskId: string };
     const { sku } = (request.body || {}) as { sku?: string };

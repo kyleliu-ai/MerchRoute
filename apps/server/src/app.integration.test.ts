@@ -1,17 +1,20 @@
 import path from 'node:path';
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import sharp from 'sharp';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { AppError, createDefaultConfig, workflowParameterFileName, workflowParameterOptionsFileName, type AppConfig } from '@n8n-media-review/shared';
 import { buildApp } from './app.js';
+import { LocalDirectoryOpener } from './services/local-directory-opener.js';
 
 describe.sequential('review and submission integration', () => {
   let root: string;
   let appData: string;
   let config: AppConfig;
   let app: Awaited<ReturnType<typeof buildApp>>;
+  const launchDirectory = vi.fn(async () => undefined);
+  const localDirectoryOpener = new LocalDirectoryOpener({ platform: 'win32', launch: launchDirectory });
   const aboutVersion = {
     invalidate: vi.fn(),
     check: vi.fn(async (_options?: { refresh?: boolean }) => ({
@@ -43,7 +46,7 @@ describe.sequential('review and submission integration', () => {
     await createProduct(config.stages[3]!.candidateRoot!, '测试套图A', ['scenePrompt01/image_01.png', 'scenePrompt02/image_02.png']);
     await writeTaskContext(config.stages[3]!.candidateRoot!, '测试套图A');
     process.env.APP_DATA_DIR = appData;
-    app = await buildApp({ databaseUrl: null, aboutVersion });
+    app = await buildApp({ databaseUrl: null, aboutVersion, localDirectoryOpener });
     await app.services.mediaIndex.refreshAll();
   }, 30_000);
 
@@ -80,6 +83,59 @@ describe.sequential('review and submission integration', () => {
     expect(draft.statusCode).toBe(200);
     const detail = await app.inject({ method: 'GET', url: `/api/v1/tasks/${task.taskId}` });
     expect(detail.json().selectedRelativePaths).toEqual(['main/image_01.png']);
+  });
+
+  it('opens an indexed product folder through the injected native launcher', async () => {
+    launchDirectory.mockClear();
+    const list = await app.inject({ method: 'GET', url: '/api/v1/stages/E006/tasks' });
+    const task = list.json().items.find((item: { sourceFolderName: string }) => item.sourceFolderName === '测试产品A');
+    const response = await app.inject({ method: 'POST', url: `/api/v1/tasks/${task.taskId}/open-folder`, payload: {} });
+
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toEqual({ accepted: true });
+    expect(launchDirectory).toHaveBeenCalledWith('explorer.exe', [await realpath(task.sourceFolder)], { windowsHide: false });
+  });
+
+  it('does not launch a moved product folder', async () => {
+    const candidateRoot = config.stages.find((stage) => stage.id === 'E006')!.candidateRoot!;
+    const folderName = '打开目录后被移动';
+    await createProduct(candidateRoot, folderName, ['main/image.png']);
+    await app.services.mediaIndex.refreshStage('E006');
+    const list = await app.inject({ method: 'GET', url: '/api/v1/stages/E006/tasks' });
+    const task = list.json().items.find((item: { sourceFolderName: string }) => item.sourceFolderName === folderName);
+    await rm(task.sourceFolder, { recursive: true, force: true });
+    launchDirectory.mockClear();
+
+    const response = await app.inject({ method: 'POST', url: `/api/v1/tasks/${task.taskId}/open-folder`, payload: {} });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json().error.code).toBe('SOURCE_FOLDER_MISSING');
+    expect(launchDirectory).not.toHaveBeenCalled();
+  });
+
+  it('does not launch a product folder replaced by a directory junction', async () => {
+    const candidateRoot = config.stages.find((stage) => stage.id === 'E006')!.candidateRoot!;
+    const folderName = '打开目录链接替换';
+    const outside = await mkdtemp(path.join(os.tmpdir(), 'merchroute-open-folder-api-outside-'));
+    const sourceFolder = path.join(candidateRoot, folderName);
+    try {
+      await createProduct(candidateRoot, folderName, ['main/image.png']);
+      await app.services.mediaIndex.refreshStage('E006');
+      const list = await app.inject({ method: 'GET', url: '/api/v1/stages/E006/tasks' });
+      const task = list.json().items.find((item: { sourceFolderName: string }) => item.sourceFolderName === folderName);
+      await rm(sourceFolder, { recursive: true, force: true });
+      await symlink(outside, sourceFolder, process.platform === 'win32' ? 'junction' : 'dir');
+      launchDirectory.mockClear();
+
+      const response = await app.inject({ method: 'POST', url: `/api/v1/tasks/${task.taskId}/open-folder`, payload: {} });
+
+      expect(response.statusCode).toBe(404);
+      expect(response.json().error.code).toBe('SOURCE_FOLDER_MISSING');
+      expect(launchDirectory).not.toHaveBeenCalled();
+    } finally {
+      await rm(sourceFolder, { recursive: true, force: true });
+      await rm(outside, { recursive: true, force: true });
+    }
   });
 
   it('serves repeated stage summaries from the fallback snapshot without rescanning the filesystem', async () => {

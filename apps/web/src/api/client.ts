@@ -964,6 +964,7 @@ export const api = {
   tasks: (stageId: string, params: URLSearchParams) => request<{ items: ProductTask[]; total: number }>(`/api/v1/stages/${stageId}/tasks?${params}`),
   rescan: (stageId: string) => request(`/api/v1/stages/${stageId}/rescan`, { method: 'POST' }),
   task: (taskId: string) => request<TaskDetail>(`/api/v1/tasks/${taskId}`),
+  openTaskFolder: (taskId: string) => request<{ accepted: true }>(`/api/v1/tasks/${encodeURIComponent(taskId)}/open-folder`, { method: 'POST', body: JSON.stringify({}) }),
   assignProductIdentity: (taskId: string, sku: string) => request<{ productIdentity: TaskDetail['productIdentity'] }>(`/api/v1/tasks/${taskId}/product-identity`, { method: 'PUT', body: JSON.stringify({ sku }) }),
   saveDraft: (taskId: string, selectedRelativePaths: string[], selectedTargets: string[], variantSelectionGroups?: VariantSelectionGroup[]) => request(`/api/v1/tasks/${taskId}/draft`, { method: 'PUT', body: JSON.stringify({ selectedRelativePaths, selectedTargets, variantSelectionGroups }) }),
   approve: (taskId: string, selectedRelativePaths: string[], targetStageIds: string[], variantSelectionGroups?: VariantSelectionGroup[]) => request(`/api/v1/tasks/${taskId}/approve`, { method: 'POST', body: JSON.stringify({ selectedRelativePaths, targetStageIds, variantSelectionGroups }) }),

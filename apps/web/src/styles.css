@@ -182,7 +182,9 @@ button, input { font: inherit; }
 .history-filter-summary { margin-inline-start: auto; }
 .product-card { height: 100%; overflow: hidden; border-color: var(--line); transition: transform .18s ease, box-shadow .18s ease; }
 .product-card:hover { transform: translateY(-2px); box-shadow: 0 12px 34px rgba(23,32,51,.1); }
-.product-card h5 { margin: 0 !important; max-width: 76%; }
+.product-folder-trigger { max-width: 100%; height: auto; padding: 0; text-align: left; }
+.product-folder-trigger .product-folder-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.product-folder-trigger-card { max-width: 76%; color: var(--ink); font-size: 16px; font-weight: 600; line-height: 1.4; }
 .product-card .ant-card-cover .contact-sheet-mini { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: 1fr; gap: 2px; aspect-ratio: 2 / 1; background: #dfe5e9; }
 .contact-sheet-mini img, .image-placeholder { width: 100%; height: 100%; min-height: 90px; object-fit: cover; background: #e9eef1; }
 .image-placeholder { display: grid; place-items: center; color: #a2afbc; font-size: 22px; }
