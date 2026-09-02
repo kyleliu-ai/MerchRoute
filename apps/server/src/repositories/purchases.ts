@@ -76,6 +76,11 @@ export type LocalImportRecord = {
   purchase?: ReturnType<typeof toLocalImportPurchase>;
 };
 export type LocalImportListItem = Omit<LocalImportRecord, 'sources'> & { sourceDirectoryCount: number };
+export type LocalImportSourceRegistration = {
+  normalizedPathKey: string;
+  sourceRoot?: string;
+  status: Exclude<LocalImportStatus, 'SKIPPED_DUPLICATE'>;
+};
 export type LocalImportQuery = {
   page?: number;
   pageSize?: number;
@@ -605,6 +610,28 @@ export class PurchaseRepository {
 
   async getLocalImport(id: string): Promise<LocalImportRecord> {
     return getLocalImportWithClient(this.requirePool(), id);
+  }
+
+  async listLocalImportSourceRegistrations(normalizedPathKeys: string[]): Promise<LocalImportSourceRegistration[]> {
+    const keys = [...new Set(normalizedPathKeys.map((value) => String(value || '').trim()).filter(Boolean))];
+    if (!keys.length) return [];
+    const result = await this.query<{
+      normalized_path_key: string;
+      source_config_snapshot: Record<string, unknown>;
+      status: Exclude<LocalImportStatus, 'SKIPPED_DUPLICATE'>;
+    }>(`SELECT pms.normalized_path_key,li.source_config_snapshot,li.status
+      FROM product_media_sources pms
+      JOIN local_imports li ON li.id=pms.local_import_id
+      WHERE pms.normalized_path_key=ANY($1::text[])
+        AND li.status IN('COPYING','IMPORTED','COPY_FAILED_RETRYABLE')
+      ORDER BY pms.normalized_path_key,li.created_at,li.id`, [keys]);
+    return result.rows.map((row) => ({
+      normalizedPathKey: row.normalized_path_key,
+      sourceRoot: typeof row.source_config_snapshot?.inputQueueRoot === 'string'
+        ? row.source_config_snapshot.inputQueueRoot
+        : undefined,
+      status: row.status
+    }));
   }
 
   async listLocalImports(input: LocalImportQuery) {

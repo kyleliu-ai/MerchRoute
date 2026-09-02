@@ -1984,6 +1984,7 @@ function LocalImportCreateView({ onViewImported }: { onViewImported: (sku: strin
     onSuccess: ({ import: value }) => {
       setResult(value);
       void client.invalidateQueries({ queryKey: ['local-import-history'] });
+      void client.invalidateQueries({ queryKey: ['local-import-directories'] });
       if (value.status === 'IMPORTED') message.success(`内部 SKU ${value.sku} 已导入 E000 候选目录`);
       else if (value.status === 'SKIPPED_DUPLICATE') message.warning(`商品 URL 已归属 SKU ${value.duplicateSku}，整次导入已跳过`);
       else if (value.status === 'COPY_FAILED_RETRYABLE') message.error('采购信息已登记，但媒体复制失败，可安全重试');
@@ -1992,7 +1993,7 @@ function LocalImportCreateView({ onViewImported }: { onViewImported: (sku: strin
   });
   const retryMutation = useMutation({
     mutationFn: () => api.retryLocalImport(result!.id),
-    onSuccess: ({ import: value }) => { setResult(value); void client.invalidateQueries({ queryKey: ['local-import-history'] }); if (value.status === 'IMPORTED') message.success(`SKU ${value.sku} 的媒体复制已恢复`); },
+    onSuccess: ({ import: value }) => { setResult(value); void client.invalidateQueries({ queryKey: ['local-import-history'] }); void client.invalidateQueries({ queryKey: ['local-import-directories'] }); if (value.status === 'IMPORTED') message.success(`SKU ${value.sku} 的媒体复制已恢复`); },
     onError: (error: Error) => message.error(error instanceof ApiError ? error.userMessage : error.message)
   });
   const resetPreview = () => { setPreview(undefined); setFields(undefined); setResult(undefined); setIdempotencyKey(crypto.randomUUID()); };
@@ -2021,7 +2022,7 @@ function LocalImportCreateView({ onViewImported }: { onViewImported: (sku: strin
                 <span>平台文件夹</span><span>子目录数</span><span className="modified-date-heading">最后修改时间 <ArrowDownOutlined /></span><span>操作</span>
               </div>}
               {isPlatformDirectory && !directories.isLoading && Boolean(directories.data?.directories.length) && <div className="local-directory-header is-product-media-header" aria-hidden="true">
-                <span /><span>变体目录</span><span className="creation-date-heading">创建日期 <ArrowDownOutlined /></span><span>平台来源</span><span>操作</span>
+                <span /><span>变体目录</span><span className="creation-date-heading">创建日期 <ArrowDownOutlined /></span><span>平台来源</span><span>导入状态</span><span>操作</span>
               </div>}
               {directories.isLoading ? <Skeleton active paragraph={{ rows: 3 }} /> : directories.data?.directories.length ? directories.data.directories.map((directory) => <div className={`local-directory-row${isSourceRoot ? ' is-platform-root-row' : ''}${isPlatformDirectory ? ' is-product-media-row' : ''}`} key={directory.relativePath}>
                 {!isSourceRoot && <Checkbox checked={selected.includes(directory.relativePath)} onChange={(event) => toggleDirectory(directory.relativePath, event.target.checked)} aria-label={`选择 ${directory.relativePath}`} />}
@@ -2030,6 +2031,7 @@ function LocalImportCreateView({ onViewImported }: { onViewImported: (sku: strin
                 {isSourceRoot && <time className="local-directory-modified-at" dateTime={directory.modifiedAt} data-label="最后修改时间">{formatLocalImportDirectoryDate(directory.modifiedAt)}</time>}
                 {isPlatformDirectory && <time className="local-directory-created-at" dateTime={directory.createdAt} data-label="创建日期">{formatLocalImportDirectoryDate(directory.createdAt)}</time>}
                 {!isSourceRoot && <div className="local-directory-platform" data-label="平台来源"><Tag>{directory.platform}</Tag></div>}
+                {isPlatformDirectory && <div className="local-directory-import-status" data-label="导入状态"><Tag color={directory.importStatus === 'IMPORTED' ? 'green' : 'cyan'}>{directory.importStatus === 'IMPORTED' ? '已导入' : '新下载'}</Tag></div>}
                 <div className="local-directory-action" data-label="操作">{directory.hasChildren && <Button type="link" size="small" onClick={() => setCurrentPath(directory.relativePath)}>{isSourceRoot ? '导入产品媒体' : '打开'}</Button>}</div>
               </div>) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前目录没有可选子目录" />}
             </div>
