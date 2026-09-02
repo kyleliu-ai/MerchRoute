@@ -1,12 +1,18 @@
 # `G:\01_n8n-global` Junction 安全退役交接清单
 
-更新时间：2026-09-02 21:18（Asia/Shanghai）
+更新时间：2026-09-02 21:56（Asia/Shanghai）
 
 ## 续执行权威状态（覆盖下文 19:51 历史快照）
 
+- 用户已在当前任务中明确授权删除失效恢复点 `D:\MerchRoute_Junction_Backups\20260902-200647` 并继续 Cutover。删除前重新确认该目录是备份根的直接子目录、`phase=ROLLED_BACK`、绑定旧 HEAD `5395cfa...`、没有 `finalBackup`/`quarantinePath`，且目标及内部均无 reparse point。
+- 删除前已把脱敏后的 `state.json`、3 个 Robocopy 日志、Junction/Target File ID 与 ACL 元数据、n8n 工作流 manifest 和两个数据库 TOC 保存到受限目录 `D:\MerchRoute_Junction_Backups\_superseded-audit\20260902-200647`；共 14 个文件，ACL 仅允许实际运行账户和 SYSTEM，`maintenanceToken` 已置空，并生成 `SHA256SUMS.txt`。没有复制 `external-config`、数据库 dump 或三套大目录。
+- 已永久删除且仅删除 `D:\MerchRoute_Junction_Backups\20260902-200647`：60,908 个文件、35,486,826,592 字节。删除后原路径不存在，其他恢复点仍在，`G:\01_n8n-global` Junction、真实目标、三个服务端口和 health 均未受影响。
+- 删除后实时容量核验：三套备份源合计 32,261,764,044 字节，新 Prepare 要求 58,575,865,131 字节，D 盘可用 93,459,546,112 字节，容量门禁通过。旧恢复点 `20260902-210154` 仍绑定旧 HEAD，禁止复用；下一步必须从当前干净任务 HEAD 创建全新 Prepare 恢复点。
+- 当前现网 MerchRoute 已读回任务实现提交 `8455727...`、`dirty=false`，兼容 readiness 为 `READY`；n8n 仍为本地全局安装。当前未修改任何 n8n 工作流，已知 E004/E006/E007 版本保持不变。
+
 - 任务分支仍为 `work/retire-n8n-global-junction-20260902-1725`，固定 worktree 未变；已有本地提交包括 `1483aa6`、`ecdeba1`、`5395cfa`、`0e52e93`（真实 AppData 与启动日志）、`a588801`（Prepare 在线 AppData 门禁）。未推送、未创建 PR。
 - `G:\01_n8n-global` 仍是精确指向 `G:\01_MerchRoute` 的 Junction；没有 quarantine 对象，真实目标没有移动或删除。本地全局 n8n 仍为 PID `25684`，端口 `5678/5679` 未在兼容部署试验中停止。
-- 恢复点 `20260902-195505` 因 `/ZB` 权限失败且无状态文件；`20260902-195705` 因 `Set-Acl` 权限失败；`20260902-200647` 与 `20260902-202333` 均在 DeployCompatibility 失败后自动回滚为 `ROLLED_BACK`。这四个恢复点仅保留作审计，均不得用于正式切换。
+- 恢复点 `20260902-195505` 因 `/ZB` 权限失败且无状态文件；`20260902-195705` 因 `Set-Acl` 权限失败；`20260902-200647` 与 `20260902-202333` 均在 DeployCompatibility 失败后自动回滚为 `ROLLED_BACK`。前三个仍保留且不得用于正式切换；`20260902-200647` 已在保留受限审计证据后按本轮授权删除。
 - `202333` 已正确备份真实 Roaming AppData、约 20.8 GiB 业务目录、n8n 用户目录、两套数据库及 167/39 个工作流；失败原因由恢复点启动日志精确确定为任务 worktree 缺少 `.tools`，从而命中系统 Node `22.22.3`，未满足项目固定 Node `22.23.1`。失败与业务数据、兼容层和 Junction 无关。
 - `202333` 失败后，外部 `merchroute.env` 和 MerchRoute Startup 快捷方式均已恢复原值；当前 MerchRoute 为原发布构建 `73d2e710...`，PID `11452`，4173 health 为 200；两个 retirement marker 均不存在。
 - 已确认 `/api/v1/health.appDataDir` 的真实业务目录是 `C:\Users\kylel\AppData\Roaming\n8n-media-review-center`，不是 `C:\Users\kylel\AppData\Local\MerchRoute`。实际目录当前约 34,211 个文件、1,551,112,418 字节；Local 路径只继续用于受保护的 `secrets\merchroute.env`。
@@ -20,7 +26,7 @@
 - 空端口修复已提交为 `0cdb003` 并完成干净构建；恢复点 `20260902-210154` 已正确 Prepare 并部署同一提交。第二次 Cutover 成功停止三个端口并进入最终增量，但在首个恢复抽查索引计算处因 PowerShell 把逗号表达式解析为 `Object[] - 1` 而中止。
 - 第二次 Cutover 的最终备份未完成，72 条执行仍未取消，Junction 仍为原名且 File ID 不变，没有 quarantine 对象。失败时脚本重新启动了兼容版 MerchRoute，但 n8n 未自动恢复；维护 marker 保持 fail-closed。随后已人工按固定启动脚本恢复 n8n，读回 4173/5678/5679 健康、`0cdb003`/`dirty=false`、legacy readiness `READY`，并通过恢复点 token 解除维护。
 - 本节同一提交把恢复抽查索引独立为 `Get-RestoreRehearsalIndices` 并增加 1/2/5 文件回归；同时新增 `Start-N8nRuntime`，单独记录 n8n stdout/stderr，且只有 5678、5679 和 `/healthz` 同时就绪后才允许启动 MerchRoute。现网只读调用已验证该门禁识别 n8n PID `4416`。
-- `20260902-210154` 仍是当前最新完整预复制恢复点，但提交新修复后会因 HEAD 不匹配而禁止复用。D 盘当前约余 26.9 GB，低于新 Prepare 约 58.6 GB 门槛；继续前需要用户明确授权清理至少一个已失效的大型恢复点，建议先保存其 state/log/metadata 审计证据，再删除错误 AppData 时代且已回滚的 `20260902-200647`（约 35.5 GB）。
+- `20260902-210154` 仍是此前最新完整预复制恢复点，但提交新修复后会因 HEAD 不匹配而禁止复用。此前容量阻塞已通过本轮授权清理 `20260902-200647` 解除；实时可用空间与新 Prepare 门禁见本节顶部最新记录。
 
 下文保留 19:51 时的实现与风险细节作为历史记录；凡与本节冲突，以本节为准。
 
