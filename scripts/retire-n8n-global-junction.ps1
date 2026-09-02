@@ -1584,6 +1584,7 @@ function New-PrepareState {
 
 function Invoke-Prepare {
   $release = Assert-TaskWorktreeReleaseReady
+  [void](Get-HealthGate)
   $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
   $root = if ($RecoveryPoint) { Assert-RecoveryPointPath $RecoveryPoint } else { Join-Path $script:BackupBase $timestamp }
   $identity = Assert-ExactLegacyJunction

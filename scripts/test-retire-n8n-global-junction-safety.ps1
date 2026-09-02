@@ -127,6 +127,15 @@ if (-not ($cutoverDrainIndex -lt $cutoverStopIndex -and $cutoverStopIndex -lt $c
   throw 'Cutover 安全门禁顺序错误'
 }
 
+$prepareStart = $source.IndexOf('function Invoke-Prepare', [StringComparison]::Ordinal)
+$prepareEnd = $source.IndexOf('function Move-LegacyJunctionToQuarantine', $prepareStart, [StringComparison]::Ordinal)
+$prepareText = $source.Substring($prepareStart, $prepareEnd - $prepareStart)
+$prepareHealthIndex = $prepareText.IndexOf('[void](Get-HealthGate)', [StringComparison]::Ordinal)
+$prepareRecoveryIndex = $prepareText.IndexOf('New-RestrictedRecoveryPoint', [StringComparison]::Ordinal)
+if ($prepareHealthIndex -lt 0 -or $prepareRecoveryIndex -lt 0 -or $prepareHealthIndex -ge $prepareRecoveryIndex) {
+  throw 'Prepare 必须在创建恢复点前核验在线 AppData 路径'
+}
+
 # Load only function definitions. This does not dispatch Status or any mutation action.
 . $scriptPath -LibraryOnly
 
