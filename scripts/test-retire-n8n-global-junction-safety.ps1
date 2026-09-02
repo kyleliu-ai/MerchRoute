@@ -216,6 +216,8 @@ foreach ($validLauncher in @(
 foreach ($invalidLauncher in @(
   'cmd.exe /c "G:\01_MerchRoute\启动n8n.bat-copy"',
   'cmd.exe /c echo G:\01_MerchRoute\启动n8n.bat-copy',
+  'cmd.exe /c echo "G:\01_MerchRoute\启动n8n.bat"',
+  'cmd.exe /c other.bat "G:\01_MerchRoute\启动n8n.bat"',
   'cmd.exe /k "G:\01_MerchRoute\启动n8n.bat"',
   'cmd.exe /c "G:\01_MerchRoute\启动n8n.bat\child"'
 )) {

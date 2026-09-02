@@ -1234,9 +1234,12 @@ function Get-N8nRuntimeReadiness {
 
 function Test-N8nLauncherCommandLine {
   param([string]$CommandLine)
-  if (-not $CommandLine -or $CommandLine -notmatch '(?i)(?:^|\s)/c(?=$|\s)') { return $false }
+  if (-not $CommandLine) { return $false }
   $escapedPath = [Regex]::Escape($script:N8nLauncherPath)
-  return $CommandLine -match "(?i)(?:^|[`"\s])$escapedPath(?=`$|[`"\s])"
+  # Match the complete cmd.exe invocation, not merely a mention of the launcher.
+  # The first alternative covers cmd.exe's outer-quote form: /c ""path" ".
+  $pattern = '(?i)^\s*(?:"[^"]*\\cmd\.exe"|(?:[^\s"]*\\)?cmd\.exe)\s+(?:(?:/d|/s)\s+)*/c\s+(?:""{0}"\s*"|"{0}"|{0})\s*$' -f $escapedPath
+  return $CommandLine -match $pattern
 }
 
 function Get-VerifiedN8nLauncherProcesses {
