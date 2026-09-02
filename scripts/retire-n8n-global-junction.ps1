@@ -579,7 +579,22 @@ function Assert-TaskWorktreeReleaseReady {
   if ($buildInfo.dirty -or -not [string]::Equals([string]$buildInfo.commitSha, $head, [StringComparison]::OrdinalIgnoreCase)) {
     throw "构建产物不是当前干净 HEAD：build=$($buildInfo.commitSha) head=$head dirty=$($buildInfo.dirty)"
   }
-  return [pscustomobject]@{ Branch = $branch; Head = $head; BuildInfo = $buildInfo }
+  $bundledToolchain = Join-Path $script:ProjectRoot '.tools\node-v22.23.1-win-x64'
+  $bundledNode = Join-Path $bundledToolchain 'node.exe'
+  $bundledNpm = Join-Path $bundledToolchain 'npm.cmd'
+  if (-not [IO.File]::Exists($bundledNode) -or -not [IO.File]::Exists($bundledNpm)) {
+    throw '任务 worktree 缺少固定 Node.js 22.23.1 / npm 10.9.8 工具链'
+  }
+  $nodeVersion = (& $bundledNode -p 'process.versions.node').Trim()
+  if ($LASTEXITCODE -ne 0 -or $nodeVersion -ne '22.23.1') { throw "任务 worktree Node.js 版本不匹配：$nodeVersion" }
+  $npmVersion = (& $bundledNpm --version).Trim()
+  if ($LASTEXITCODE -ne 0 -or $npmVersion -ne '10.9.8') { throw "任务 worktree npm 版本不匹配：$npmVersion" }
+  return [pscustomobject]@{
+    Branch = $branch
+    Head = $head
+    BuildInfo = $buildInfo
+    Toolchain = [pscustomobject]@{ Node = $nodeVersion; Npm = $npmVersion; Root = $bundledToolchain }
+  }
 }
 
 function Assert-StateMatchesRelease {
