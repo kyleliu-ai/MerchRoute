@@ -370,7 +370,7 @@ export type PurchaseInput = {
 };
 export type LocalImportDirectory = {
   name: string; relativePath: string; platform: string; hasChildren: boolean; childDirectoryCount: number;
-  createdAt: string; modifiedAt: string;
+  createdAt: string; modifiedAt: string; importStatus?: 'IMPORTED' | 'NEW';
 };
 export type LocalImportPreview = {
   token: string; previewHash: string; sourceConfigHash: string; targetConfigHash: string; expiresAt: string;

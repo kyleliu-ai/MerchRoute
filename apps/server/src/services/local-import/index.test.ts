@@ -8,6 +8,8 @@ import {
   LocalImportService,
   assertStrictDirectory,
   isAbsolutePathForPlatform,
+  isSameLocalImportSourceRoot,
+  localImportSourceRootKey,
   sortLocalImportDirectories,
   type LocalImportDirectoryEntry
 } from './index.js';
@@ -55,7 +57,15 @@ describe('LocalImportService', () => {
       utimes(path.join(sourceRoot, 'PDD'), pddModifiedAt, pddModifiedAt),
       utimes(path.join(sourceRoot, 'Z-platform'), zPlatformModifiedAt, zPlatformModifiedAt)
     ]);
-    const service = new LocalImportService(config as unknown as ConfigService, {} as PurchaseRepository, vi.fn());
+    const listLocalImportSourceRegistrations = vi.fn().mockResolvedValue([
+      { normalizedPathKey: 'pdd/a-newer', sourceRoot, status: 'COPYING' },
+      { normalizedPathKey: 'pdd/z-older', sourceRoot: path.join(root, 'old-source'), status: 'IMPORTED' }
+    ]);
+    const service = new LocalImportService(
+      config as unknown as ConfigService,
+      { listLocalImportSourceRegistrations } as unknown as PurchaseRepository,
+      vi.fn()
+    );
 
     const rootDirectories = await service.listDirectories();
     const mediaDirectories = await service.listDirectories('PDD');
@@ -68,9 +78,14 @@ describe('LocalImportService', () => {
       zPlatformModifiedAt.toISOString(), pddModifiedAt.toISOString(), aPlatformModifiedAt.toISOString()
     ]);
     expect(mediaDirectories.directories.map((item) => item.name)).toEqual(['A-newer', 'Z-older']);
+    expect(mediaDirectories.directories.map((item) => item.importStatus)).toEqual(['IMPORTED', 'NEW']);
     expect(mediaDirectories.directories[0]!.childDirectoryCount).toBe(2);
     expect(Date.parse(mediaDirectories.directories[0]!.createdAt)).toBeGreaterThan(Date.parse(mediaDirectories.directories[1]!.createdAt));
     expect(childDirectories.directories.map((item) => item.name)).toEqual(['A-detail', 'Z-detail']);
+    expect(rootDirectories.directories.every((item) => item.importStatus === undefined)).toBe(true);
+    expect(childDirectories.directories.every((item) => item.importStatus === undefined)).toBe(true);
+    expect(listLocalImportSourceRegistrations).toHaveBeenCalledTimes(1);
+    expect(listLocalImportSourceRegistrations).toHaveBeenCalledWith(['pdd/a-newer', 'pdd/z-older']);
   });
 
   it('uses the directory name as a stable ascending tie-breaker', () => {
@@ -85,6 +100,15 @@ describe('LocalImportService', () => {
     expect(sortLocalImportDirectories(entries, 'platform-root').map((item) => item.name)).toEqual(['A-R1', 'Z-R1']);
     expect(sortLocalImportDirectories(entries, 'name').map((item) => item.name)).toEqual(['A-R1', 'Z-R1']);
     expect(entries.map((item) => item.name)).toEqual(['Z-R1', 'A-R1']);
+  });
+
+  it('matches source roots with operating-system path semantics', () => {
+    expect(localImportSourceRootKey(' C:/MerchRoute/Source/ ', 'win32')).toBe('c:\\merchroute\\source');
+    expect(isSameLocalImportSourceRoot('C:\\MerchRoute\\Source', 'c:/merchroute/source/', 'win32')).toBe(true);
+    expect(isSameLocalImportSourceRoot('/srv/MerchRoute/source/', '/srv/MerchRoute/source', 'darwin')).toBe(true);
+    expect(isSameLocalImportSourceRoot('/srv/MerchRoute/source', '/srv/merchroute/source', 'linux')).toBe(false);
+    expect(isSameLocalImportSourceRoot('/srv/MerchRoute/source', '/srv/MerchRoute/other', 'linux')).toBe(false);
+    expect(isSameLocalImportSourceRoot('/srv/MerchRoute/source', undefined, 'linux')).toBe(false);
   });
 
   it('maps the primary information file, preserves multiple same-platform folders and filters runtime/video files', async () => {
