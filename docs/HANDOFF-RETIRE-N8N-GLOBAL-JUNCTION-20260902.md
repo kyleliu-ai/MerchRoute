@@ -1,6 +1,6 @@
 # `G:\01_n8n-global` Junction 安全退役交接清单
 
-更新时间：2026-09-02 21:03（Asia/Shanghai）
+更新时间：2026-09-02 21:18（Asia/Shanghai）
 
 ## 续执行权威状态（覆盖下文 19:51 历史快照）
 
@@ -17,6 +17,10 @@
 - 上述 Cutover 失败时维护 marker 正确保留。随后已先启动本地全局 n8n，再从同一任务 worktree 恢复兼容版，读回 `99020bc`、`dirty=false`、legacy readiness `READY`，并安全解除维护；当前新 PID 为 MerchRoute `4392`、n8n `2600`，三个端口均健康。
 - 本节同一提交把停止/启动函数的所有端口列表都强制包装为数组，并增加静态回归断言。提交并重新构建后必须创建全新恢复点；`203738` 因 HEAD 变化只保留审计，禁止复用。
 - 当前 D 盘约余 61.0 GB，新 Prepare 的容量门禁要求约 58.6 GB，仍可完成一次全新恢复点和同恢复点内最终增量；禁止未经用户授权删除旧恢复点来腾挪空间。
+- 空端口修复已提交为 `0cdb003` 并完成干净构建；恢复点 `20260902-210154` 已正确 Prepare 并部署同一提交。第二次 Cutover 成功停止三个端口并进入最终增量，但在首个恢复抽查索引计算处因 PowerShell 把逗号表达式解析为 `Object[] - 1` 而中止。
+- 第二次 Cutover 的最终备份未完成，72 条执行仍未取消，Junction 仍为原名且 File ID 不变，没有 quarantine 对象。失败时脚本重新启动了兼容版 MerchRoute，但 n8n 未自动恢复；维护 marker 保持 fail-closed。随后已人工按固定启动脚本恢复 n8n，读回 4173/5678/5679 健康、`0cdb003`/`dirty=false`、legacy readiness `READY`，并通过恢复点 token 解除维护。
+- 本节同一提交把恢复抽查索引独立为 `Get-RestoreRehearsalIndices` 并增加 1/2/5 文件回归；同时新增 `Start-N8nRuntime`，单独记录 n8n stdout/stderr，且只有 5678、5679 和 `/healthz` 同时就绪后才允许启动 MerchRoute。现网只读调用已验证该门禁识别 n8n PID `4416`。
+- `20260902-210154` 仍是当前最新完整预复制恢复点，但提交新修复后会因 HEAD 不匹配而禁止复用。D 盘当前约余 26.9 GB，低于新 Prepare 约 58.6 GB 门槛；继续前需要用户明确授权清理至少一个已失效的大型恢复点，建议先保存其 state/log/metadata 审计证据，再删除错误 AppData 时代且已回滚的 `20260902-200647`（约 35.5 GB）。
 
 下文保留 19:51 时的实现与风险细节作为历史记录；凡与本节冲突，以本节为准。
 

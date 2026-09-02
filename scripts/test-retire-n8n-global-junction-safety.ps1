@@ -69,6 +69,9 @@ foreach ($required in @(
   '$owners = @(Get-ListeningPortOwners)',
   '$remaining = @(Get-ListeningPortOwners)',
   '$listening = @(Get-ListeningPortOwners)',
+  'Get-RestoreRehearsalIndices',
+  'Start-N8nRuntime',
+  "Where-Object Port -in @(5678, 5679)",
   'recoveryPoint = $root',
   'deletedAt" IS NULL',
   "status IN ('new','running','waiting')",
@@ -150,6 +153,11 @@ if ($prepareHealthIndex -lt 0 -or $prepareRecoveryIndex -lt 0 -or $prepareHealth
 # replaced only inside this isolated test process, so no real PID can be stopped.
 function Get-ListeningPortOwners { return @() }
 [void](Stop-VerifiedRuntime -AllowAlreadyStopped)
+if ((@(Get-RestoreRehearsalIndices 1) -join ',') -ne '0' -or
+    (@(Get-RestoreRehearsalIndices 2) -join ',') -ne '0,1' -or
+    (@(Get-RestoreRehearsalIndices 5) -join ',') -ne '0,2,4') {
+  throw '恢复抽查索引计算回归'
+}
 
 if ((Get-NormalizedLiteralPath 'G:\01_n8n-global\') -ne 'G:\01_n8n-global') {
   throw '固定路径规范化失败'

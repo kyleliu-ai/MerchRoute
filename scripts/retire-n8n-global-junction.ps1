@@ -717,7 +717,7 @@ function Invoke-RestoreRehearsal {
   )
   $inventory = Get-SafeTreeInventory $Source
   if ($inventory.Files.Count -eq 0) { return [pscustomobject]@{ Label = $Label; Files = @() } }
-  $indices = @(0, [Math]::Floor(($inventory.Files.Count - 1) / 2), $inventory.Files.Count - 1) | Sort-Object -Unique
+  $indices = Get-RestoreRehearsalIndices $inventory.Files.Count
   $results = @()
   foreach ($index in $indices) {
     $entry = $inventory.Files[[int]$index]
@@ -732,6 +732,12 @@ function Invoke-RestoreRehearsal {
     $results += [pscustomobject]@{ RelativePath = $entry.RelativePath; Sha256 = $sourceHash }
   }
   [pscustomobject]@{ Label = $Label; Files = $results }
+}
+
+function Get-RestoreRehearsalIndices {
+  param([Parameter(Mandatory)][ValidateRange(0, [int]::MaxValue)][int]$FileCount)
+  if ($FileCount -eq 0) { return @() }
+  return @(0, [Math]::Floor(($FileCount - 1) / 2), ($FileCount - 1)) | Sort-Object -Unique
 }
 
 function Invoke-RobocopyMirror {
@@ -1182,7 +1188,7 @@ function Stop-VerifiedMerchRoute {
 function New-StartupLogCapture {
   param(
     [Parameter(Mandatory)][string]$RecoveryPoint,
-    [Parameter(Mandatory)][ValidateSet('new', 'restored')][string]$Label
+    [Parameter(Mandatory)][ValidateSet('n8n', 'new', 'restored')][string]$Label
   )
   $root = Assert-RecoveryPointPath $RecoveryPoint -MustExist
   $logDirectory = Assert-RecoveryChild $root (Join-Path $root 'logs')
@@ -1194,15 +1200,44 @@ function New-StartupLogCapture {
   }
 }
 
+function Start-N8nRuntime {
+  param([Parameter(Mandatory)][string]$RecoveryPoint)
+  $owners = @(Get-ListeningPortOwners | Where-Object Port -in @(5678, 5679))
+  if ($owners.Count -gt 0) { Assert-ExpectedPortOwners $owners }
+  $capture = $null
+  if (-not ($owners | Where-Object Port -eq 5678)) {
+    $capture = New-StartupLogCapture $RecoveryPoint 'n8n'
+    $command = '"' + $script:N8nLauncherPath + '"'
+    Start-Process -FilePath $env:ComSpec -ArgumentList @('/d', '/s', '/c', $command) `
+      -WorkingDirectory $script:TargetPath -WindowStyle Hidden `
+      -RedirectStandardOutput $capture.StandardOutput -RedirectStandardError $capture.StandardError
+  }
+  $deadline = [DateTimeOffset]::Now.AddSeconds(180)
+  do {
+    Start-Sleep -Milliseconds 500
+    $owners = @(Get-ListeningPortOwners | Where-Object Port -in @(5678, 5679))
+    $portsReady = @($owners.Port | Sort-Object -Unique).Count -eq 2 -and
+      @($owners.Pid | Sort-Object -Unique).Count -eq 1
+    try {
+      $response = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:5678/healthz' -TimeoutSec 3
+      $healthReady = $response.StatusCode -eq 200
+    } catch { $healthReady = $false }
+  } while ((-not $portsReady -or -not $healthReady) -and [DateTimeOffset]::Now -lt $deadline)
+  if (-not $portsReady -or -not $healthReady) {
+    $logHint = if ($capture) { "；日志：$($capture.StandardOutput) / $($capture.StandardError)" } else { '' }
+    throw "n8n 未在 180 秒内同时恢复 5678/5679 与 healthz$logHint"
+  }
+  Assert-ExpectedPortOwners $owners
+  return [pscustomobject]@{ Status = 200; Pid = @($owners.Pid | Sort-Object -Unique)[0] }
+}
+
 function Start-NewRuntime {
   param([Parameter(Mandatory)][string]$RecoveryPoint)
   if (-not [IO.File]::Exists((Join-Path $script:ProjectRoot 'apps\server\dist\index.js'))) { throw '新 worktree 缺少已构建 server dist' }
   if (-not [IO.Directory]::Exists((Join-Path $script:ProjectRoot 'node_modules'))) { throw '新 worktree 缺少 node_modules' }
   $listening = @(Get-ListeningPortOwners)
   if ($listening.Count -gt 0) { Assert-ExpectedPortOwners $listening }
-  if (-not ($listening | Where-Object Port -eq 5678)) {
-    Start-Process -FilePath $script:N8nLauncherPath -WorkingDirectory $script:TargetPath -WindowStyle Hidden
-  }
+  [void](Start-N8nRuntime $RecoveryPoint)
   $pwsh = (Get-Command pwsh -ErrorAction Stop).Source
   $arguments = @(
     '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $PSScriptRoot 'start-windows.ps1')
@@ -1237,9 +1272,7 @@ function Start-RestoredRuntime {
   $listening = @(Get-ListeningPortOwners)
   $capture = $null
   if ($listening.Count -gt 0) { Assert-ExpectedPortOwners $listening }
-  if (-not ($listening | Where-Object Port -eq 5678)) {
-    Start-Process -FilePath $script:N8nLauncherPath -WorkingDirectory $script:TargetPath -WindowStyle Hidden
-  }
+  [void](Start-N8nRuntime $RecoveryPoint)
   if (-not ($listening | Where-Object Port -eq 4173)) {
     $shell = New-Object -ComObject WScript.Shell
     $shortcut = $shell.CreateShortcut($script:MerchRouteShortcutPath)
