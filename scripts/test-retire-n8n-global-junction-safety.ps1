@@ -53,6 +53,7 @@ foreach ($required in @(
   'Get-ValidatedObservations',
   'AddHours(168)',
   'Invoke-DeployCompatibility',
+  'Invoke-RecoverCutover',
   "phase = 'COMPATIBILITY_DEPLOYED'",
   "phase = 'QUARANTINE_RENAME_PENDING'",
   "phase = 'FINALIZING_LINK_REMOVED'",
@@ -71,6 +72,12 @@ foreach ($required in @(
   '$listening = @(Get-ListeningPortOwners)',
   'Get-RestoreRehearsalIndices',
   'Start-N8nRuntime',
+  'Get-N8nRuntimeReadiness',
+  'Test-N8nLauncherCommandLine',
+  'Stop-VerifiedN8nLaunchersWithoutListeners',
+  'Remove-ProcessEnvironmentVariable',
+  'PGSSLMODE = [string]$connection.SslMode',
+  'diff --name-only "$fromHead..$toHead" --',
   "Where-Object Port -in @(5678, 5679)",
   'recoveryPoint = $root',
   'deletedAt" IS NULL',
@@ -145,6 +152,40 @@ if ($prepareHealthIndex -lt 0 -or $prepareRecoveryIndex -lt 0 -or $prepareHealth
   throw 'Prepare 必须在创建恢复点前核验在线 AppData 路径'
 }
 
+$recoverStart = $source.IndexOf('function Invoke-RecoverCutover', [StringComparison]::Ordinal)
+$deployStart = $source.IndexOf('function Invoke-DeployCompatibility', $recoverStart, [StringComparison]::Ordinal)
+$recoverText = $source.Substring($recoverStart, $deployStart - $recoverStart)
+$recoverDiffIndex = $recoverText.IndexOf('Assert-CutoverRecoveryReleaseDiff', [StringComparison]::Ordinal)
+$recoverBackupIndex = $recoverText.IndexOf('Assert-CompletedFinalBackupForRecovery', [StringComparison]::Ordinal)
+$recoverIdentityIndex = $recoverText.IndexOf('Assert-ExactLegacyJunction', [StringComparison]::Ordinal)
+$recoverDrainIndex = $recoverText.IndexOf('Wait-OperationalDrain', [StringComparison]::Ordinal)
+$recoverStartRuntimeIndex = $recoverText.IndexOf('Start-NewRuntime', [StringComparison]::Ordinal)
+$recoverVerifyRuntimeIndex = $recoverText.IndexOf('Assert-LiveRuntimeMatchesRelease', [StringComparison]::Ordinal)
+$recoverWriteIndex = $recoverText.IndexOf('Write-State $root $state', [StringComparison]::Ordinal)
+if (@($recoverDiffIndex, $recoverBackupIndex, $recoverIdentityIndex, $recoverDrainIndex, $recoverStartRuntimeIndex,
+      $recoverVerifyRuntimeIndex, $recoverWriteIndex) | Where-Object { $_ -lt 0 }) {
+  throw 'RecoverCutover 缺少 release、最终备份、身份、排空、启动或状态门禁'
+}
+if (-not ($recoverDiffIndex -lt $recoverBackupIndex -and $recoverBackupIndex -lt $recoverIdentityIndex -and
+    $recoverIdentityIndex -lt $recoverDrainIndex -and $recoverDrainIndex -lt $recoverStartRuntimeIndex -and
+    $recoverStartRuntimeIndex -lt $recoverVerifyRuntimeIndex -and $recoverVerifyRuntimeIndex -lt $recoverWriteIndex)) {
+  throw 'RecoverCutover 安全门禁顺序错误'
+}
+$recoverCatchIndex = $recoverText.IndexOf('  } catch {', [StringComparison]::Ordinal)
+if ($recoverCatchIndex -lt 0) { throw 'RecoverCutover 缺少失败恢复路径' }
+$recoverSuccessText = $recoverText.Substring(0, $recoverCatchIndex)
+if ($recoverSuccessText.IndexOf('maintenanceRetained = $true', [StringComparison]::Ordinal) -lt 0 -or
+    $recoverSuccessText.IndexOf('Exit-Maintenance $root', [StringComparison]::Ordinal) -ge 0) {
+  throw 'RecoverCutover 成功后必须保持维护模式直至 Cutover 接管'
+}
+
+$startN8nStart = $source.IndexOf('function Start-N8nRuntime', [StringComparison]::Ordinal)
+$startN8nEnd = $source.IndexOf('function Start-NewRuntime', $startN8nStart, [StringComparison]::Ordinal)
+$startN8nText = $source.Substring($startN8nStart, $startN8nEnd - $startN8nStart)
+if ($startN8nText -match '\$owners\.(?:Port|Pid)') {
+  throw 'Start-N8nRuntime 仍直接访问可能为空数组的 Port/Pid 属性'
+}
+
 # Load only function definitions. This does not dispatch Status or any mutation action.
 . $scriptPath -LibraryOnly
 
@@ -153,6 +194,99 @@ if ($prepareHealthIndex -lt 0 -or $prepareRecoveryIndex -lt 0 -or $prepareHealth
 # replaced only inside this isolated test process, so no real PID can be stopped.
 function Get-ListeningPortOwners { return @() }
 [void](Stop-VerifiedRuntime -AllowAlreadyStopped)
+$emptyReadiness = Get-N8nRuntimeReadiness -Owners @()
+$onePortReadiness = Get-N8nRuntimeReadiness -Owners @([pscustomobject]@{ Port = 5678; Pid = 1 })
+$readyReadiness = Get-N8nRuntimeReadiness -Owners @(
+  [pscustomobject]@{ Port = 5678; Pid = 1 },
+  [pscustomobject]@{ Port = 5679; Pid = 1 }
+)
+$splitPidReadiness = Get-N8nRuntimeReadiness -Owners @(
+  [pscustomobject]@{ Port = 5678; Pid = 1 },
+  [pscustomobject]@{ Port = 5679; Pid = 2 }
+)
+if ($emptyReadiness.Ready -or $onePortReadiness.Ready -or -not $readyReadiness.Ready -or $splitPidReadiness.Ready) {
+  throw 'n8n 双端口同 PID readiness 回归'
+}
+foreach ($validLauncher in @(
+  'C:\windows\system32\cmd.exe /c ""G:\01_MerchRoute\启动n8n.bat" "',
+  '"C:\windows\system32\cmd.exe" /d /s /c "G:\01_MerchRoute\启动n8n.bat"'
+)) {
+  if (-not (Test-N8nLauncherCommandLine $validLauncher)) { throw "精确 n8n 启动器命令行被拒绝：$validLauncher" }
+}
+foreach ($invalidLauncher in @(
+  'cmd.exe /c "G:\01_MerchRoute\启动n8n.bat-copy"',
+  'cmd.exe /c echo G:\01_MerchRoute\启动n8n.bat-copy',
+  'cmd.exe /k "G:\01_MerchRoute\启动n8n.bat"',
+  'cmd.exe /c "G:\01_MerchRoute\启动n8n.bat\child"'
+)) {
+  if (Test-N8nLauncherCommandLine $invalidLauncher) { throw "近似或非执行 n8n 命令行被接受：$invalidLauncher" }
+}
+
+# PostgreSQL treats an existing-but-empty PGSSLMODE as invalid. Verify that the
+# helper restores both existence and value exactly and leaves no test-process
+# environment changes behind.
+$pgKeys = @('PGHOST', 'PGPORT', 'PGUSER', 'PGPASSWORD', 'PGDATABASE', 'PGSSLMODE')
+$originalPgState = @{}
+foreach ($key in $pgKeys) {
+  $originalPgState[$key] = [pscustomobject]@{
+    Exists = Test-Path -LiteralPath "Env:$key"
+    Value = [Environment]::GetEnvironmentVariable($key, 'Process')
+  }
+}
+$testConnection = [pscustomobject]@{
+  Host = '127.0.0.1'
+  Port = '5432'
+  User = 'test-user'
+  Password = 'test-password'
+  Database = 'test-database'
+  SslMode = 'disable'
+}
+try {
+  foreach ($key in $pgKeys) { Remove-ProcessEnvironmentVariable $key }
+  $seen = Invoke-WithPgEnvironment $testConnection {
+    [pscustomobject]@{
+      Host = $env:PGHOST
+      Port = $env:PGPORT
+      User = $env:PGUSER
+      Password = $env:PGPASSWORD
+      Database = $env:PGDATABASE
+      SslMode = $env:PGSSLMODE
+    }
+  }
+  if ($seen.Host -ne $testConnection.Host -or $seen.Port -ne $testConnection.Port -or
+      $seen.User -ne $testConnection.User -or $seen.Password -ne $testConnection.Password -or
+      $seen.Database -ne $testConnection.Database -or $seen.SslMode -ne $testConnection.SslMode) {
+    throw 'Invoke-WithPgEnvironment 未向操作传入完整 PostgreSQL 环境'
+  }
+  if (@($pgKeys | Where-Object { Test-Path -LiteralPath "Env:$_" }).Count -ne 0) {
+    throw 'Invoke-WithPgEnvironment 把原本不存在的 PG 环境恢复成了空值'
+  }
+
+  [Environment]::SetEnvironmentVariable('PGHOST', 'original-host', 'Process')
+  [Environment]::SetEnvironmentVariable('PGSSLMODE', '', 'Process')
+  $operationFailureObserved = $false
+  try {
+    [void](Invoke-WithPgEnvironment $testConnection { throw 'intentional-pg-environment-test-failure' })
+  } catch {
+    if ($_.Exception.Message -ne 'intentional-pg-environment-test-failure') { throw }
+    $operationFailureObserved = $true
+  }
+  if (-not $operationFailureObserved) { throw 'Invoke-WithPgEnvironment 异常路径测试未触发' }
+  if ($env:PGHOST -ne 'original-host' -or -not (Test-Path -LiteralPath 'Env:PGSSLMODE') -or $env:PGSSLMODE -ne '') {
+    throw 'Invoke-WithPgEnvironment 异常后未原样恢复既有非空值或真正空值'
+  }
+  if (@('PGPORT', 'PGUSER', 'PGPASSWORD', 'PGDATABASE') | Where-Object { Test-Path -LiteralPath "Env:$_" }) {
+    throw 'Invoke-WithPgEnvironment 污染了部分不存在的 PG 环境变量'
+  }
+} finally {
+  foreach ($key in $pgKeys) {
+    if ($originalPgState[$key].Exists) {
+      [Environment]::SetEnvironmentVariable($key, [string]$originalPgState[$key].Value, 'Process')
+    } else {
+      Remove-ProcessEnvironmentVariable $key
+    }
+  }
+}
 if ((@(Get-RestoreRehearsalIndices 1) -join ',') -ne '0' -or
     (@(Get-RestoreRehearsalIndices 2) -join ',') -ne '0,1' -or
     (@(Get-RestoreRehearsalIndices 5) -join ',') -ne '0,2,4') {

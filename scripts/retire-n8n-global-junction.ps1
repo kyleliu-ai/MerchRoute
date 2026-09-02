@@ -28,7 +28,7 @@
 
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
-  [ValidateSet('Prepare', 'DeployCompatibility', 'Cutover', 'Status', 'Rollback', 'Observe', 'Finalize')]
+  [ValidateSet('Prepare', 'DeployCompatibility', 'RecoverCutover', 'Cutover', 'Status', 'Rollback', 'Observe', 'Finalize')]
   [string]$Action = 'Status',
 
   [string]$RecoveryPoint,
@@ -540,12 +540,12 @@ function New-RestrictedRecoveryPoint {
 }
 
 function Assert-RestrictedAcl {
-  param([Parameter(Mandatory)][string]$Path)
+  param([Parameter(Mandatory)][string]$Path, [switch]$AllowInherited)
   $allowed = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
   [void]$allowed.Add([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)
   [void]$allowed.Add('S-1-5-18')
   $acl = Get-Acl -LiteralPath $Path
-  if (-not $acl.AreAccessRulesProtected) { throw "恢复点 ACL 仍继承：$Path" }
+  if (-not $AllowInherited -and -not $acl.AreAccessRulesProtected) { throw "恢复点 ACL 仍继承：$Path" }
   foreach ($rule in $acl.Access) {
     $sid = $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value
     if (-not $allowed.Contains($sid)) { throw "恢复点 ACL 含未授权 SID $sid：$Path" }
@@ -867,21 +867,42 @@ function Get-N8nPgConnection {
   }
 }
 
+function Remove-ProcessEnvironmentVariable {
+  param([Parameter(Mandatory)][string]$Name)
+  # Environment.SetEnvironmentVariable(name, $null, Process) leaves an empty
+  # entry in this PowerShell host. The environment provider removes the entry
+  # itself, which matters because libpq rejects an inherited PGSSLMODE=''.
+  if (Test-Path -LiteralPath "Env:$Name") {
+    $ExecutionContext.InvokeProvider.Item.Remove("Env:$Name", $false)
+  }
+}
+
 function Invoke-WithPgEnvironment {
   param([Parameter(Mandatory)]$Connection, [Parameter(Mandatory)][scriptblock]$Operation)
   $keys = @('PGHOST', 'PGPORT', 'PGUSER', 'PGPASSWORD', 'PGDATABASE', 'PGSSLMODE')
   $previous = @{}
-  foreach ($key in $keys) { $previous[$key] = [Environment]::GetEnvironmentVariable($key, 'Process') }
+  foreach ($key in $keys) {
+    $previous[$key] = [pscustomobject]@{
+      Exists = Test-Path -LiteralPath "Env:$key"
+      Value = [Environment]::GetEnvironmentVariable($key, 'Process')
+    }
+  }
   try {
     $env:PGHOST = $Connection.Host
     $env:PGPORT = $Connection.Port
     $env:PGUSER = $Connection.User
     $env:PGPASSWORD = $Connection.Password
     $env:PGDATABASE = $Connection.Database
-    if ($Connection.SslMode) { $env:PGSSLMODE = $Connection.SslMode } else { [Environment]::SetEnvironmentVariable('PGSSLMODE', $null, 'Process') }
+    if ($Connection.SslMode) { $env:PGSSLMODE = $Connection.SslMode } else { Remove-ProcessEnvironmentVariable 'PGSSLMODE' }
     & $Operation
   } finally {
-    foreach ($key in $keys) { [Environment]::SetEnvironmentVariable($key, $previous[$key], 'Process') }
+    foreach ($key in $keys) {
+      if ($previous[$key].Exists) {
+        [Environment]::SetEnvironmentVariable($key, [string]$previous[$key].Value, 'Process')
+      } else {
+        Remove-ProcessEnvironmentVariable $key
+      }
+    }
   }
 }
 
@@ -1200,24 +1221,104 @@ function New-StartupLogCapture {
   }
 }
 
+function Get-N8nRuntimeReadiness {
+  param([object[]]$Owners)
+  $ports = @($Owners | ForEach-Object { $_.Port } | Sort-Object -Unique)
+  $pids = @($Owners | ForEach-Object { $_.Pid } | Sort-Object -Unique)
+  return [pscustomobject]@{
+    Ports = $ports
+    Pids = $pids
+    Ready = $ports.Count -eq 2 -and $pids.Count -eq 1
+  }
+}
+
+function Test-N8nLauncherCommandLine {
+  param([string]$CommandLine)
+  if (-not $CommandLine -or $CommandLine -notmatch '(?i)(?:^|\s)/c(?=$|\s)') { return $false }
+  $escapedPath = [Regex]::Escape($script:N8nLauncherPath)
+  return $CommandLine -match "(?i)(?:^|[`"\s])$escapedPath(?=`$|[`"\s])"
+}
+
+function Get-VerifiedN8nLauncherProcesses {
+  $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+  $launchers = @()
+  foreach ($process in @(Get-CimInstance Win32_Process | Where-Object Name -eq 'cmd.exe')) {
+    $commandLine = [string]$process.CommandLine
+    if (-not (Test-N8nLauncherCommandLine $commandLine)) { continue }
+    $owner = Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid
+    if (-not $owner -or $owner.Sid -ne $currentSid) {
+      throw "n8n 启动器 PID $($process.ProcessId) 不属于当前运行账户"
+    }
+    $launchers += [pscustomobject]@{
+      Pid = [int]$process.ProcessId
+      ParentProcessId = [int]$process.ParentProcessId
+      Name = [string]$process.Name
+      CommandLine = $commandLine
+      OwnerSid = [string]$owner.Sid
+    }
+  }
+  return @($launchers)
+}
+
+function Stop-VerifiedN8nLaunchersWithoutListeners {
+  $n8nOwners = @(Get-ListeningPortOwners | Where-Object Port -in @(5678, 5679))
+  if ($n8nOwners.Count -gt 0) { return @() }
+  $launchers = @(Get-VerifiedN8nLauncherProcesses)
+  foreach ($launcher in $launchers) {
+    $current = Get-CimInstance Win32_Process -Filter "ProcessId=$($launcher.Pid)"
+    if (-not $current) { continue }
+    if ($current.Name -ne 'cmd.exe' -or
+        -not [string]::Equals([string]$current.CommandLine, [string]$launcher.CommandLine, [StringComparison]::Ordinal) -or
+        -not (Test-N8nLauncherCommandLine ([string]$current.CommandLine))) {
+      throw "n8n 启动器 PID $($launcher.Pid) 在停止前发生身份变化"
+    }
+    $currentOwner = Invoke-CimMethod -InputObject $current -MethodName GetOwnerSid
+    if (-not $currentOwner -or $currentOwner.Sid -ne $launcher.OwnerSid) {
+      throw "n8n 启动器 PID $($launcher.Pid) 在停止前发生账户变化"
+    }
+    if (@(Get-ListeningPortOwners | Where-Object Port -in @(5678, 5679)).Count -gt 0) {
+      throw '清理残留 n8n 启动器期间出现监听端口，拒绝继续停止进程'
+    }
+    Stop-Process -Id $launcher.Pid -Force -ErrorAction Stop
+  }
+  $deadline = [DateTimeOffset]::Now.AddSeconds(30)
+  do {
+    Start-Sleep -Milliseconds 250
+    $remaining = @(Get-VerifiedN8nLauncherProcesses)
+  } while ($remaining.Count -gt 0 -and [DateTimeOffset]::Now -lt $deadline)
+  if ($remaining.Count -gt 0) { throw '无监听的 n8n 启动器未在 30 秒内退出' }
+  return $launchers
+}
+
 function Start-N8nRuntime {
   param([Parameter(Mandatory)][string]$RecoveryPoint)
   $owners = @(Get-ListeningPortOwners | Where-Object Port -in @(5678, 5679))
   if ($owners.Count -gt 0) { Assert-ExpectedPortOwners $owners }
   $capture = $null
   if (-not ($owners | Where-Object Port -eq 5678)) {
+    [void](Stop-VerifiedN8nLaunchersWithoutListeners)
     $capture = New-StartupLogCapture $RecoveryPoint 'n8n'
     $command = '"' + $script:N8nLauncherPath + '"'
+    $connection = Get-N8nPgConnection
+    $pgEnvironment = @{
+      PGHOST = [string]$connection.Host
+      PGPORT = [string]$connection.Port
+      PGUSER = [string]$connection.User
+      PGPASSWORD = [string]$connection.Password
+      PGDATABASE = [string]$connection.Database
+      PGSSLMODE = [string]$connection.SslMode
+    }
     Start-Process -FilePath $env:ComSpec -ArgumentList @('/d', '/s', '/c', $command) `
       -WorkingDirectory $script:TargetPath -WindowStyle Hidden `
-      -RedirectStandardOutput $capture.StandardOutput -RedirectStandardError $capture.StandardError
+      -RedirectStandardOutput $capture.StandardOutput -RedirectStandardError $capture.StandardError `
+      -Environment $pgEnvironment
   }
   $deadline = [DateTimeOffset]::Now.AddSeconds(180)
   do {
     Start-Sleep -Milliseconds 500
     $owners = @(Get-ListeningPortOwners | Where-Object Port -in @(5678, 5679))
-    $portsReady = @($owners.Port | Sort-Object -Unique).Count -eq 2 -and
-      @($owners.Pid | Sort-Object -Unique).Count -eq 1
+    $readiness = Get-N8nRuntimeReadiness $owners
+    $portsReady = $readiness.Ready
     try {
       $response = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:5678/healthz' -TimeoutSec 3
       $healthReady = $response.StatusCode -eq 200
@@ -1228,7 +1329,7 @@ function Start-N8nRuntime {
     throw "n8n 未在 180 秒内同时恢复 5678/5679 与 healthz$logHint"
   }
   Assert-ExpectedPortOwners $owners
-  return [pscustomobject]@{ Status = 200; Pid = @($owners.Pid | Sort-Object -Unique)[0] }
+  return [pscustomobject]@{ Status = 200; Pid = $readiness.Pids[0] }
 }
 
 function Start-NewRuntime {
@@ -1617,6 +1718,7 @@ function New-PrepareState {
     finalBackupAttempts = @()
     staleE001Cancellation = $null
     cutoverFailures = @()
+    releaseRebinds = @()
     quarantinePath = $null
     quarantinedAt = $null
     finalNotBefore = $null
@@ -1723,6 +1825,207 @@ function New-LegacyJunctionAfterFinalization {
   }
   if (-not (Test-IdentityEqual $created.Target $State.targetBefore)) { throw '重建 Junction 后目标身份不一致' }
   return $created.Junction
+}
+
+function Assert-CompletedFinalBackupForRecovery {
+  param([Parameter(Mandatory)][string]$RecoveryPoint, [Parameter(Mandatory)]$State)
+  Assert-RestrictedAcl $RecoveryPoint
+  $configFiles = @($State.configFiles)
+  if ($configFiles.Count -eq 0) { throw '恢复 Cutover 前缺少外部配置和启动脚本备份证据' }
+  foreach ($configFile in $configFiles) {
+    $configPath = Assert-RecoveryChild $RecoveryPoint ([string]$configFile.Destination)
+    if (-not [IO.File]::Exists($configPath) -or
+        (Get-FileHash -Algorithm SHA256 -LiteralPath $configPath).Hash -ne [string]$configFile.Sha256) {
+      throw "恢复配置备份不存在或哈希变化：$configPath"
+    }
+    Assert-RestrictedAcl $configPath -AllowInherited
+  }
+  $attempts = @($State.finalBackupAttempts)
+  if ($attempts.Count -eq 0 -or $attempts[-1].status -ne 'COMPLETED' -or -not $State.finalBackup) {
+    throw '恢复 Cutover 前缺少已完成的最终备份证据'
+  }
+  $finalLabel = [string]$attempts[-1].label
+  foreach ($propertyName in @('MerchRouteData', 'N8nUserData', 'MerchRouteAppData')) {
+    $evidence = $State.finalBackup.$propertyName
+    if (-not $evidence.Mirror -or [long]$evidence.Mirror.FileCount -le 0 -or [long]$evidence.Mirror.TotalBytes -le 0) {
+      throw "最终备份镜像证据不完整：$propertyName"
+    }
+    $samples = @($evidence.RestoreRehearsal.Files)
+    if ($samples.Count -eq 0) { throw "最终备份恢复抽查为空：$propertyName" }
+    $sampleLabel = [string]$evidence.RestoreRehearsal.Label
+    if (-not $sampleLabel.StartsWith("$finalLabel-", [StringComparison]::Ordinal)) {
+      throw "恢复抽查不属于最后一次已完成备份：$propertyName"
+    }
+    foreach ($sample in $samples) {
+      $samplePath = Assert-RecoveryChild $RecoveryPoint (Join-Path $RecoveryPoint "restore-rehearsal\$sampleLabel\$($sample.RelativePath)")
+      if (-not [IO.File]::Exists($samplePath)) { throw "恢复抽查文件不存在：$samplePath" }
+      if ((Get-FileHash -Algorithm SHA256 -LiteralPath $samplePath).Hash -ne [string]$sample.Sha256) {
+        throw "恢复抽查文件哈希变化：$samplePath"
+      }
+    }
+  }
+  foreach ($propertyName in @('MerchRouteDatabase', 'N8nDatabase')) {
+    $evidence = $State.finalBackup.$propertyName
+    $dumpPath = Assert-RecoveryChild $RecoveryPoint ([string]$evidence.Path)
+    if ([IO.Path]::GetFileName($dumpPath).IndexOf($finalLabel, [StringComparison]::Ordinal) -lt 0 -or
+        -not [IO.File]::Exists($dumpPath) -or
+        (Get-FileHash -Algorithm SHA256 -LiteralPath $dumpPath).Hash -ne [string]$evidence.Sha256) {
+      throw "最终数据库备份不存在或哈希变化：$propertyName"
+    }
+    if (-not [IO.File]::Exists("$dumpPath.toc.txt")) { throw "最终数据库 TOC 不存在：$propertyName" }
+  }
+  $workflows = $State.finalBackup.Workflows
+  $workflowManifest = Assert-RecoveryChild $RecoveryPoint (Join-Path $RecoveryPoint "n8n-workflows\$finalLabel\manifest.json")
+  if (-not [IO.File]::Exists($workflowManifest) -or [int]$workflows.currentCount -le 0 -or
+      [int]$workflows.publishedCount -le 0 -or [int]$workflows.activeNodeLegacyReferenceCount -ne 0 -or
+      @($workflows.files).Count -ne ([int]$workflows.currentCount + [int]$workflows.publishedCount)) {
+    throw '最终 n8n 工作流备份或活动旧根引用证据不完整'
+  }
+  foreach ($workflowFile in @($workflows.files)) {
+    $workflowPath = Assert-RecoveryChild $RecoveryPoint (Join-Path $RecoveryPoint "n8n-workflows\$finalLabel\$($workflowFile.relativePath)")
+    if (-not [IO.File]::Exists($workflowPath) -or
+        (Get-FileHash -Algorithm SHA256 -LiteralPath $workflowPath).Hash -ne [string]$workflowFile.sha256) {
+      throw "最终 n8n 工作流备份不存在或哈希变化：$($workflowFile.relativePath)"
+    }
+  }
+  $cancellation = $State.staleE001Cancellation
+  $cancellationValid = $cancellation -and [bool]$cancellation.exactSet -and
+    ((-not [bool]$cancellation.alreadyCanceled -and [int]$cancellation.updatedCount -eq 72 -and [int]$cancellation.matchedCount -eq 72) -or
+     ([bool]$cancellation.alreadyCanceled -and [int]$cancellation.matchedCount -eq 72))
+  if (-not $cancellationValid) { throw '72 条 E001 stale execution 的精确取消证据不完整' }
+  return [pscustomobject]@{
+    Label = $finalLabel
+    RestoreSampleCount = @('MerchRouteData', 'N8nUserData', 'MerchRouteAppData') |
+      ForEach-Object { @($State.finalBackup.$_.RestoreRehearsal.Files).Count } |
+      Measure-Object -Sum | Select-Object -ExpandProperty Sum
+    WorkflowCurrentCount = [int]$workflows.currentCount
+    WorkflowPublishedCount = [int]$workflows.publishedCount
+  }
+}
+
+function Assert-CutoverRecoveryReleaseDiff {
+  param([Parameter(Mandatory)]$State, [Parameter(Mandatory)]$Release)
+  if (-not [string]::Equals([string]$State.projectRoot, $script:ProjectRoot, [StringComparison]::OrdinalIgnoreCase) -or
+      -not [string]::Equals([string]$State.branch, [string]$Release.Branch, [StringComparison]::Ordinal) -or
+      -not [string]::Equals([string]$State.legacyPath, $script:LegacyPath, [StringComparison]::OrdinalIgnoreCase) -or
+      -not [string]::Equals([string]$State.targetPath, $script:TargetPath, [StringComparison]::OrdinalIgnoreCase)) {
+    throw '恢复点的项目、分支或固定 Junction 路径与当前任务不一致'
+  }
+  $fromHead = [string]$State.head
+  $toHead = [string]$Release.Head
+  if ($fromHead -notmatch '^[a-f0-9]{40}$' -or $toHead -notmatch '^[a-f0-9]{40}$' -or $fromHead -eq $toHead) {
+    throw '恢复 Cutover 需要从失败恢复点 HEAD 前进到一个新的干净 HEAD'
+  }
+  & git -C $script:ProjectRoot cat-file -e "$fromHead`^{commit}" 2>$null
+  if ($LASTEXITCODE -ne 0) { throw "恢复点 HEAD 无法在本机仓库解析：$fromHead" }
+  & git -C $script:ProjectRoot merge-base --is-ancestor $fromHead $toHead
+  if ($LASTEXITCODE -ne 0) { throw '恢复修复 HEAD 不是失败恢复点 HEAD 的后代' }
+  $changedFiles = @(& git -C $script:ProjectRoot diff --name-only "$fromHead..$toHead" --)
+  if ($LASTEXITCODE -ne 0 -or $changedFiles.Count -eq 0) { throw '无法读取恢复修复的文件差异' }
+  $allowed = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+  [void]$allowed.Add('scripts/retire-n8n-global-junction.ps1')
+  [void]$allowed.Add('scripts/test-retire-n8n-global-junction-safety.ps1')
+  $unexpected = @($changedFiles | Where-Object { -not $allowed.Contains([string]$_) })
+  if ($unexpected.Count -gt 0) {
+    throw "恢复修复包含应用、配置或非退役测试文件：$($unexpected -join ', ')"
+  }
+  return [pscustomobject]@{ FromHead = $fromHead; ToHead = $toHead; ChangedFiles = $changedFiles }
+}
+
+function Invoke-RecoverCutover {
+  if (-not $RecoveryPoint) { throw 'RecoverCutover 必须提供 RecoveryPoint' }
+  $root = Assert-RecoveryPointPath $RecoveryPoint -MustExist
+  $state = Read-State $root
+  if ($state.phase -ne 'ROLLED_BACK') { throw "RecoverCutover 仅允许 ROLLED_BACK，当前为 $($state.phase)" }
+  $failures = @($state.cutoverFailures)
+  if ($failures.Count -eq 0 -or $failures[-1].phase -ne 'QUARANTINED' -or
+      [string]$failures[-1].error -notmatch "property 'Port' cannot be found") {
+    throw '恢复点不是本次已知 n8n 空端口数组启动失败'
+  }
+  $release = Assert-TaskWorktreeReleaseReady
+  $releaseDiff = Assert-CutoverRecoveryReleaseDiff $state $release
+  $backupEvidence = Assert-CompletedFinalBackupForRecovery $root $state
+  $identity = Assert-ExactLegacyJunction
+  if (-not (Test-IdentityEqual $identity.Junction $state.junctionBefore) -or
+      -not (Test-IdentityEqual $identity.Target $state.targetBefore)) {
+    throw 'RecoverCutover 前 Junction/Target File ID 与恢复点不一致'
+  }
+  if ($state.quarantinePath) {
+    $priorQuarantinePath = Assert-QuarantinePath ([string]$state.quarantinePath)
+    if ([MerchRoute.JunctionRetirement.NativeFs]::ExistsNoFollow($priorQuarantinePath)) {
+      throw 'RecoverCutover 前隔离对象仍存在'
+    }
+  } else {
+    $priorQuarantinePath = $null
+  }
+  Enter-Maintenance $root
+  $state.maintenanceToken = $script:MaintenanceToken
+  if ($state.PSObject.Properties.Name -notcontains 'releaseRebinds') {
+    Add-Member -InputObject $state -NotePropertyName releaseRebinds -NotePropertyValue @()
+  }
+  $record = [ordered]@{
+    fromHead = $releaseDiff.FromHead
+    toHead = $releaseDiff.ToHead
+    startedAt = [DateTimeOffset]::Now.ToString('o')
+    completedAt = $null
+    status = 'STARTED'
+    reason = 'Recover verified QUARANTINED startup failure after completed final backup and exact E001 cancellation.'
+    changedFiles = @($releaseDiff.ChangedFiles)
+    priorQuarantinePath = $priorQuarantinePath
+    retainedFinalBackupLabel = $backupEvidence.Label
+    error = $null
+  }
+  try {
+    Wait-OperationalDrain
+    Set-RuntimeCompatibilityEnvironment $root
+    Set-MerchRouteStartupShortcut $root
+    [void](Start-NewRuntime $root)
+    [void](Get-LegacyCompatibilityReadiness)
+    $runtime = Assert-LiveRuntimeMatchesRelease $release
+    $record.completedAt = [DateTimeOffset]::Now.ToString('o')
+    $record.status = 'COMPLETED'
+    $state.releaseRebinds = @(@($state.releaseRebinds) + $record)
+    $state.head = $release.Head
+    $state.phase = 'COMPATIBILITY_DEPLOYED'
+    $state.compatibilityConfiguredAt = [DateTimeOffset]::Now.ToString('o')
+    $state.compatibilityDeployedAt = [DateTimeOffset]::Now.ToString('o')
+    $state.compatibilityDeployment = $runtime
+    $state.quarantinePath = $null
+    $state.quarantinedAt = $null
+    $state.finalNotBefore = $null
+    $state.targetInventoryAtQuarantine = $null
+    $state.rolledBackAt = $null
+    $state.rollbackReason = $null
+    Write-State $root $state
+    return [pscustomobject]@{
+      ok = $true
+      action = 'RecoverCutover'
+      recoveryPoint = $root
+      phase = $state.phase
+      fromHead = $releaseDiff.FromHead
+      toHead = $releaseDiff.ToHead
+      retainedFinalBackupLabel = $backupEvidence.Label
+      maintenanceRetained = $true
+    }
+  } catch {
+    $failure = $_.Exception.Message
+    $record.completedAt = [DateTimeOffset]::Now.ToString('o')
+    $record.status = 'FAILED'
+    $record.error = $failure
+    $state.releaseRebinds = @(@($state.releaseRebinds) + $record)
+    $state.rollbackReason = "RecoverCutover failed: $failure"
+    Write-State $root $state
+    try {
+      [void](Stop-VerifiedRuntime -AllowAlreadyStopped)
+      [void](Stop-VerifiedN8nLaunchersWithoutListeners)
+      Restore-RuntimeConfiguration $root
+      [void](Start-RestoredRuntime $root)
+      Exit-Maintenance $root
+    } catch {
+      throw "RecoverCutover 失败且运行服务恢复未完成：$($_.Exception.Message)"
+    }
+    throw "RecoverCutover 失败，已恢复原运行入口：$failure"
+  }
 }
 
 function Invoke-DeployCompatibility {
@@ -2119,6 +2422,7 @@ if ($LibraryOnly) { return }
 $result = switch ($Action) {
   'Prepare' { Invoke-Prepare }
   'DeployCompatibility' { Invoke-DeployCompatibility }
+  'RecoverCutover' { Invoke-RecoverCutover }
   'Cutover' { Invoke-Cutover }
   'Status' { Invoke-Status }
   'Rollback' { Invoke-Rollback }
