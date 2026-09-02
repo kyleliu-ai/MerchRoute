@@ -34,6 +34,7 @@ foreach ($forbiddenParameter in @('LegacyPath', 'TargetPath', 'DeletePath', 'Qua
 foreach ($required in @(
   "`$script:LegacyPath = 'G:\01_n8n-global'",
   "`$script:TargetPath = 'G:\01_MerchRoute'",
+  "`$script:MerchRouteAppDataPath = 'C:\Users\kylel\AppData\Roaming\n8n-media-review-center'",
   "`$script:BackupBase = 'D:\MerchRoute_Junction_Backups'",
   'FSCTL_GET_REPARSE_POINT',
   'IO_REPARSE_TAG_MOUNT_POINT = 0xA0000003',
@@ -60,6 +61,8 @@ foreach ($required in @(
   'alreadyCanceled',
   'Assert-StateMatchesRelease',
   'Assert-LiveRuntimeMatchesRelease',
+  'Assert-LiveAppDataPath',
+  '[DateTimeOffset]::Now.AddSeconds(180)',
   'recoveryPoint = $root',
   'deletedAt" IS NULL',
   "status IN ('new','running','waiting')",

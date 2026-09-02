@@ -51,7 +51,7 @@ $ErrorActionPreference = 'Stop'
 $script:LegacyPath = 'G:\01_n8n-global'
 $script:TargetPath = 'G:\01_MerchRoute'
 $script:N8nUserDataPath = 'D:\globle_n8n-data'
-$script:MerchRouteAppDataPath = 'C:\Users\kylel\AppData\Local\MerchRoute'
+$script:MerchRouteAppDataPath = 'C:\Users\kylel\AppData\Roaming\n8n-media-review-center'
 $script:MerchRouteEnvPath = 'C:\Users\kylel\AppData\Local\MerchRoute\secrets\merchroute.env'
 $script:N8nEnvPath = 'D:\globle_n8n-data\.n8n\.env'
 $script:N8nLauncherPath = 'G:\01_MerchRoute\启动n8n.bat'
@@ -740,11 +740,11 @@ function Invoke-RobocopyMirror {
     # makes an otherwise readable source fail with Robocopy exit code 16.
     '/XJ', '/R:2', '/W:2', '/Z', '/J', '/MT:8', '/NP', "/LOG:$log"
   )
-  & robocopy.exe @arguments
+  & robocopy.exe @arguments | Out-Null
   $code = $LASTEXITCODE
   if ($code -ge 8) { throw "Robocopy $Label 失败，退出码 $code" }
   if ($Final) {
-    & robocopy.exe $Source $destinationPath /MIR /L /COPY:DAT /DCOPY:DAT /XJ /R:0 /W:0 /NFL /NDL /NP /NJH /NJS
+    & robocopy.exe $Source $destinationPath /MIR /L /COPY:DAT /DCOPY:DAT /XJ /R:0 /W:0 /NFL /NDL /NP /NJH /NJS | Out-Null
     $verificationCode = $LASTEXITCODE
     if ($verificationCode -ne 0) { throw "Robocopy $Label 最终 dry-run 仍有差异，退出码 $verificationCode" }
     $mirror = Compare-TreeMirror $Source $destinationPath
@@ -1073,11 +1073,24 @@ function Assert-LiveRuntimeMatchesRelease {
   return $version.current
 }
 
+function Assert-LiveAppDataPath {
+  param([Parameter(Mandatory)]$Health)
+  if (-not $Health.appDataDir) { throw 'MerchRoute health 未报告 appDataDir' }
+  $actual = Get-NormalizedLiteralPath ([string]$Health.appDataDir)
+  $expected = Get-NormalizedLiteralPath $script:MerchRouteAppDataPath
+  if (-not [string]::Equals($actual, $expected, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "MerchRoute 实际 AppData 与退役脚本保护路径不一致：actual=$actual expected=$expected"
+  }
+  if (-not [IO.Directory]::Exists($actual)) { throw "MerchRoute 实际 AppData 不存在：$actual" }
+  return $actual
+}
+
 function Get-HealthGate {
   $n8n = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:5678/healthz' -TimeoutSec 10
-  $merchRoute = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:4173/api/v1/health' -TimeoutSec 10
-  if ($n8n.StatusCode -ne 200 -or $merchRoute.StatusCode -ne 200) { throw '健康检查未返回 200' }
-  [pscustomobject]@{ N8nStatus = $n8n.StatusCode; MerchRouteStatus = $merchRoute.StatusCode }
+  $merchRoute = Invoke-RestMethod -Method Get -Uri 'http://127.0.0.1:4173/api/v1/health' -TimeoutSec 10
+  if ($n8n.StatusCode -ne 200 -or $merchRoute.status -ne 'ok') { throw '健康检查未返回 200/ok' }
+  $appDataPath = Assert-LiveAppDataPath $merchRoute
+  [pscustomobject]@{ N8nStatus = $n8n.StatusCode; MerchRouteStatus = 200; AppDataPath = $appDataPath }
 }
 
 function Get-ListeningPortOwners {
@@ -1151,7 +1164,23 @@ function Stop-VerifiedMerchRoute {
   return $owners[0]
 }
 
+function New-StartupLogCapture {
+  param(
+    [Parameter(Mandatory)][string]$RecoveryPoint,
+    [Parameter(Mandatory)][ValidateSet('new', 'restored')][string]$Label
+  )
+  $root = Assert-RecoveryPointPath $RecoveryPoint -MustExist
+  $logDirectory = Assert-RecoveryChild $root (Join-Path $root 'logs')
+  [IO.Directory]::CreateDirectory($logDirectory) | Out-Null
+  $suffix = "$(Get-Date -Format 'yyyyMMdd-HHmmss')-$([Guid]::NewGuid().ToString('N'))"
+  return [pscustomobject]@{
+    StandardOutput = Assert-RecoveryChild $root (Join-Path $logDirectory "startup-$Label-$suffix.stdout.log")
+    StandardError = Assert-RecoveryChild $root (Join-Path $logDirectory "startup-$Label-$suffix.stderr.log")
+  }
+}
+
 function Start-NewRuntime {
+  param([Parameter(Mandatory)][string]$RecoveryPoint)
   if (-not [IO.File]::Exists((Join-Path $script:ProjectRoot 'apps\server\dist\index.js'))) { throw '新 worktree 缺少已构建 server dist' }
   if (-not [IO.Directory]::Exists((Join-Path $script:ProjectRoot 'node_modules'))) { throw '新 worktree 缺少 node_modules' }
   $listening = Get-ListeningPortOwners
@@ -1165,27 +1194,33 @@ function Start-NewRuntime {
   )
   $previous = $env:MERCHROUTE_ENV_FILE
   $previousNoOpenBrowser = $env:NO_OPEN_BROWSER
+  $capture = New-StartupLogCapture $RecoveryPoint 'new'
   try {
     $env:MERCHROUTE_ENV_FILE = $script:MerchRouteEnvPath
     $env:NO_OPEN_BROWSER = '1'
     if (-not ($listening | Where-Object Port -eq 4173)) {
-      Start-Process -FilePath $pwsh -ArgumentList $arguments -WorkingDirectory $script:ProjectRoot -WindowStyle Hidden
+      Start-Process -FilePath $pwsh -ArgumentList $arguments -WorkingDirectory $script:ProjectRoot -WindowStyle Hidden `
+        -RedirectStandardOutput $capture.StandardOutput -RedirectStandardError $capture.StandardError
     }
   } finally {
     $env:MERCHROUTE_ENV_FILE = $previous
     $env:NO_OPEN_BROWSER = $previousNoOpenBrowser
   }
-  $deadline = [DateTimeOffset]::Now.AddSeconds(60)
+  $deadline = [DateTimeOffset]::Now.AddSeconds(180)
   do {
     Start-Sleep -Milliseconds 500
     try { $health = Get-HealthGate } catch { $health = $null }
   } while (-not $health -and [DateTimeOffset]::Now -lt $deadline)
-  if (-not $health) { throw '新路径服务启动后健康检查超时' }
+  if (-not $health) {
+    throw "新路径服务启动后健康检查超时；日志：$($capture.StandardOutput) / $($capture.StandardError)"
+  }
   return $health
 }
 
 function Start-RestoredRuntime {
+  param([Parameter(Mandatory)][string]$RecoveryPoint)
   $listening = Get-ListeningPortOwners
+  $capture = $null
   if ($listening.Count -gt 0) { Assert-ExpectedPortOwners $listening }
   if (-not ($listening | Where-Object Port -eq 5678)) {
     Start-Process -FilePath $script:N8nLauncherPath -WorkingDirectory $script:TargetPath -WindowStyle Hidden
@@ -1199,14 +1234,23 @@ function Start-RestoredRuntime {
         -not [IO.File]::Exists($launcher)) {
       throw "恢复后的 Startup 入口不安全：$launcher"
     }
-    Start-Process -FilePath $launcher -WorkingDirectory ([IO.Path]::GetDirectoryName($launcher)) -WindowStyle Hidden
+    $powerShellLauncher = [IO.Path]::ChangeExtension($launcher, '.ps1')
+    if (-not [IO.File]::Exists($powerShellLauncher)) { throw "恢复后的 PowerShell 启动脚本不存在：$powerShellLauncher" }
+    $pwsh = (Get-Command pwsh -ErrorAction Stop).Source
+    $capture = New-StartupLogCapture $RecoveryPoint 'restored'
+    Start-Process -FilePath $pwsh -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $powerShellLauncher) `
+      -WorkingDirectory ([IO.Path]::GetDirectoryName($powerShellLauncher)) -WindowStyle Hidden `
+      -RedirectStandardOutput $capture.StandardOutput -RedirectStandardError $capture.StandardError
   }
-  $deadline = [DateTimeOffset]::Now.AddSeconds(60)
+  $deadline = [DateTimeOffset]::Now.AddSeconds(180)
   do {
     Start-Sleep -Milliseconds 500
     try { $health = Get-HealthGate } catch { $health = $null }
   } while (-not $health -and [DateTimeOffset]::Now -lt $deadline)
-  if (-not $health) { throw '回滚运行入口启动后健康检查超时' }
+  if (-not $health) {
+    $logHint = if ($capture) { "；日志：$($capture.StandardOutput) / $($capture.StandardError)" } else { '' }
+    throw "回滚运行入口启动后健康检查超时$logHint"
+  }
   return $health
 }
 
@@ -1423,9 +1467,9 @@ function Invoke-WorkflowExport {
     }
     $previous['N8N_USER_FOLDER'] = $env:N8N_USER_FOLDER
     $env:N8N_USER_FOLDER = $script:N8nUserDataPath
-    & $n8n export:workflow --backup "--output=$current"
+    & $n8n export:workflow --backup "--output=$current" | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'n8n current workflow export failed' }
-    & $n8n export:workflow --all --published --pretty --separate "--output=$published"
+    & $n8n export:workflow --all --published --pretty --separate "--output=$published" | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'n8n published workflow export failed' }
   } finally {
     foreach ($entry in $previous.GetEnumerator()) { [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, 'Process') }
@@ -1666,7 +1710,7 @@ function Invoke-DeployCompatibility {
     [void](Assert-ExpectedPortOwners (Get-ListeningPortOwners) -RequireAllPorts)
     [void](Stop-VerifiedMerchRoute)
     $runtimeStopped = $true
-    [void](Start-NewRuntime)
+    [void](Start-NewRuntime $root)
     [void](Get-LegacyCompatibilityReadiness)
     $runtime = Assert-LiveRuntimeMatchesRelease $release
     $state.phase = 'COMPATIBILITY_DEPLOYED'
@@ -1684,7 +1728,7 @@ function Invoke-DeployCompatibility {
     $state.rolledBackAt = [DateTimeOffset]::Now.ToString('o')
     $state.rollbackReason = "Compatibility deployment failed: $failure"
     Write-State $root $state
-    try { [void](Start-RestoredRuntime) } catch { throw "兼容版本部署失败，且原运行版本恢复失败：$($_.Exception.Message)" }
+    try { [void](Start-RestoredRuntime $root) } catch { throw "兼容版本部署失败，且原运行版本恢复失败：$($_.Exception.Message)" }
     throw "兼容版本部署失败，已恢复原运行版本：$failure"
   }
 }
@@ -1737,7 +1781,7 @@ function Invoke-Cutover {
     $state.phase = 'QUARANTINED'
     $state.targetInventoryAtQuarantine = Get-InventorySummary $afterRename
     Write-State $root $state
-    [void](Start-NewRuntime)
+    [void](Start-NewRuntime $root)
     [void](Get-LegacyCompatibilityReadiness)
     [void](Assert-LiveRuntimeMatchesRelease $release)
     Exit-Maintenance $root
@@ -1761,7 +1805,7 @@ function Invoke-Cutover {
         $state.rolledBackAt = [DateTimeOffset]::Now.ToString('o')
         $state.rollbackReason = $cutoverFailure
         Write-State $root $state
-        [void](Start-RestoredRuntime)
+        [void](Start-RestoredRuntime $root)
         Exit-Maintenance $root
       } catch {
         throw "切换失败且自动回滚未完成；隔离对象保持不动：$($_.Exception.Message)"
@@ -1770,7 +1814,7 @@ function Invoke-Cutover {
       [void](Assert-ExactLegacyJunction)
       $state.phase = 'COMPATIBILITY_DEPLOYED'
       Write-State $root $state
-      if ($runtimeStopped) { [void](Start-NewRuntime) }
+      if ($runtimeStopped) { [void](Start-NewRuntime $root) }
       [void](Get-LegacyCompatibilityReadiness)
       [void](Assert-LiveRuntimeMatchesRelease $release)
       Exit-Maintenance $root
@@ -1944,7 +1988,7 @@ function Invoke-Finalize {
     $state.finalizedAt = [DateTimeOffset]::Now.ToString('o')
     $state.targetInventoryAtFinalization = Get-InventorySummary $after
     Write-State $root $state
-    [void](Start-NewRuntime)
+    [void](Start-NewRuntime $root)
     [void](Get-LegacyCompatibilityReadiness)
     [void](Assert-LiveRuntimeMatchesRelease $release)
     Exit-Maintenance $root
@@ -2013,7 +2057,7 @@ function Invoke-Rollback {
     $state.rolledBackAt = [DateTimeOffset]::Now.ToString('o')
     $state.rollbackReason = "Explicit rollback from $rollbackFrom"
     Write-State $root $state
-    [void](Start-RestoredRuntime)
+    [void](Start-RestoredRuntime $root)
     Exit-Maintenance $root
     [pscustomobject]@{ ok = $true; action = 'Rollback'; recoveryPoint = $root; databaseRestored = $false }
   } catch {

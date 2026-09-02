@@ -1,6 +1,19 @@
 # `G:\01_n8n-global` Junction 安全退役交接清单
 
-更新时间：2026-09-02 19:51（Asia/Shanghai）
+更新时间：2026-09-02 20:23（Asia/Shanghai）
+
+## 续执行权威状态（覆盖下文 19:51 历史快照）
+
+- 任务分支仍为 `work/retire-n8n-global-junction-20260902-1725`，固定 worktree 未变；已产生三个本地提交：`1483aa6`（兼容层与退役状态机）、`ecdeba1`（Robocopy `/Z`）、`5395cfa`（外部 env DACL）。未推送、未创建 PR。
+- `G:\01_n8n-global` 仍是精确指向 `G:\01_MerchRoute` 的 Junction；没有 quarantine 对象，真实目标没有移动或删除。本地全局 n8n 仍为 PID `25684`，端口 `5678/5679` 未在兼容部署试验中停止。
+- 恢复点 `20260902-195505` 因 `/ZB` 权限失败且无状态文件；`20260902-195705` 因 `Set-Acl` 权限失败；`20260902-200647` 虽完成 Prepare，但 DeployCompatibility 超时后已自动回滚为 `ROLLED_BACK`。这三个恢复点仅保留作审计，均不得用于正式切换。
+- `200647` 失败后，外部 `merchroute.env` 和 MerchRoute Startup 快捷方式均已恢复原值；当前 MerchRoute 为原发布构建 `73d2e710...`，PID `11908`，4173 health 为 200；两个 retirement marker 均不存在。
+- 已确认 `/api/v1/health.appDataDir` 的真实业务目录是 `C:\Users\kylel\AppData\Roaming\n8n-media-review-center`，不是 `C:\Users\kylel\AppData\Local\MerchRoute`。实际目录当前约 34,211 个文件、1,551,112,418 字节；Local 路径只继续用于受保护的 `secrets\merchroute.env`。
+- 本节同一提交已把脚本 AppData 固定路径改为 Roaming，并新增 `/health.appDataDir` 精确读回门禁；启动等待从 60 秒提高到 180 秒，新版本与回滚版本的启动 stdout/stderr 都写入所属恢复点，Robocopy/n8n export 控制台输出不再污染 `state.json`。
+- 修补后静态安全测试、PowerShell 解析、`git diff --check` 及 GUID TEMP Junction 的 `RemoveDirectory2W` 原生演练已通过；真实 `G:` 路径未参与演练。
+- 下一步必须先提交本节修补并重新执行干净生产 build，再创建全新恢复点。新 Prepare 必须备份上述真实 Roaming AppData；旧恢复点禁止复用。只有新的 DeployCompatibility 达到 readiness `READY`、运行 commit 精确匹配且 22/22 路径完整后，才能进入 Cutover。
+
+下文保留 19:51 时的实现与风险细节作为历史记录；凡与本节冲突，以本节为准。
 
 ## 当前结论
 
