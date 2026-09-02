@@ -66,6 +66,9 @@ foreach ($required in @(
   ".tools\node-v22.23.1-win-x64",
   "`$nodeVersion -ne '22.23.1'",
   "`$npmVersion -ne '10.9.8'",
+  '$owners = @(Get-ListeningPortOwners)',
+  '$remaining = @(Get-ListeningPortOwners)',
+  '$listening = @(Get-ListeningPortOwners)',
   'recoveryPoint = $root',
   'deletedAt" IS NULL',
   "status IN ('new','running','waiting')",
@@ -141,6 +144,12 @@ if ($prepareHealthIndex -lt 0 -or $prepareRecoveryIndex -lt 0 -or $prepareHealth
 
 # Load only function definitions. This does not dispatch Status or any mutation action.
 . $scriptPath -LibraryOnly
+
+# Regression for PowerShell's empty pipeline unrolling. With no listeners this
+# must be a no-op, not a StrictMode property-access failure. The function is
+# replaced only inside this isolated test process, so no real PID can be stopped.
+function Get-ListeningPortOwners { return @() }
+[void](Stop-VerifiedRuntime -AllowAlreadyStopped)
 
 if ((Get-NormalizedLiteralPath 'G:\01_n8n-global\') -ne 'G:\01_n8n-global') {
   throw '固定路径规范化失败'

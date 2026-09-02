@@ -1150,7 +1150,7 @@ function Assert-ExpectedPortOwners {
 
 function Stop-VerifiedRuntime {
   param([switch]$AllowAlreadyStopped)
-  $owners = Get-ListeningPortOwners
+  $owners = @(Get-ListeningPortOwners)
   if ($owners.Count -eq 0 -and $AllowAlreadyStopped) { return @() }
   Assert-ExpectedPortOwners $owners -RequireAllPorts:(-not $AllowAlreadyStopped)
   foreach ($pidValue in @($owners.Pid | Sort-Object -Unique -Descending)) {
@@ -1159,7 +1159,7 @@ function Stop-VerifiedRuntime {
   $deadline = [DateTimeOffset]::Now.AddSeconds(30)
   do {
     Start-Sleep -Milliseconds 250
-    $remaining = Get-ListeningPortOwners
+    $remaining = @(Get-ListeningPortOwners)
   } while ($remaining.Count -gt 0 -and [DateTimeOffset]::Now -lt $deadline)
   if ($remaining.Count -gt 0) { throw '4173/5678/5679 未在 30 秒内全部退出' }
   return $owners
@@ -1198,7 +1198,7 @@ function Start-NewRuntime {
   param([Parameter(Mandatory)][string]$RecoveryPoint)
   if (-not [IO.File]::Exists((Join-Path $script:ProjectRoot 'apps\server\dist\index.js'))) { throw '新 worktree 缺少已构建 server dist' }
   if (-not [IO.Directory]::Exists((Join-Path $script:ProjectRoot 'node_modules'))) { throw '新 worktree 缺少 node_modules' }
-  $listening = Get-ListeningPortOwners
+  $listening = @(Get-ListeningPortOwners)
   if ($listening.Count -gt 0) { Assert-ExpectedPortOwners $listening }
   if (-not ($listening | Where-Object Port -eq 5678)) {
     Start-Process -FilePath $script:N8nLauncherPath -WorkingDirectory $script:TargetPath -WindowStyle Hidden
@@ -1234,7 +1234,7 @@ function Start-NewRuntime {
 
 function Start-RestoredRuntime {
   param([Parameter(Mandatory)][string]$RecoveryPoint)
-  $listening = Get-ListeningPortOwners
+  $listening = @(Get-ListeningPortOwners)
   $capture = $null
   if ($listening.Count -gt 0) { Assert-ExpectedPortOwners $listening }
   if (-not ($listening | Where-Object Port -eq 5678)) {

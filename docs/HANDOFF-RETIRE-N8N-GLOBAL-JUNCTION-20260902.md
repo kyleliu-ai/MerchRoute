@@ -1,6 +1,6 @@
 # `G:\01_n8n-global` Junction 安全退役交接清单
 
-更新时间：2026-09-02 20:38（Asia/Shanghai）
+更新时间：2026-09-02 21:03（Asia/Shanghai）
 
 ## 续执行权威状态（覆盖下文 19:51 历史快照）
 
@@ -13,7 +13,10 @@
 - 本节同一提交已把脚本 AppData 固定路径改为 Roaming，并新增 `/health.appDataDir` 精确读回门禁；启动等待从 60 秒提高到 180 秒，新版本与回滚版本的启动 stdout/stderr 都写入所属恢复点，Robocopy/n8n export 控制台输出不再污染 `state.json`。
 - 修补后静态安全测试、PowerShell 解析、`git diff --check` 及 GUID TEMP Junction 的 `RemoveDirectory2W` 原生演练已通过；真实 `G:` 路径未参与演练。
 - 已从当前实际运行源码 worktree 的忽略目录复制固定工具链到任务 worktree；Node `22.23.1`、npm `10.9.8` 与 `node.exe` SHA-256 均已读回一致，不包含任何源码或其他任务的 Git 修改。本节同一提交新增 Prepare/Deploy 前的固定工具链硬门禁，避免再次在大备份后才发现版本错误。
-- 下一步必须提交工具链门禁，并使用任务 worktree 的固定 Node/npm 重新执行干净生产 build，再创建全新恢复点；旧恢复点禁止复用。只有新的 DeployCompatibility 达到 readiness `READY`、运行 commit 精确匹配且 22/22 路径完整后，才能进入 Cutover。
+- 固定工具链门禁已提交为 `99020bc` 并完成干净构建；恢复点 `20260902-203738` 已正确 Prepare，兼容版亦成功部署。但第一次 Cutover 在停止全部端口后，因 PowerShell 空结果被展开为 `$null`、`Stop-VerifiedRuntime` 读取 `.Count` 而中止；最终备份尚未开始，72 条执行未取消，Junction 未改名。
+- 上述 Cutover 失败时维护 marker 正确保留。随后已先启动本地全局 n8n，再从同一任务 worktree 恢复兼容版，读回 `99020bc`、`dirty=false`、legacy readiness `READY`，并安全解除维护；当前新 PID 为 MerchRoute `4392`、n8n `2600`，三个端口均健康。
+- 本节同一提交把停止/启动函数的所有端口列表都强制包装为数组，并增加静态回归断言。提交并重新构建后必须创建全新恢复点；`203738` 因 HEAD 变化只保留审计，禁止复用。
+- 当前 D 盘约余 61.0 GB，新 Prepare 的容量门禁要求约 58.6 GB，仍可完成一次全新恢复点和同恢复点内最终增量；禁止未经用户授权删除旧恢复点来腾挪空间。
 
 下文保留 19:51 时的实现与风险细节作为历史记录；凡与本节冲突，以本节为准。
 
