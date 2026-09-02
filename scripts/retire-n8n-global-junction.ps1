@@ -737,7 +737,10 @@ function Invoke-RobocopyMirror {
   [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($log)) | Out-Null
   $arguments = @(
     $Source, $destinationPath, '/MIR', '/COPY:DAT', '/DCOPY:DAT',
-    '/XJ', '/R:2', '/W:2', '/ZB', '/J', '/MT:8', '/NP', "/LOG:$log"
+    # /Z is restartable under the actual runtime account. /ZB is deliberately
+    # avoided because its backup-mode fallback requires SeBackupPrivilege and
+    # makes an otherwise readable source fail with Robocopy exit code 16.
+    '/XJ', '/R:2', '/W:2', '/Z', '/J', '/MT:8', '/NP', "/LOG:$log"
   )
   & robocopy.exe @arguments
   $code = $LASTEXITCODE

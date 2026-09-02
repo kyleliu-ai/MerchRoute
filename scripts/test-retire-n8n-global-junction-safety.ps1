@@ -66,7 +66,7 @@ foreach ($required in @(
   "status IN ('QUEUED','WAITING_RESOURCE','RUNNING')",
   "status='QUARANTINED'",
   "state IN ('QUARANTINING','QUARANTINED')",
-  '/MIR', '/COPY:DAT', '/DCOPY:DAT', '/XJ',
+  '/MIR', '/COPY:DAT', '/DCOPY:DAT', '/XJ', '/Z',
   'pg_dump.exe', 'pg_restore.exe',
   'export:workflow --backup',
   'export:workflow --all --published'

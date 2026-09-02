@@ -58,6 +58,7 @@
 - GUID 命名 TEMP 目录原生 Junction 演练：改名与 `RemoveDirectory2W(DIRECTORY_FLAGS_DISALLOW_PATH_REDIRECTS)` 均通过，目标 File ID 和证明文件保持不变；真实 `G:` 路径未变。
 - PostgreSQL 18.4 只读验证：退役门禁 SQL、旧根 `ILIKE ... ESCAPE` 粗筛 SQL 均实际执行成功。
 - 提交后仍必须重新执行生产 build，使 `apps/server/dist/build-info.json` 记录“当前 HEAD 且 dirty=false”，再运行发布门禁。
+- 首次 `Prepare` 于恢复点 `D:\MerchRoute_Junction_Backups\20260902-195505` 安全中止：Robocopy `/ZB` 因当前账户没有 `SeBackupPrivilege` 返回 16。该恢复点没有 `state.json`，外部配置、服务、数据库与 Junction 均未改变；脚本已改用当前账户可执行的 `/Z`，失败恢复点原样保留作审计。
 
 ## 脚本状态
 
