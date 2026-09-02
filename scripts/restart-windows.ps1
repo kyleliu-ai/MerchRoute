@@ -1,5 +1,6 @@
 param(
-  [switch]$ForceActiveDownloads
+  [switch]$ForceActiveDownloads,
+  [switch]$ForceActiveWbPublishing
 )
 
 $ErrorActionPreference = 'Stop'
@@ -32,6 +33,28 @@ if ($listener) {
   } else {
     Write-Warning '已显式允许在存在活动下载任务时强制重启；幂等工作流将使用原 downloadJobId 恢复核验。'
   }
+
+  if (-not $ForceActiveWbPublishing) {
+    $activeWbPublishing = @()
+    try {
+      $activeWbStates = @('CHECKING', 'INITIALIZING', 'GENERATING', 'SUBMITTING', 'QUEUED', 'RUNNING')
+      foreach ($state in $activeWbStates) {
+        $result = Invoke-RestMethod -Uri ("http://127.0.0.1:$Port/api/v1/wb/automation/jobs?page=1&pageSize=1&state=$state") -TimeoutSec 5
+        if ([int]$result.total -gt 0) {
+          $activeWbPublishing += [pscustomobject]@{ state = $state; count = [int]$result.total }
+        }
+      }
+    } catch {
+      throw "无法核验活动 WB 自动上品任务，拒绝重启。确认风险后可使用 -ForceActiveWbPublishing：$($_.Exception.Message)"
+    }
+    if ($activeWbPublishing.Count -gt 0) {
+      $summary = ($activeWbPublishing | ForEach-Object { "$($_.state)=$($_.count)" }) -join ', '
+      throw "存在活动 WB 自动上品任务（$summary），拒绝重启，以免中断平台请求或 PostgreSQL 状态回写。等待任务结束，或确认风险后使用 -ForceActiveWbPublishing。"
+    }
+  } else {
+    Write-Warning '已显式允许在存在活动 WB 自动上品任务时强制重启；平台写入结果可能进入 UNKNOWN，必须先回读再恢复。'
+  }
+
   Stop-Process -Id $listener.OwningProcess -Force
   $deadline = (Get-Date).AddSeconds(15)
   do {
