@@ -39,7 +39,12 @@ export function isolatedChildEnvironment(env, rawDirectory, id) {
       || new URL(result.DATABASE_URL).pathname === new URL(result.WB_SOURCE_MEDIA_CLEANUP_TEST_DATABASE_URL).pathname) throw new Error('Both distinct integration test databases are required');
   }
   return {
-    ...result, CI: 'true', NODE_ENV: 'test', MEDIA_INDEX_PERF_100K: '0',
+    ...result, CI: 'true',
+    // Vite embeds NODE_ENV in the browser bundle. "test" makes rc-select use
+    // duplicate TEST_OR_SSR IDs and disables real-browser layout behavior.
+    // Test execution remains isolated; publishable/browser builds are production.
+    NODE_ENV: ['browser-build', 'candidate-build'].includes(id) ? 'production' : 'test',
+    MEDIA_INDEX_PERF_100K: '0',
     MERCHROUTE_OZON_MULTISTORE_FLEET_READY: 'false',
     MERCHROUTE_OZON_SOURCE_MEDIA_CLEANUP_ENABLED: 'false',
     PLAYWRIGHT_JSON_OUTPUT_FILE: path.join(rawDirectory, 'playwright-results.json')

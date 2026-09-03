@@ -39,6 +39,17 @@ test('repository-local evidence is rejected', () => {
   assert.doesNotThrow(() => assertOutside(root, path.join(os.tmpdir(), 'outside-evidence')));
 });
 
+test('browser and candidate builds use production mode without inheriting credentials', () => {
+  for (const id of ['browser-build', 'candidate-build']) {
+    const env = isolatedChildEnvironment({ NODE_ENV: 'test', GH_TOKEN: 'synthetic', N8N_TOKEN: 'synthetic' }, os.tmpdir(), id);
+    assert.equal(env.NODE_ENV, 'production');
+    assert.equal(env.GH_TOKEN, undefined);
+    assert.equal(env.N8N_TOKEN, undefined);
+    assert.equal(env.MERCHROUTE_OZON_MULTISTORE_FLEET_READY, 'false');
+  }
+  assert.equal(isolatedChildEnvironment({ NODE_ENV: 'production' }, os.tmpdir(), 'e2e').NODE_ENV, 'test');
+});
+
 test('failure diagnostics expose only tracked relative locations and fixed categories', () => {
   const file = 'scripts/package-release-candidate.test.mjs';
   const secret = 'synthetic-private-value-not-for-publication';
@@ -61,6 +72,13 @@ test('E2E diagnostics locate failures without leaking titles, errors or attachme
   assert.deepEqual(result.categories, ['TIMEOUT']);
   assert.ok(!JSON.stringify(result).includes('private'));
   assert.deepEqual(failureDiagnostics('', { sourceFiles: [], report }).failedCases, []);
+});
+
+test('Vitest workspace locations resolve only when the tracked suffix is unambiguous', () => {
+  const log = 'at src/services/example.test.ts:20:7';
+  const file = 'apps/server/src/services/example.test.ts';
+  assert.deepEqual(failureDiagnostics(log, { sourceFiles: [file] }).sourceLocations, [{ file, line: 20, column: 7 }]);
+  assert.deepEqual(failureDiagnostics(log, { sourceFiles: [file, 'apps/web/src/services/example.test.ts'] }).sourceLocations, []);
 });
 
 test('test logs need nonzero passes and reject failures, all skips, TODO and cancellation', () => {

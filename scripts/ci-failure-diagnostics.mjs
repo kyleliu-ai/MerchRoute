@@ -7,6 +7,11 @@ export function failureDiagnostics(log, { sourceFiles, report } = {}) {
   const locations = new Map();
   const categories = new Set();
   const add = (file, line, column = 0) => {
+    // Vitest reports paths relative to a workspace such as apps/server.
+    if (!allowed.has(file)) {
+      const candidates = [...allowed].filter((name) => name.endsWith('/' + file));
+      if (candidates.length === 1) file = candidates[0];
+    }
     if (!allowed.has(file) || !Number.isSafeInteger(line) || line < 1
       || !Number.isSafeInteger(column) || column < 0 || locations.size >= 100) return;
     const location = { file, line, column };
@@ -14,7 +19,7 @@ export function failureDiagnostics(log, { sourceFiles, report } = {}) {
   };
   const inspect = (raw) => {
     const text = stripAnsi(String(raw || '')).replaceAll('\\', '/');
-    for (const match of text.matchAll(/((?:apps|packages|scripts|deployment|tests)\/[a-zA-Z0-9_./-]+\.(?:m?[jt]sx?|cjs)):(\d+)(?::(\d+))?/g)) {
+    for (const match of text.matchAll(/((?:apps|packages|scripts|deployment|tests|src)\/[a-zA-Z0-9_./-]+\.(?:m?[jt]sx?|cjs)):(\d+)(?::(\d+))?/g)) {
       add(match[1], Number(match[2]), Number(match[3] || 0));
     }
     for (const [category, pattern] of [
