@@ -61,6 +61,8 @@ jobs:
         run: command -v ffmpeg >/dev/null || brew install ffmpeg
       - name: Verify deployment contracts
         run: node --import tsx scripts/run-ci-check.mjs --id deployment-${{ matrix.label }}-tests --record-dir "$RUNNER_TEMP/ci-records" --expected-commit "$MERCHROUTE_CI_EXPECTED_COMMIT" -- npm run deployment:test
+      - name: Verify portable single-developer contracts
+        run: node --import tsx scripts/run-ci-check.mjs --id deployment-${{ matrix.label }}-workflow --record-dir "$RUNNER_TEMP/ci-records" --expected-commit "$MERCHROUTE_CI_EXPECTED_COMMIT" -- npm run workflow:test
       - name: Verify n8n runtime scripts and actual TAP counts
         run: node --import tsx scripts/run-ci-check.mjs --id deployment-${{ matrix.label }}-runtime --record-dir "$RUNNER_TEMP/ci-records" --expected-commit "$MERCHROUTE_CI_EXPECTED_COMMIT" -- node --import tsx scripts/ci-regression-tests.mjs --suite n8n-runtime
       - name: Verify public deployment source

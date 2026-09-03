@@ -307,7 +307,7 @@ function VersionPanel({
         <span aria-hidden="true">{runtimeMeta.icon}</span><strong>{runtimeMeta.label}</strong>
       </div>
       <div className="about-version-builds">
-        <VersionBuild label="当前运行构建" primary={version.current.productVersion} secondary={shortSha(version.current.commitSha)} />
+        <VersionBuild label={version.current.buildChannel === 'candidate' ? '当前运行构建（候选）' : '当前运行构建'} primary={version.current.releaseTag || version.current.productVersion} secondary={shortSha(version.current.commitSha)} />
         <VersionBuild label={version.available?.source === 'release' ? 'GitHub Release' : 'GitHub main'} primary={version.available?.label || '暂不可用'} secondary={shortSha(version.available?.commitSha)} />
       </div>
       <div className="about-content-comparison" aria-label="内容范围核验结果">

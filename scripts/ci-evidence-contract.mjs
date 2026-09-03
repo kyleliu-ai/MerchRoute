@@ -3,6 +3,8 @@ import path from 'node:path';
 // These are independent required checks, not an arbitrary minimum job count.
 export const CI_JOBS = ['deployment-contract', 'jimeng-source', 'verify', 'postgres-integration', 'browser-tests', 'source-integrity', 'windows-safety', 'candidate-package'];
 export const CI_CHECKS = {
+  'deployment-windows-workflow': { job: 'deployment-contract', command: ['npm', 'run', 'workflow:test'], kind: 'tests', platform: 'win32' },
+  'deployment-macos-workflow': { job: 'deployment-contract', command: ['npm', 'run', 'workflow:test'], kind: 'tests', platform: 'darwin' },
   'deployment-windows-tests': { job: 'deployment-contract', command: ['npm', 'run', 'deployment:test'], kind: 'tests', platform: 'win32' },
   'deployment-windows-runtime': { job: 'deployment-contract', command: ['node', '--import', 'tsx', 'scripts/ci-regression-tests.mjs', '--suite', 'n8n-runtime'], kind: 'tests', platform: 'win32' },
   'deployment-windows-verify': { job: 'deployment-contract', command: ['npm', 'run', 'deployment:verify'], kind: 'exit', platform: 'win32' },

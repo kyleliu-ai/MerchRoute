@@ -18,6 +18,16 @@
 
 ## 当前发布契约与升级目标
 
+### 已登记单人开发机的优先处理规则
+
+如果仓库外存在 `MerchRoute/development/machine.json`，先读取[单人串行开发说明](../docs/SINGLE_DEVELOPER_WORKFLOW.zh-CN.md)并执行 `npm run workflow -- status`。固定目录中一次仅允许一个活动批次和一个写入任务；补充、测试、CI 修复复用该分支及 Draft PR，不按对话创建 worktree。
+
+本机为权威来源，默认本机 → GitHub。此类开发机不执行下文通用安装分支的“快进到 origin/main”步骤，也不能把用户粘贴本提示词当成覆盖授权。先只读核对源码树、公开历史映射和已验收基线；内容相同但 squash 提交不同只更新经过核验的映射，不 pull、merge 或 rebase 本机。出现批次外的远端内容先停止报告，再按前述规则二次确认。
+
+本批版本 `0.1.2` 为候选。开发完成、GitHub 已同步、正式运行已更新分别验收；v0.1.1 既有标签不可改写。独立运行包通过外部固定哈希核验全部源码、构建和依赖，无 `.git`、无旧 worktree 依赖；不得上线时重新编译替换已验收构建。
+
+升级不得把开发 5173/4184、测试 4183 接到生产 4173 或生产数据库。`merchroute_dev` / `merchroute_dev_app` 仅用于开发，真实 n8n、PostgreSQL、Jimeng、媒体和 Profile 保持原位置。本批迁移阶段 A/B 只完成候选和 Draft PR，不能更改启动入口；用户合并并发布 v0.1.2 后另行批准正式切换。切换前备份、检查活动任务及 PID，失败只回滚代码/入口，不盲目恢复业务状态，旧目录至少保留七天且清理另批审批。
+
 本提示词对应当前发布快照：Node.js `22.23.1`、npm `10.9.8`、n8n `2.32.6`、PostgreSQL `18.4`、Playwright `1.61.1`、Jimeng `0.9.1`；n8n 清单为 36 个唯一工作流和 3 个部署包；数据库映射为 `merchroute` → `merchroute_app`、`merchroute_n8n` → `merchroute_n8n`。
 
 升级目标必须从目标 `origin/main` 提交中的以下机器可读文件确定，不能只相信本提示词中的静态文字：

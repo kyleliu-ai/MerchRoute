@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { lstat, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { INSTALLED_MANIFEST, verifyInstalledRelease } from '../../../../scripts/lib/installed-release.mjs';
 
 export const CONTENT_FINGERPRINT_SCOPE_VERSION = 1;
 export const CONTENT_FINGERPRINT_CONTRACT_PATH = 'config/content-fingerprint-scope.json';
@@ -68,6 +69,12 @@ export function classifyContentPath(value: string, contract: FingerprintScopeCon
 }
 
 export async function collectLocalContentSnapshot(repoRoot: string, contract: FingerprintScopeContract): Promise<ContentFingerprintSnapshot> {
+  let installed = Boolean(process.env.MERCHROUTE_INSTALLED_MANIFEST_SHA256);
+  try { await lstat(path.join(repoRoot, INSTALLED_MANIFEST)); installed = true; } catch (error: any) { if (error?.code !== 'ENOENT') throw error; }
+  if (installed) {
+    const verified = await verifyInstalledRelease(repoRoot, process.env.MERCHROUTE_INSTALLED_MANIFEST_SHA256);
+    return collectGithubTreeSnapshot(verified.entries, contract);
+  }
   const rawOutput = await runGit(repoRoot, ['ls-files', '-z', '--cached', '--others', '--exclude-standard']);
   const candidates = rawOutput.split('\0').filter(Boolean).map((rawPath) => ({ rawPath, normalizedPath: normalizeRepositoryPath(rawPath) }));
   const included: Array<{ rawPath: string; normalizedPath: string; scope: ContentScope }> = [];

@@ -901,6 +901,8 @@ export type AboutVersionInfo = {
   scopeVersion: number;
   current: {
     productVersion: string;
+    buildChannel?: 'candidate' | 'release';
+    releaseTag?: string;
     configVersion: string;
     commitSha?: string;
     builtAt?: string;
