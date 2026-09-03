@@ -166,6 +166,17 @@ type DownloadWebhookRequest = {
   parentOutputDir: string;
 };
 export type ProductIdentityRecord = { sku: string; productName: string; variants: ProductVariant[] };
+export type PurchaseRepositoryOptions = {
+  pathLookupCandidates?: (value: string) => string[];
+  inspectLegacyReferences?: (value: unknown) => { changedStrings: number; changedKeys: number };
+};
+export type LegacyPurchaseReferenceCounts = {
+  databaseConfigured: boolean;
+  downloadJobs: number;
+  nonterminalDownloadJobs: number;
+  notifications: number;
+  unresolvedNotifications: number;
+};
 export type ColoredProductVariantInput = {
   name: string;
   wbColor: WbColorIdentity;
@@ -180,8 +191,13 @@ const PRODUCT_VARIANT_COLOR_COLUMNS = `id,name,normalized_name,sort_order,
 
 export class PurchaseRepository {
   private pool?: Pool;
+  private readonly pathLookupCandidates: (value: string) => string[];
+  private readonly inspectLegacyReferences?: (value: unknown) => { changedStrings: number; changedKeys: number };
 
-  constructor(private readonly connectionString?: string) {}
+  constructor(private readonly connectionString?: string, options: PurchaseRepositoryOptions = {}) {
+    this.pathLookupCandidates = options.pathLookupCandidates ?? ((value) => [value]);
+    this.inspectLegacyReferences = options.inspectLegacyReferences;
+  }
 
   get configured(): boolean { return Boolean(this.pool); }
 
@@ -330,17 +346,51 @@ export class PurchaseRepository {
   }
 
   async findProductIdentityByDownloadOutputDir(outputDir: string): Promise<ProductIdentityRecord | undefined> {
-    const normalized = normalizeProductDirectory(outputDir);
-    if (!normalized) return undefined;
+    const normalized = [...new Set(this.pathLookupCandidates(outputDir).map(normalizeProductDirectory).filter((value): value is string => Boolean(value)))];
+    if (!normalized.length) return undefined;
     const result = await this.query<{ sku: string; product_name: string }>(`
       SELECT p.sku, p.product_name
       FROM download_jobs j
       JOIN products p ON p.sku = j.sku
       WHERE j.status = 'SUCCEEDED'
-        AND LOWER(RTRIM(REPLACE(j.output_dir, CHR(92), '/'), '/')) = LOWER($1)
+        AND LOWER(RTRIM(REPLACE(j.output_dir, CHR(92), '/'), '/')) = ANY($1::text[])
       ORDER BY j.finished_at DESC NULLS LAST, j.created_at DESC
-      LIMIT 1`, [normalized]);
+      LIMIT 1`, [normalized.map((value) => value.toLocaleLowerCase('en-US'))]);
     return result.rows[0] ? { sku: result.rows[0].sku, productName: result.rows[0].product_name, variants: await this.listProductVariants(result.rows[0].sku) } : undefined;
+  }
+
+  async legacyRootReferenceCounts(legacyRoot?: string): Promise<LegacyPurchaseReferenceCounts> {
+    if (!this.configured || !legacyRoot) {
+      return { databaseConfigured: this.configured, downloadJobs: 0, nonterminalDownloadJobs: 0, notifications: 0, unresolvedNotifications: 0 };
+    }
+    const basename = path.win32.basename(legacyRoot.replaceAll('/', '\\')) || path.posix.basename(legacyRoot);
+    const pattern = `%${basename.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_')}%`;
+    const [jobs, notifications] = await Promise.all([
+      this.query<SqlRow>(`SELECT status,workflow_snapshot,request_body,result_json,output_dir
+        FROM download_jobs
+        WHERE CONCAT_WS(E'\\n',workflow_snapshot::text,request_body::text,result_json::text,output_dir) ILIKE $1 ESCAPE E'\\\\'`, [pattern]),
+      this.query<SqlRow>(`SELECT severity,resolved_at,details
+        FROM task_notifications
+        WHERE details::text ILIKE $1 ESCAPE E'\\\\'`, [pattern])
+    ]);
+    const hasExactReference = (value: unknown) => {
+      const stats = this.inspectLegacyReferences?.(value);
+      return stats ? stats.changedStrings + stats.changedKeys > 0 : countExactLegacyPathReferences(value, legacyRoot) > 0;
+    };
+    const exactJobs = jobs.rows.filter((row) => hasExactReference({
+      workflowSnapshot: row.workflow_snapshot,
+      requestBody: row.request_body,
+      result: row.result_json,
+      outputDir: row.output_dir
+    }));
+    const exactNotifications = notifications.rows.filter((row) => hasExactReference(row.details));
+    return {
+      databaseConfigured: true,
+      downloadJobs: exactJobs.length,
+      nonterminalDownloadJobs: exactJobs.filter((row) => ['QUEUED', 'WAITING_RESOURCE', 'RUNNING'].includes(String(row.status))).length,
+      notifications: exactNotifications.length,
+      unresolvedNotifications: exactNotifications.filter((row) => row.severity === 'ERROR' && !row.resolved_at).length
+    };
   }
 
   async findProductIdentitiesByFolderName(folderName: string): Promise<ProductIdentityRecord[]> {
@@ -1860,6 +1910,27 @@ function normalizeNotificationDetails(value: unknown): JsonRecord {
 
 function normalizeProductDirectory(value: string): string {
   return String(value || '').trim().replaceAll('\\', '/').replace(/\/+$/, '');
+}
+
+function countExactLegacyPathReferences(value: unknown, legacyRoot: string): number {
+  const flavor = path.win32.isAbsolute(legacyRoot) ? path.win32 : path.posix.isAbsolute(legacyRoot) ? path.posix : undefined;
+  if (!flavor) return 0;
+  const normalizedRoot = flavor.resolve(legacyRoot);
+  const seen = new WeakSet<object>();
+  const isMatch = (candidate: string) => {
+    if (candidate !== candidate.trim() || candidate.includes('\0') || !flavor.isAbsolute(candidate)) return false;
+    const relative = flavor.relative(normalizedRoot, flavor.resolve(candidate));
+    return relative === '' || (relative !== '..' && !relative.startsWith(`..${flavor.sep}`) && !flavor.isAbsolute(relative));
+  };
+  const visit = (entry: unknown): number => {
+    if (typeof entry === 'string') return isMatch(entry) ? 1 : 0;
+    if (!entry || typeof entry !== 'object' || entry instanceof Date || Buffer.isBuffer(entry) || seen.has(entry)) return 0;
+    seen.add(entry);
+    if (Array.isArray(entry)) return entry.reduce((total, item) => total + visit(item), 0);
+    return Object.entries(entry as Record<string, unknown>)
+      .reduce((total, [key, item]) => total + (isMatch(key) ? 1 : 0) + visit(item), 0);
+  };
+  return visit(value);
 }
 
 async function insertDownloadJob(client: PoolClient, sku: string, requestedWorkflowCode: string | undefined, options: {

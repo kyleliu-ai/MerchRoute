@@ -2040,7 +2040,7 @@ function LocalImportCreateView({ onViewImported }: { onViewImported: (sku: strin
                 <span>平台文件夹</span><span>子目录数</span><span className="modified-date-heading">最后修改时间 <ArrowDownOutlined /></span><span>操作</span>
               </div>}
               {isPlatformDirectory && !directories.isLoading && Boolean(directories.data?.directories.length) && <div className="local-directory-header is-product-media-header" aria-hidden="true">
-                <span /><span>变体目录</span><span className="creation-date-heading">创建日期 <ArrowDownOutlined /></span><span>平台来源</span><span>导入状态</span><span>操作</span>
+                <span>选择</span><span>变体目录</span><span className="creation-date-heading">创建日期 <ArrowDownOutlined /></span><span>平台来源</span><span>导入状态</span><span>操作</span>
               </div>}
               {directories.isLoading ? <Skeleton active paragraph={{ rows: 3 }} /> : directories.data?.directories.length ? directories.data.directories.map((directory) => <div className={`local-directory-row${isSourceRoot ? ' is-platform-root-row' : ''}${isPlatformDirectory ? ' is-product-media-row' : ''}`} key={directory.relativePath}>
                 {!isSourceRoot && <Checkbox checked={selected.includes(directory.relativePath)} onChange={(event) => toggleDirectory(directory.relativePath, event.target.checked)} aria-label={`选择 ${directory.relativePath}`} />}
@@ -2138,7 +2138,7 @@ function LocalImportHistoryView({ active }: { active: boolean }) {
   const detail = useQuery({ queryKey: ['local-import-detail', detailId], queryFn: () => api.localImport(detailId!), enabled: Boolean(detailId), retry: false });
   const retry = useMutation({
     mutationFn: (id: string) => api.retryLocalImport(id),
-    onSuccess: ({ import: value }) => { message.success(value.status === 'IMPORTED' ? `SKU ${value.sku} 的媒体复制已恢复` : '已提交重试'); void client.invalidateQueries({ queryKey: ['local-import-history'] }); void client.invalidateQueries({ queryKey: ['local-import-detail', value.id] }); },
+    onSuccess: ({ import: value }) => { message.success(value.status === 'IMPORTED' ? `SKU ${value.sku} 的媒体复制已恢复` : '已提交重试'); void client.invalidateQueries({ queryKey: ['local-import-history'] }); void client.invalidateQueries({ queryKey: ['local-import-detail', value.id] }); void client.invalidateQueries({ queryKey: ['local-import-directories'] }); },
     onError: (error: Error) => message.error(error instanceof ApiError ? error.userMessage : error.message)
   });
   const setDatePreset = (value: PurchaseDatePreset) => {

@@ -1,0 +1,573 @@
+{
+  "schemaVersion": 1,
+  "candidateId": "merchroute-github-publish-20260903-1108",
+  "baseline": {
+    "commit": "8a52c7760032167d86b26f36b045a849a6b0569f",
+    "status": "USER_AUTHORIZED_RECONSTRUCTION_NOT_ACCEPTED_RELEASE"
+  },
+  "auditedAt": "2026-09-03",
+  "sourceCandidate": {
+    "branch": "work/merchroute-complete-release-20260903-0951",
+    "commit": "26235db67baa4b99d15952571f152af8c6c65c9d",
+    "headTreeHash": "188f6431b2587ec3a4ad9a34f315c6a2c5cdb4ec",
+    "status": "COMMITTED_LOCAL_CANDIDATE_NOT_PUBLISHED"
+  },
+  "policy": {
+    "sourceAuthority": "LOCAL",
+    "defaultMode": "local",
+    "publication": "GITHUB_DRAFT_PR_ONLY_NOT_LOCAL_PUBLICATION",
+    "currentBranch": "work/merchroute-github-publish-20260903-1108",
+    "remoteReadRequired": false
+  },
+  "branches": [
+    {
+      "name": "agent/docs-workflow-parameter-options",
+      "head": "9faa765cbfd8d8ffd685445a2e48fb52bd5f7d50",
+      "featureId": "core-deployment",
+      "relation": "ANCESTOR"
+    },
+    {
+      "name": "agent/ozon-publishing-safety-20260824",
+      "head": "e2a2ef32c533d93f47385a09f334f225dbd780cf",
+      "featureId": "core-deployment",
+      "relation": "ANCESTOR"
+    },
+    {
+      "name": "agent/readme-owner-contact",
+      "head": "9703102881f031e11602c2429e82fb24d83b0157",
+      "featureId": "core-deployment",
+      "relation": "ANCESTOR"
+    },
+    {
+      "name": "agent/readme-ui-and-deployment-docs",
+      "head": "117ef016b0f8be20758dc1f76802221f75d00403",
+      "featureId": "core-deployment",
+      "relation": "ANCESTOR"
+    },
+    {
+      "name": "agent/sync-local-workflows-20260827",
+      "head": "e2a2ef32c533d93f47385a09f334f225dbd780cf",
+      "featureId": "core-deployment",
+      "relation": "ANCESTOR"
+    },
+    {
+      "name": "main",
+      "head": "e77d63efb938dafc62e97aef666d338b7aa388d3",
+      "featureId": "core-deployment",
+      "relation": "ANCESTOR"
+    },
+    {
+      "name": "work/about-content-fingerprint-20260901-1418",
+      "head": "1164c490d1b815b8e7cbdc312f3c2c6189b3e26c",
+      "featureId": "about-fingerprints",
+      "relation": "PATCH_EQUIVALENT"
+    },
+    {
+      "name": "work/about-content-fingerprint-pr-20260901-1506",
+      "head": "53f1c1aaf0d877b96ba96e959a3f4f6f3721f9eb",
+      "featureId": "about-fingerprints",
+      "relation": "PATCH_EQUIVALENT"
+    },
+    {
+      "name": "work/about-token-self-service-20260901",
+      "head": "73d2e710462bf3babdce95b2ac8b0679f51beefc",
+      "featureId": "github-token-self-service",
+      "relation": "ANCESTOR"
+    },
+    {
+      "name": "work/about-token-ui-20260901-1722",
+      "head": "c7120b6fce25219fa7ce644a9addf0ffbb63389c",
+      "featureId": "github-token-self-service",
+      "relation": "PATCH_EQUIVALENT"
+    },
+    {
+      "name": "work/agents-branch-rules-20260827-0939",
+      "head": "e2a2ef32c533d93f47385a09f334f225dbd780cf",
+      "featureId": "core-deployment",
+      "relation": "ANCESTOR"
+    },
+    {
+      "name": "work/github-readonly-token-20260901-1625",
+      "head": "eda59930d11bf256d2a637ef8b2a5e742f1588b3",
+      "featureId": "github-readonly-access",
+      "relation": "PATCH_EQUIVALENT"
+    },
+    {
+      "name": "work/github-readonly-token-pr-20260901-1658",
+      "head": "6acaa54ea5d8ca099a7fe2b4d7f969f5f7593608",
+      "featureId": "github-readonly-access",
+      "relation": "PATCH_EQUIVALENT"
+    },
+    {
+      "name": "work/local-import-about-20260831-1307",
+      "head": "72fde9575152e77f106a2b2ec18f4564514c5f09",
+      "featureId": "local-import-and-name-validation",
+      "relation": "AGGREGATE_EQUIVALENT"
+    },
+    {
+      "name": "work/local-import-directory-status-20260902-1045",
+      "head": "0a7f3b7382e0429665ba74c1e6ce9f284023cc59",
+      "featureId": "local-import-directory-status",
+      "relation": "INTEGRATE"
+    },
+    {
+      "name": "work/merchroute-change-20260827-0958",
+      "head": "7bfb072f548d75744305a2faa38f23722c4b81cf",
+      "featureId": "local-import-and-name-validation",
+      "relation": "ANCESTOR"
+    },
+    {
+      "name": "work/project-release-guardrails-20260903-0926",
+      "head": "8a52c7760032167d86b26f36b045a849a6b0569f",
+      "featureId": "project-release-guardrails",
+      "relation": "UNCOMMITTED_DOCUMENT"
+    },
+    {
+      "name": "work/purchase-product-query-20260901-1046",
+      "head": "19e9886d0b4562dd70e46a4431f0da835b61e72c",
+      "featureId": "purchase-product-query",
+      "relation": "AGGREGATE_EQUIVALENT"
+    },
+    {
+      "name": "work/purchase-product-url-query-20260901-1525",
+      "head": "2b79a046230b408aff24c90c2221d03ce23934d0",
+      "featureId": "purchase-url-query",
+      "relation": "PATCH_EQUIVALENT"
+    },
+    {
+      "name": "work/retire-n8n-global-junction-20260902-1725",
+      "head": "8a52c7760032167d86b26f36b045a849a6b0569f",
+      "featureId": "junction-retirement",
+      "relation": "BASELINE"
+    },
+    {
+      "name": "work/review-product-folder-open-20260902-1535",
+      "head": "52be6891c1e5632870796bc0132177f8a2d2eb11",
+      "featureId": "review-open-product-folder",
+      "relation": "ANCESTOR"
+    },
+    {
+      "name": "work/review-product-folder-open-publish-20260902-1651",
+      "head": "41fb7dee60957629d7a96e16c7ada0ea2bc22a0f",
+      "featureId": "review-open-product-folder",
+      "relation": "PATCH_EQUIVALENT"
+    },
+    {
+      "name": "work/sync-all-local-release-20260901-1230",
+      "head": "c8a048c781fc42c1d07292981a467ac86bf5c978",
+      "featureId": "purchase-product-query",
+      "relation": "PATCH_EQUIVALENT"
+    },
+    {
+      "name": "work/wb-restart-active-guard-20260902-1158",
+      "head": "72c329e65570eb8cac0392beee2ad79ee8e997bc",
+      "featureId": "wb-restart-protection",
+      "relation": "INTEGRATE"
+    },
+    {
+      "name": "work/wb-restart-active-guard-publish-20260902-1651",
+      "head": "0f36cc24d08da174f5a0337606629b099cd1f466",
+      "featureId": "wb-restart-protection",
+      "relation": "PATCH_EQUIVALENT_OF_MISSING"
+    },
+    {
+      "name": "work/merchroute-complete-release-20260903-0951",
+      "head": "26235db67baa4b99d15952571f152af8c6c65c9d",
+      "featureId": "core-deployment",
+      "relation": "COMMITTED_COMPLETE_CANDIDATE"
+    }
+  ],
+  "equivalenceEvidence": [
+    {
+      "kind": "tree",
+      "refs": [
+        "bf73e157733c38625d4f44dad30382089582dff0",
+        "2b6acd9"
+      ],
+      "hash": "047d7ec334ab6d91d587b5676967e317f4b9a433",
+      "meaning": "关于页面和本地导入目录优化"
+    },
+    {
+      "kind": "tree",
+      "refs": [
+        "73d2e710462bf3babdce95b2ac8b0679f51beefc",
+        "5ee168c"
+      ],
+      "hash": "a904c884bc3d51d2d9fa72595f0a23d17034949a",
+      "meaning": "自助 Token 不可仅按 git cherry 的加号误判缺失"
+    },
+    {
+      "kind": "patch-id",
+      "refs": [
+        "0a7f3b7382e0429665ba74c1e6ce9f284023cc59",
+        "7c6e224"
+      ],
+      "hash": "75e6a389fcdf94c787cc6a337b7e3c0cea19be4e",
+      "meaning": "目录状态开发和发布副本"
+    },
+    {
+      "kind": "patch-id",
+      "refs": [
+        "52be6891c1e5632870796bc0132177f8a2d2eb11",
+        "41fb7dee60957629d7a96e16c7ada0ea2bc22a0f"
+      ],
+      "hash": "b52cb4ceb3dca26e0703c3778bbdb150e6e7a362",
+      "meaning": "打开产品目录已包含"
+    },
+    {
+      "kind": "patch-id",
+      "refs": [
+        "72c329e65570eb8cac0392beee2ad79ee8e997bc",
+        "0f36cc24d08da174f5a0337606629b099cd1f466"
+      ],
+      "hash": "4963ae1c8c540a67be7c831ae181aa21d102ab56",
+      "meaning": "WB 重启保护开发和发布副本"
+    },
+    {
+      "kind": "aggregate-patch-id",
+      "refs": [
+        "bf73e15..19e9886",
+        "c8a048c781fc42c1d07292981a467ac86bf5c978",
+        "38c6cbb"
+      ],
+      "hash": "1515e4dbdf7457af5c487df64afddcca02271855",
+      "meaning": "产品名校验与采购查询聚合提交"
+    }
+  ],
+  "requiredChecks": [
+    {
+      "id": "check",
+      "description": "npm run check"
+    },
+    {
+      "id": "postgres-integration",
+      "description": "隔离 PostgreSQL 集成测试"
+    },
+    {
+      "id": "e2e",
+      "description": "npm run test:e2e"
+    },
+    {
+      "id": "jimeng",
+      "description": "npm run jimeng:test"
+    },
+    {
+      "id": "deployment-verify",
+      "description": "npm run deployment:verify"
+    },
+    {
+      "id": "gitleaks",
+      "description": "Gitleaks 扫描候选受控文件"
+    },
+    {
+      "id": "diff-check",
+      "description": "git diff --check"
+    },
+    {
+      "id": "release-verifier-tests",
+      "description": "node --import tsx --test scripts/verify-release-completeness.test.mjs"
+    },
+    {
+      "id": "restart-safety",
+      "description": "scripts/test-restart-windows-safety.ps1"
+    },
+    {
+      "id": "retirement-safety",
+      "description": "scripts/test-retire-n8n-global-junction-safety.ps1"
+    },
+    {
+      "id": "isolated-runtime",
+      "description": "隔离端口 API/DOM/320px 回读，不切换 4173"
+    }
+  ],
+  "features": [
+    {
+      "id": "core-deployment",
+      "title": "现有采购、审核、定价、WB/OZON、部署及文档能力",
+      "action": "PRESERVE",
+      "sourceChecks": [
+        {
+          "path": "README.md",
+          "includes": [
+            "MerchRoute"
+          ]
+        },
+        {
+          "path": "deployment/n8n/scripts/verify-workflows.mjs"
+        },
+        {
+          "path": "apps/server/src/app.ts"
+        }
+      ],
+      "checkIds": [
+        "check",
+        "e2e",
+        "jimeng",
+        "deployment-verify"
+      ]
+    },
+    {
+      "id": "local-import-and-name-validation",
+      "title": "E000 本地导入、多媒体目录、采购/零售价、来源隔离及产品名校验",
+      "action": "PRESERVE",
+      "sourceChecks": [
+        {
+          "path": "apps/server/src/services/local-import/index.ts",
+          "includes": [
+            "canonicalizePath",
+            "sortLocalImportDirectories"
+          ]
+        },
+        {
+          "path": "packages/shared/src/index.ts",
+          "includes": [
+            "LOCAL_IMPORT_PRODUCT_NAME_MAX_LENGTH"
+          ]
+        },
+        {
+          "path": "tests/e2e/local-import.spec.ts"
+        }
+      ],
+      "checkIds": [
+        "check",
+        "postgres-integration",
+        "e2e"
+      ]
+    },
+    {
+      "id": "purchase-product-query",
+      "title": "采购产品信息查询",
+      "action": "PRESERVE",
+      "sourceChecks": [
+        {
+          "path": "tests/e2e/purchase-product-query.spec.ts"
+        },
+        {
+          "path": "apps/server/src/repositories/purchases.ts",
+          "includes": [
+            "PurchaseEntryOriginSourceType"
+          ]
+        }
+      ],
+      "checkIds": [
+        "check",
+        "postgres-integration",
+        "e2e"
+      ]
+    },
+    {
+      "id": "purchase-url-query",
+      "title": "完整录入 URL 精确查询",
+      "action": "PRESERVE",
+      "sourceChecks": [
+        {
+          "path": "apps/server/src/repositories/purchases.ts",
+          "includes": [
+            "provider_url_key=$"
+          ]
+        }
+      ],
+      "checkIds": [
+        "postgres-integration",
+        "e2e"
+      ]
+    },
+    {
+      "id": "about-fingerprints",
+      "title": "关于页面内容指纹与构建身份",
+      "action": "PRESERVE",
+      "sourceChecks": [
+        {
+          "path": "apps/server/src/services/content-fingerprint.ts",
+          "includes": [
+            "collectLocalContentSnapshot"
+          ]
+        },
+        {
+          "path": "apps/web/src/about.tsx"
+        },
+        {
+          "path": "scripts/generate-build-info.mjs"
+        }
+      ],
+      "checkIds": [
+        "check",
+        "e2e",
+        "isolated-runtime"
+      ]
+    },
+    {
+      "id": "github-readonly-access",
+      "title": "GitHub 只读版本查询认证",
+      "action": "PRESERVE",
+      "sourceChecks": [
+        {
+          "path": "scripts/configure-github-readonly-token.ps1"
+        },
+        {
+          "path": "apps/server/src/services/about-version.ts"
+        }
+      ],
+      "checkIds": [
+        "check",
+        "e2e"
+      ]
+    },
+    {
+      "id": "github-token-self-service",
+      "title": "自助 Token 设置",
+      "action": "PRESERVE",
+      "sourceChecks": [
+        {
+          "path": "apps/server/src/services/about-github-access.ts",
+          "includes": [
+            "createAboutGithubAccessService"
+          ]
+        },
+        {
+          "path": "apps/server/src/routes/about.test.ts"
+        }
+      ],
+      "checkIds": [
+        "check",
+        "e2e"
+      ]
+    },
+    {
+      "id": "local-import-directory-status",
+      "title": "目录状态和字面六列表头",
+      "action": "INTEGRATE",
+      "sourceChecks": [
+        {
+          "path": "apps/server/src/services/local-import/index.ts",
+          "includes": [
+            "importStatus",
+            "canonicalizePath"
+          ]
+        },
+        {
+          "path": "apps/server/src/repositories/purchases.ts",
+          "includes": [
+            "listLocalImportSourceRegistrations"
+          ]
+        },
+        {
+          "path": "apps/web/src/App.tsx",
+          "includes": [
+            "<span>选择</span>",
+            "<span>导入状态</span>"
+          ]
+        }
+      ],
+      "checkIds": [
+        "check",
+        "postgres-integration",
+        "e2e",
+        "isolated-runtime"
+      ],
+      "acceptance": [
+        "已登记 COPYING/IMPORTED/COPY_FAILED_RETRYABLE 的多目录分别显示已导入；重复跳过不登记来源",
+        "规范化旧 Junction 历史根与当前配置，Windows/POSIX 语义正确",
+        "精确六列表头、已导入仍可选择打开、320px 无横向溢出"
+      ]
+    },
+    {
+      "id": "review-open-product-folder",
+      "title": "审核打开真实产品文件夹",
+      "action": "PRESERVE",
+      "sourceChecks": [
+        {
+          "path": "apps/server/src/services/local-directory-opener.ts",
+          "includes": [
+            "class LocalDirectoryOpener",
+            "canonicalizePath"
+          ]
+        },
+        {
+          "path": "tests/e2e/review-open-folder.spec.ts"
+        }
+      ],
+      "checkIds": [
+        "check",
+        "e2e"
+      ]
+    },
+    {
+      "id": "wb-restart-protection",
+      "title": "WB 活跃上品拒绝重启",
+      "action": "INTEGRATE",
+      "sourceChecks": [
+        {
+          "path": "scripts/restart-windows.ps1",
+          "includes": [
+            "ForceActiveWbPublishing",
+            "/api/v1/wb/automation/jobs"
+          ]
+        },
+        {
+          "path": "scripts/test-restart-windows-safety.ps1"
+        }
+      ],
+      "checkIds": [
+        "restart-safety",
+        "check"
+      ],
+      "acceptance": [
+        "六种活跃状态和查询失败均在停止进程前阻断；本阶段不执行服务重启或强制开关"
+      ]
+    },
+    {
+      "id": "junction-retirement",
+      "title": "旧 n8n Junction 退役与全部安全修复",
+      "action": "PRESERVE",
+      "sourceChecks": [
+        {
+          "path": "scripts/retire-n8n-global-junction.ps1"
+        },
+        {
+          "path": "scripts/test-retire-n8n-global-junction-safety.ps1"
+        },
+        {
+          "path": "apps/server/src/services/local-import/index.ts",
+          "includes": [
+            "validatedRuntimeConfigurationSnapshot"
+          ]
+        }
+      ],
+      "checkIds": [
+        "check",
+        "retirement-safety",
+        "isolated-runtime"
+      ],
+      "acceptance": [
+        "保留受控路径映射、快照校验、启动/工具链/ACL/备份修复；不重新执行退役或生产迁移"
+      ]
+    },
+    {
+      "id": "project-release-guardrails",
+      "title": "项目级开发与发布约束",
+      "action": "INTEGRATE",
+      "sourceChecks": [
+        {
+          "path": "AGENTS.md",
+          "includes": [
+            "发布基线",
+            "Worktree"
+          ]
+        },
+        {
+          "path": "scripts/verify-release-completeness.mjs"
+        },
+        {
+          "path": "scripts/verify-release-completeness.test.mjs"
+        }
+      ],
+      "checkIds": [
+        "release-verifier-tests",
+        "gitleaks",
+        "diff-check"
+      ],
+      "sourceDocumentSha256": "106d42a6e9b461d3a36e79f3c10fff5f3d5068efddada5e1a2a61f48ba931382"
+    }
+  ]
+}

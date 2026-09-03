@@ -104,6 +104,7 @@ export class SubmissionService {
       return this.runBatch(`BATCH-RETRY-${randomUUID()}`, [pending.id], pending.conflictPolicy);
     }
     const task = await this.scanner.getTask(pending.taskId);
+    const compatibleTaskIds = [task.taskId, pending.taskId];
     const stage = this.config.get().stages.find((item) => item.id === pending.sourceStageId);
     if (!stage?.approvedArchiveRoot) throw new AppError('ARCHIVE_ROOT_UNAVAILABLE', '审核归档目录未配置');
     await this.ensureWritableDirectory(stage.approvedArchiveRoot, 'ARCHIVE_ROOT_UNAVAILABLE');
@@ -111,7 +112,7 @@ export class SubmissionService {
     const archiveStaging = path.join(stage.approvedArchiveRoot, '.staging');
     const archiveTemp = path.join(archiveStaging, `${path.basename(history.targetFolder)}.__tmp__RETRY-${randomUUID()}`);
     try {
-      if (!(await this.isCompatibleArchive(archiveFinal, task.taskId, pending.selectedRelativePaths))) {
+      if (!(await this.isCompatibleArchive(archiveFinal, compatibleTaskIds, pending.selectedRelativePaths))) {
         if (await stat(archiveFinal).catch(() => null)) throw new AppError('TARGET_FOLDER_EXISTS', '审核归档目录仍被不兼容内容占用', { path: archiveFinal });
         await mkdir(archiveStaging, { recursive: true });
         await cp(history.targetFolder, archiveTemp, { recursive: true, errorOnExist: true, force: false });
@@ -185,7 +186,7 @@ export class SubmissionService {
           taskId: pending.taskId,
           sourceStageId: pending.sourceStageId,
           targetStageId: pending.targetStageId,
-          sourceFolder: review?.sourceFolder || '',
+          sourceFolder: task.sourceFolder,
           selectedImageCount: pending.selectedRelativePaths.length,
           productSku: pending.productSku,
           productNameSnapshot: pending.productNameSnapshot,
@@ -269,7 +270,7 @@ export class SubmissionService {
     await mkdir(targetTemp, { recursive: false });
 
     const record: SubmissionRecord = {
-      submissionId, pendingSubmissionId: pending.id, taskId: task.taskId, sourceStageId: stage.id,
+      submissionId, pendingSubmissionId: pending.id, taskId: pending.taskId, sourceStageId: stage.id,
       targetStageId: target.targetStageId, sourceFolder: task.sourceFolder, selectedImageCount: sourceImages.length,
       selectedRelativePaths: [...pending.selectedRelativePaths],
       productSku: currentProduct.sku, productNameSnapshot: currentProduct.productName,
@@ -310,15 +311,15 @@ export class SubmissionService {
 
       await this.setProgress(batchId, pending.id, { step: SUBMISSION_STEPS[2] });
       if (target.copyRootMetadata) await this.copyMetadata(task.sourceFolder, path.join(targetTemp, 'metadata'));
-      const approvedAt = this.store.read().reviews.find((item) => item.taskId === task.taskId)?.approvedAt || startedAt;
+      const approvedAt = this.store.getReview(task.taskId)?.approvedAt || startedAt;
       const manifest = {
-        schemaVersion: '1.0', taskId: task.taskId, sourceStageId: stage.id, sourceFolderName: task.sourceFolderName,
+        schemaVersion: '1.0', taskId: pending.taskId, sourceStageId: stage.id, sourceFolderName: task.sourceFolderName,
         sourceFolderPath: task.sourceFolder, targetStageId: target.targetStageId, packageMode: target.packageMode,
         selectedImageCount: sourceImages.length, selectedFiles, n8nParameterFileName, approvedAt,
         productSku: currentProduct.sku, productName: currentProduct.productName, variantId: pending.variantId, variantName: pending.variantName
       };
       const handoff = {
-        schemaVersion: '1.0', submissionId, taskId: task.taskId, sourceStageId: stage.id,
+        schemaVersion: '1.0', submissionId, taskId: pending.taskId, sourceStageId: stage.id,
         targetStageId: target.targetStageId, sourceFolderName: task.sourceFolderName, targetFolderName: nameInfo.name,
         revision: nameInfo.revision, n8nParameterFileName, submittedAt: startedAt, submittedBy: 'local-user',
         productSku: currentProduct.sku, productName: currentProduct.productName, variantId: pending.variantId, variantName: pending.variantName
@@ -339,7 +340,7 @@ export class SubmissionService {
 
       await this.setProgress(batchId, pending.id, { step: SUBMISSION_STEPS[5] });
       await this.writeJson(path.join(targetTemp, '_READY.json'), {
-        schemaVersion: '1.0', ready: true, submissionId, taskId: task.taskId, sourceStageId: stage.id,
+        schemaVersion: '1.0', ready: true, submissionId, taskId: pending.taskId, sourceStageId: stage.id,
         targetStageId: target.targetStageId, imageCount: sourceImages.length, n8nParameterFileName, createdAt: new Date().toISOString()
       });
       await this.setProgress(batchId, pending.id, { step: SUBMISSION_STEPS[6] });
@@ -418,8 +419,8 @@ export class SubmissionService {
           const item = db.pendingSubmissions.find((candidate) => candidate.id === pending.id);
           if (item) { item.status = 'FAILED'; item.lastError = `${record.errorCode}: ${record.errorMessage}`; }
         }
-        const remainingForTask = db.pendingSubmissions.filter((item) => item.taskId === task.taskId);
-        const review = db.reviews.find((item) => item.taskId === task.taskId);
+        const remainingForTask = db.pendingSubmissions.filter((item) => item.taskId === pending.taskId);
+        const review = db.reviews.find((item) => item.taskId === pending.taskId);
         if (review) review.status = record.status === 'SUCCESS' ? (remainingForTask.length ? 'PARTIALLY_SUBMITTED' : 'SUBMITTED') : 'PARTIALLY_SUBMITTED';
       });
       return { pendingSubmissionId: pending.id, status: record.status, submissionId, errorCode: record.errorCode, errorMessage: record.errorMessage };
@@ -446,13 +447,14 @@ export class SubmissionService {
     if (pending.status === 'PENDING' || !stage.approvedArchiveRoot) return null;
     const folderName = target.folderNameTemplate.replaceAll('{sourceName}', task.sourceFolderName);
     const existingTarget = path.join(target.targetQueueRoot, folderName);
-    if (!(await this.isCompatibleArchive(existingTarget, task.taskId, pending.selectedRelativePaths))) return null;
+    const compatibleTaskIds = [task.taskId, pending.taskId];
+    if (!(await this.isCompatibleArchive(existingTarget, compatibleTaskIds, pending.selectedRelativePaths))) return null;
     const archiveFinal = path.join(stage.approvedArchiveRoot, folderName);
     const archiveStaging = path.join(stage.approvedArchiveRoot, '.staging');
     const archiveTemp = path.join(archiveStaging, `${folderName}.__tmp__RECOVER-${randomUUID()}`);
     await this.setProgress(batchId, pending.id, { step: SUBMISSION_STEPS[7] });
     try {
-      if (!(await this.isCompatibleArchive(archiveFinal, task.taskId, pending.selectedRelativePaths))) {
+      if (!(await this.isCompatibleArchive(archiveFinal, compatibleTaskIds, pending.selectedRelativePaths))) {
         if (await stat(archiveFinal).catch(() => null)) throw new AppError('TARGET_FOLDER_EXISTS', '审核归档目录已存在且内容与恢复任务不同', { path: archiveFinal });
         await mkdir(archiveStaging, { recursive: true });
         await cp(existingTarget, archiveTemp, { recursive: true, errorOnExist: true, force: false });
@@ -466,11 +468,11 @@ export class SubmissionService {
         if (previous) {
           previous.status = 'SUCCESS'; previous.archiveFolder = archiveFinal; previous.errorCode = undefined; previous.errorMessage = undefined; previous.completedAt = completedAt;
         } else {
-          db.submissionHistory.unshift({ submissionId: recoveredId, pendingSubmissionId: pending.id, taskId: task.taskId, sourceStageId: stage.id, targetStageId: target.targetStageId, sourceFolder: task.sourceFolder, targetFolder: existingTarget, archiveFolder: archiveFinal, selectedImageCount: pending.selectedRelativePaths.length, selectedRelativePaths: [...pending.selectedRelativePaths], productSku: pending.productSku, productNameSnapshot: pending.productNameSnapshot, status: 'SUCCESS', startedAt: completedAt, completedAt });
+          db.submissionHistory.unshift({ submissionId: recoveredId, pendingSubmissionId: pending.id, taskId: pending.taskId, sourceStageId: stage.id, targetStageId: target.targetStageId, sourceFolder: task.sourceFolder, targetFolder: existingTarget, archiveFolder: archiveFinal, selectedImageCount: pending.selectedRelativePaths.length, selectedRelativePaths: [...pending.selectedRelativePaths], productSku: pending.productSku, productNameSnapshot: pending.productNameSnapshot, status: 'SUCCESS', startedAt: completedAt, completedAt });
         }
         db.pendingSubmissions = db.pendingSubmissions.filter((item) => item.id !== pending.id);
-        const review = db.reviews.find((item) => item.taskId === task.taskId);
-        if (review) review.status = db.pendingSubmissions.some((item) => item.taskId === task.taskId) ? 'PARTIALLY_SUBMITTED' : 'SUBMITTED';
+        const review = db.reviews.find((item) => item.taskId === pending.taskId);
+        if (review) review.status = db.pendingSubmissions.some((item) => item.taskId === pending.taskId) ? 'PARTIALLY_SUBMITTED' : 'SUBMITTED';
       });
       return { pendingSubmissionId: pending.id, status: 'SUCCESS', submissionId: recoveredId };
     } catch (error) {
@@ -493,12 +495,13 @@ export class SubmissionService {
 
   private flattenName(relativePath: string): string { return relativePath.split('/').join('__'); }
 
-  private async isCompatibleArchive(directory: string, taskId: string, selectedPaths: string[]): Promise<boolean> {
+  private async isCompatibleArchive(directory: string, taskIds: string | string[], selectedPaths: string[]): Promise<boolean> {
     try {
       const ready = JSON.parse(await readFile(path.join(directory, '_READY.json'), 'utf8'));
       const manifest = JSON.parse(await readFile(path.join(directory, 'selection-manifest.json'), 'utf8'));
       const archivedPaths = orderedManifestSourcePaths(manifest.selectedFiles);
-      return ready.ready === true && ready.taskId === taskId && manifest.taskId === taskId && JSON.stringify(archivedPaths) === JSON.stringify(selectedPaths);
+      const compatibleTaskIds = new Set(Array.isArray(taskIds) ? taskIds : [taskIds]);
+      return ready.ready === true && compatibleTaskIds.has(ready.taskId) && compatibleTaskIds.has(manifest.taskId) && JSON.stringify(archivedPaths) === JSON.stringify(selectedPaths);
     } catch {
       return false;
     }

@@ -206,7 +206,8 @@ export class OzonPublishingService {
     private readonly pricing?: PricingRepository,
     private readonly descriptions?: Pick<E003DescriptionSourceService, 'resolveVariants'>,
     private readonly titleTranslator?: OzonTitleTranslator,
-    n8nExecutionReader?: (executionId: string) => Promise<Record<string, unknown> | undefined>
+    n8nExecutionReader?: (executionId: string) => Promise<Record<string, unknown> | undefined>,
+    private readonly compatibility: { canonicalizePath: (value: string) => string } = { canonicalizePath: (value) => value }
   ) {
     this.n8nExecutionReader = n8nExecutionReader ?? readOzonP002Execution;
   }
@@ -1043,7 +1044,7 @@ export class OzonPublishingService {
     });
     return {
       ...result,
-      items: result.items.map((job) => withRuntimePaths(job, settings.rootDirectory))
+      items: result.items.map((job) => withRuntimePaths(job, settings.rootDirectory, this.compatibility.canonicalizePath))
     };
   }
 
@@ -1053,13 +1054,13 @@ export class OzonPublishingService {
       this.repository.getSettings()
     ]);
     if (!settings.enabled && !ozonJobHasRemoteProgress(job)) throw ozonManagementDisabledError();
-    return withRuntimePaths(job, settings.rootDirectory);
+    return withRuntimePaths(job, settings.rootDirectory, this.compatibility.canonicalizePath);
   }
 
   async claimRuntimeJob(input: OzonRuntimeClaimInput): Promise<{ items: OzonPublishJob[] }> {
     const settings = await this.repository.getSettings();
     const job = await this.repository.claimRuntimeJob({ ...input, remoteOnly: !settings.enabled });
-    return { items: job ? [withRuntimePaths(job, settings.rootDirectory)] : [] };
+    return { items: job ? [withRuntimePaths(job, settings.rootDirectory, this.compatibility.canonicalizePath)] : [] };
   }
 
   async renewRuntimeLease(id: string, input: OzonRuntimeLeaseInput): Promise<{ job: OzonPublishJob }> {
@@ -1074,11 +1075,16 @@ export class OzonPublishingService {
   }
 
   async listHistoricalNetworkRecoveryCandidates(limit?: number): Promise<{ items: OzonPublishJob[] }> {
-    return { items: await this.repository.listHistoricalNetworkRecoveryCandidates(limit) };
+    const [items, settings] = await Promise.all([
+      this.repository.listHistoricalNetworkRecoveryCandidates(limit),
+      this.repository.getSettings()
+    ]);
+    return { items: items.map((job) => withRuntimePaths(job, settings.rootDirectory, this.compatibility.canonicalizePath)) };
   }
 
   async recoverHistoricalNetworkJob(id: string, rowVersion: number): Promise<{ job: OzonPublishJob }> {
-    const current = await this.repository.getJob(id);
+    const [persistedCurrent, settings] = await Promise.all([this.repository.getJob(id), this.repository.getSettings()]);
+    const current = withRuntimePaths(persistedCurrent, settings.rootDirectory, this.compatibility.canonicalizePath);
     if (current.rowVersion !== rowVersion) {
       throw new AppError('TASK_LOCKED', 'OZON 上品任务状态已变化，请刷新后重试', {
         id,
@@ -1093,21 +1099,24 @@ export class OzonPublishingService {
         errorCode: current.lastErrorCode
       }, 409);
     }
-    return {
-      job: await this.repository.recoverHistoricalNetworkJob(
+    const recovered = await this.repository.recoverHistoricalNetworkJob(
         id,
         rowVersion,
-        (lockedJob) => this.clearTerminalDirectoryMarker(lockedJob)
-      )
-    };
+        (lockedJob) => this.clearTerminalDirectoryMarker(withRuntimePaths(lockedJob, settings.rootDirectory, this.compatibility.canonicalizePath))
+      );
+    return { job: withRuntimePaths(recovered, settings.rootDirectory, this.compatibility.canonicalizePath) };
   }
 
   async recoverKnownPrePlatformFailure(
     id: string,
     input: OzonKnownPrePlatformFailureRecoveryInput
   ): Promise<OzonKnownPrePlatformFailureRecoveryResult> {
-    const preview = await this.repository.recoverKnownPrePlatformFailure(id, { ...input, dryRun: true });
-    if (preview.status === 'ALREADY_RECOVERED') return preview;
+    const [persistedJob, settings] = await Promise.all([this.repository.getJob(id), this.repository.getSettings()]);
+    const runtimeProjection = legacyRuntimePathProjection(persistedJob, settings.rootDirectory, this.compatibility.canonicalizePath);
+    const preview = await this.repository.recoverKnownPrePlatformFailure(id, { ...input, dryRun: true }, undefined, runtimeProjection);
+    if (preview.status === 'ALREADY_RECOVERED') {
+      return { ...preview, job: withRuntimePaths(preview.job, settings.rootDirectory, this.compatibility.canonicalizePath) };
+    }
     const previewChecks = await this.validateKnownPrePlatformFailureChecks(preview.job, input.reason);
     if (input.dryRun) return { ...preview, checks: previewChecks };
 
@@ -1122,20 +1131,29 @@ export class OzonPublishingService {
           await this.clearTerminalDirectoryMarker(lockedJob);
         }
         return committedChecks;
-      }
+      },
+      runtimeProjection
     );
-    return { ...recovered, ...(committedChecks ? { checks: committedChecks } : {}) };
+    return {
+      ...recovered,
+      job: withRuntimePaths(recovered.job, settings.rootDirectory, this.compatibility.canonicalizePath),
+      ...(committedChecks ? { checks: committedChecks } : {})
+    };
   }
 
   async recoverKnownPostPlatformMinPriceFailure(
     id: string,
     input: OzonKnownPostPlatformMinPriceRecoveryInput
   ): Promise<OzonKnownPostPlatformMinPriceRecoveryResult> {
+    const [persistedJob, settings] = await Promise.all([this.repository.getJob(id), this.repository.getSettings()]);
+    const runtimeProjection = legacyRuntimePathProjection(persistedJob, settings.rootDirectory, this.compatibility.canonicalizePath);
     const preview = await this.repository.recoverKnownPostPlatformMinPriceFailure(id, {
       ...input,
       dryRun: true
-    });
-    if (preview.status === 'ALREADY_RECOVERED') return preview;
+    }, undefined, runtimeProjection);
+    if (preview.status === 'ALREADY_RECOVERED') {
+      return { ...preview, job: withRuntimePaths(preview.job, settings.rootDirectory, this.compatibility.canonicalizePath) };
+    }
     const previewMappings = await this.repository.listProductMappingsForSku(
       preview.job.storeAlias,
       preview.job.sku
@@ -1165,10 +1183,12 @@ export class OzonPublishingService {
           locked.mappings
         );
         return committedChecks;
-      }
+      },
+      runtimeProjection
     );
     return {
       ...recovered,
+      job: withRuntimePaths(recovered.job, settings.rootDirectory, this.compatibility.canonicalizePath),
       ...(committedChecks ? { checks: committedChecks } : {})
     };
   }
@@ -1186,7 +1206,7 @@ export class OzonPublishingService {
         409
       );
     }
-    const productJson = await this.validateKnownPostPlatformProductJson(job, settings.rootDirectory);
+    const productJson = await this.validateKnownPostPlatformProductJson(job, this.compatibility.canonicalizePath(settings.rootDirectory));
     const product = normalizeKnownPostPlatformPriceProduct(productJson.product, job);
     let remoteProducts: OzonKnownPostPlatformMinPriceRecoveryChecks['remoteProducts'];
     try {
@@ -1386,7 +1406,7 @@ export class OzonPublishingService {
     if (!settings.rootDirectory) {
       throw new AppError('VERSION_CONFLICT', 'OZON 任务根目录未配置，无法验证 product.json 签名', { jobId: job.id }, 409);
     }
-    const rootReal = await realpath(settings.rootDirectory).catch(() => '');
+    const rootReal = await realpath(this.compatibility.canonicalizePath(settings.rootDirectory)).catch(() => '');
     if (!rootReal) {
       throw new AppError('VERSION_CONFLICT', 'OZON 任务根目录不存在，无法验证 product.json 签名', { jobId: job.id }, 409);
     }
@@ -1854,7 +1874,7 @@ export class OzonPublishingService {
     if (!revision || !signature || job.taskFolder !== expectedTaskFolder || job.workRelPath.replaceAll('\\', '/') !== expectedProcessingPath) {
       throw new AppError('VERSION_CONFLICT', '失败任务的 SKU、revision 或目录签名不匹配', { id }, 409);
     }
-    const rootReal = await realpath(settings.rootDirectory);
+    const rootReal = await realpath(this.compatibility.canonicalizePath(settings.rootDirectory));
     const source = await resolveExistingLifecycleDirectory(rootReal, job.workRelPath);
     const marker = await readAndValidateTaskMarker(
       source,
@@ -3611,7 +3631,7 @@ export class OzonPublishingService {
       || job.directorySignature
       || ''
     ).trim();
-    const rootReal = await realpath(settings.rootDirectory);
+    const rootReal = await realpath(this.compatibility.canonicalizePath(settings.rootDirectory));
     const scope = archiveDirectoryScope(job);
     const integrityMode: OzonProductJsonIntegrityMode = scope.storeScoped ? 'RAW_BYTES' : 'CANONICAL_JSON';
     if (scope.storeScoped && input.storeAlias && input.storeAlias !== job.storeAlias) {
@@ -3714,7 +3734,7 @@ export class OzonPublishingService {
   ): Promise<void> {
     const settings = await this.repository.getSettings();
     if (!settings.rootDirectory) throw new AppError('CONFIG_INVALID', '尚未配置 OZON 自动上品根目录', undefined, 409);
-    const rootReal = await realpath(settings.rootDirectory);
+    const rootReal = await realpath(this.compatibility.canonicalizePath(settings.rootDirectory));
     const scope = archiveDirectoryScope(job);
     const integrityMode: OzonProductJsonIntegrityMode = scope.storeScoped ? 'RAW_BYTES' : 'CANONICAL_JSON';
     const archivedRelPath = tryPortableRelativePath(archive.workRelPath);
@@ -3791,7 +3811,7 @@ export class OzonPublishingService {
     if (job.directoryStage !== 'PROCESSING' || !job.workRelPath) return;
     const settings = await this.repository.getSettings();
     if (!settings.rootDirectory) return;
-    const rootReal = await realpath(settings.rootDirectory).catch(() => '');
+    const rootReal = await realpath(this.compatibility.canonicalizePath(settings.rootDirectory)).catch(() => '');
     if (!rootReal) return;
     const directory = await resolveExistingLifecycleDirectory(rootReal, job.workRelPath).catch(() => '');
     if (!directory) return;
@@ -3857,7 +3877,7 @@ export class OzonPublishingService {
         jobId: job.id
       }, 409);
     }
-    const rootReal = await realpath(settings.rootDirectory);
+    const rootReal = await realpath(this.compatibility.canonicalizePath(settings.rootDirectory));
     const directory = await resolveExistingLifecycleDirectory(rootReal, workRelPath);
     const marker = await readAndValidateTaskMarker(directory, {
       jobId: job.id,
@@ -3918,7 +3938,7 @@ export class OzonPublishingService {
     if (job.directoryStage !== 'PROCESSING' || !job.workRelPath) return;
     const settings = await this.repository.getSettings();
     if (!settings.rootDirectory) return;
-    const rootReal = await realpath(settings.rootDirectory).catch(() => '');
+    const rootReal = await realpath(this.compatibility.canonicalizePath(settings.rootDirectory)).catch(() => '');
     if (!rootReal) return;
     const directory = await resolveExistingLifecycleDirectory(rootReal, job.workRelPath).catch(() => '');
     if (!directory) return;
@@ -5988,13 +6008,20 @@ function claimedDirectoryMetadata(
   return { taskFolder, workRelPath, directoryStage, directorySignature };
 }
 
-function withRuntimePaths(job: OzonPublishJob, rootDirectory: string): OzonPublishJob {
+function withRuntimePaths(job: OzonPublishJob, rootDirectory: string, canonicalizePath: (value: string) => string = (value) => value): OzonPublishJob {
   if (!rootDirectory) return job;
-  const root = path.resolve(rootDirectory);
+  const root = path.resolve(canonicalizePath(rootDirectory));
   const persistedPayload = objectValue(job.payload);
-  const relPath = tryPortableRelativePath(job.workRelPath || persistedPayload.workRelPath)
-    || inferLegacyWorkRelPath(root, persistedPayload.productJsonPath)
-    || portableRelativePath('inbox', job.sku);
+  const persistedRelativePath = tryPortableRelativePath(job.workRelPath || persistedPayload.workRelPath);
+  const inferredLegacyPath = persistedRelativePath ? undefined : inferLegacyWorkRelPath(root, persistedPayload.productJsonPath, canonicalizePath);
+  const declaredProductJsonPath = String(persistedPayload.productJsonPath || '').trim();
+  if (!persistedRelativePath && isAbsoluteAnyPlatform(declaredProductJsonPath) && !inferredLegacyPath) {
+    throw new AppError('VERSION_CONFLICT', '历史 OZON 任务的绝对 productJsonPath 不属于当前或受支持的旧数据根，已停止恢复', {
+      jobId: job.id,
+      sku: job.sku
+    }, 409);
+  }
+  const relPath = persistedRelativePath || inferredLegacyPath || portableRelativePath('inbox', job.sku);
   const workDirectory = path.join(root, ...relPath.split('/'));
   return {
     ...job,
@@ -6008,8 +6035,22 @@ function withRuntimePaths(job: OzonPublishJob, rootDirectory: string): OzonPubli
   };
 }
 
-function inferLegacyWorkRelPath(root: string, productJsonPath: unknown): string | undefined {
-  const absolute = String(productJsonPath || '').trim();
+function legacyRuntimePathProjection(
+  job: OzonPublishJob,
+  rootDirectory: string,
+  canonicalizePath: (value: string) => string
+): OzonPublishJob | undefined {
+  const payload = objectValue(job.payload);
+  if (tryPortableRelativePath(job.workRelPath || payload.workRelPath)) return undefined;
+  return withRuntimePaths(job, rootDirectory, canonicalizePath);
+}
+
+function isAbsoluteAnyPlatform(value: string): boolean {
+  return path.win32.isAbsolute(value) || path.posix.isAbsolute(value);
+}
+
+function inferLegacyWorkRelPath(root: string, productJsonPath: unknown, canonicalizePath: (value: string) => string = (value) => value): string | undefined {
+  const absolute = canonicalizePath(String(productJsonPath || '').trim());
   if (!absolute || !path.isAbsolute(absolute)) return undefined;
   const directory = path.dirname(path.resolve(absolute));
   const relative = path.relative(root, directory);

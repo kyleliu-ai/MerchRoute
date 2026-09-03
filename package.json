@@ -33,6 +33,9 @@
     "start": "npm run start -w apps/server",
     "test": "npm run build -w packages/shared && npm run test -ws --if-present",
     "test:e2e": "playwright test",
+    "release:verify": "node --import tsx scripts/verify-release-completeness.mjs",
+    "release:test": "node --import tsx --test scripts/verify-release-completeness.test.mjs scripts/e2e-isolation.test.mjs scripts/package-release-candidate.test.mjs scripts/run-ci-check.test.mjs scripts/verify-ci-gate.test.mjs",
+    "release:package": "node --import tsx scripts/package-release-candidate.mjs",
     "e2e:prepare": "tsx tests/e2e/prepare.ts",
     "e2e:server": "node scripts/start-e2e-server.mjs",
     "docs:capture-ui": "node scripts/capture-readme-screenshots.mjs",
@@ -58,7 +61,7 @@
     "versions:check:full": "node scripts/verify-toolchain-versions.mjs --full",
     "lint": "eslint .",
     "typecheck": "tsc -b --pretty false",
-    "check": "npm run versions:check && npm run deployment:verify && npm run deployment:test && npm run n8n-runtime:test && npm run typecheck && npm run lint && npm test && npm run build",
+    "check": "npm run versions:check && npm run deployment:verify && npm run deployment:test && npm run n8n-runtime:test && npm run release:test && npm run typecheck && npm run lint && npm test && npm run build",
     "clean": "node scripts/clean.mjs"
   },
   "devDependencies": {

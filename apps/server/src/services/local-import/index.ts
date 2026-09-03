@@ -79,7 +79,8 @@ export class LocalImportService {
   constructor(
     private readonly config: ConfigService,
     private readonly purchases: PurchaseRepository,
-    private readonly onImported: () => Promise<unknown>
+    private readonly onImported: () => Promise<unknown>,
+    private readonly canonicalizePath: (value: string) => string = (value) => value
   ) {}
 
   async listDirectories(relativePath = '') {
@@ -116,7 +117,11 @@ export class LocalImportService {
         directories.map((entry) => normalizePathKey(entry.relativePath))
       );
       const importedPathKeys = new Set(registrations
-        .filter((registration) => isSameLocalImportSourceRoot(root, registration.sourceRoot, process.platform))
+        // Historical snapshots keep their original root. Apply only the same
+        // controlled alias mapping used by sourceConfiguration and retries;
+        // never resolve arbitrary filesystem links to establish identity.
+        .filter((registration) => typeof registration.sourceRoot === 'string'
+          && isSameLocalImportSourceRoot(root, this.canonicalizePath(registration.sourceRoot), process.platform))
         .map((registration) => registration.normalizedPathKey));
       for (const entry of directories) {
         entry.importStatus = importedPathKeys.has(normalizePathKey(entry.relativePath)) ? 'IMPORTED' : 'NEW';
@@ -228,7 +233,7 @@ export class LocalImportService {
       const sku = record.sku!;
       const product = await this.purchases.getPurchase(sku);
       const productName = String(product.productName);
-      const candidateRoot = String(record.targetConfigSnapshot.candidateRoot);
+      const candidateRoot = this.canonicalizePath(String(record.targetConfigSnapshot.candidateRoot));
       const folderName = `${sku}-${safeFolderName(productName)}`;
       const target = path.join(candidateRoot, folderName);
       const stagingRoot = path.join(candidateRoot, '.staging');
@@ -241,7 +246,7 @@ export class LocalImportService {
       await mkdir(staging, { recursive: true });
       const manifestSources: Array<Record<string, unknown>> = [];
       for (const source of record.sources) {
-        const sourceRoot = String(record.sourceConfigSnapshot.inputQueueRoot);
+        const sourceRoot = this.canonicalizePath(String(record.sourceConfigSnapshot.inputQueueRoot));
         const resolved = await resolveSafeDirectory(sourceRoot, source.relativePath);
         const files = manifestFiles(source.copyManifest);
         const copied: PreviewFile[] = [];
@@ -261,7 +266,8 @@ export class LocalImportService {
       await writeJson(path.join(staging, 'task-context.json'), { schemaVersion: 1, workflowCode: 'E000', SKU: sku, productName, sourceLocalImportId: record.id });
       await writeJson(path.join(staging, 'local-import-manifest.json'), {
         schemaVersion: 1, localImportId: record.id, sku, productName, previewHash: record.previewHash,
-        sourceConfigSnapshot: record.sourceConfigSnapshot, targetConfigSnapshot: record.targetConfigSnapshot,
+        sourceConfigSnapshot: runtimeConfigurationSnapshot('source', record.sourceConfigSnapshot, this.canonicalizePath),
+        targetConfigSnapshot: runtimeConfigurationSnapshot('target', record.targetConfigSnapshot, this.canonicalizePath),
         sources: manifestSources, createdAt: new Date().toISOString()
       });
       await atomicRenameWithRetry(staging, target);
@@ -278,14 +284,16 @@ export class LocalImportService {
   private async assertRecordConfiguration(record: LocalImportRecord) {
     const source = await this.sourceConfiguration();
     const target = await this.targetConfiguration(true);
-    if (source.configHash !== record.sourceConfigSnapshot.configHash || target.configHash !== record.targetConfigSnapshot.configHash) {
+    const sourceSnapshot = validatedRuntimeConfigurationSnapshot('source', record.sourceConfigSnapshot, this.canonicalizePath);
+    const targetSnapshot = validatedRuntimeConfigurationSnapshot('target', record.targetConfigSnapshot, this.canonicalizePath);
+    if (source.configHash !== sourceSnapshot.configHash || target.configHash !== targetSnapshot.configHash) {
       throw new AppError('LOCAL_IMPORT_CONFIG_CHANGED', 'E000 目录配置已变化，不能按旧快照重试', undefined, 409);
     }
   }
 
   private async sourceConfiguration() {
     const stage = requireE000(this.config.get().stages);
-    const root = String(stage.inputQueueRoot || '').trim();
+    const root = this.canonicalizePath(String(stage.inputQueueRoot || '').trim());
     if (!root) throw new AppError('LOCAL_IMPORT_SOURCE_UNCONFIGURED', '尚未配置 E000 本地导入来源根目录，请前往系统设置', { settingsPath: '/settings/workflows?stage=E000' }, 409);
     await assertStrictDirectory(root, false, '本地导入来源根目录');
     return { root: path.resolve(root), configHash: configurationHash('source', root) };
@@ -293,7 +301,7 @@ export class LocalImportService {
 
   private async targetConfiguration(requireWritable: boolean) {
     const stage = requireE000(this.config.get().stages);
-    const root = String(stage.candidateRoot || '').trim();
+    const root = this.canonicalizePath(String(stage.candidateRoot || '').trim());
     if (!root) throw new AppError('LOCAL_IMPORT_TARGET_UNCONFIGURED', '尚未配置 E000 候选图片目录，请前往系统设置', { settingsPath: '/settings/workflows?stage=E000' }, 409);
     await assertStrictDirectory(root, requireWritable, 'E000 候选图片目录');
     return { root: path.resolve(root), configHash: configurationHash('target', root) };
@@ -574,6 +582,28 @@ function manifestFiles(value: Record<string, unknown>): PreviewFile[] {
 }
 
 function configurationHash(kind: string, root: string) { return sha256(stableJson({ stageId: 'E000', kind, root: normalizeNativePath(path.resolve(root)) })); }
+function runtimeConfigurationSnapshot(
+  kind: 'source' | 'target',
+  snapshot: Record<string, unknown>,
+  canonicalizePath: (value: string) => string
+): Record<string, unknown> {
+  const rootKey = kind === 'source' ? 'inputQueueRoot' : 'candidateRoot';
+  const root = canonicalizePath(String(snapshot[rootKey] || ''));
+  return { ...snapshot, [rootKey]: root, configHash: configurationHash(kind, root) };
+}
+function validatedRuntimeConfigurationSnapshot(
+  kind: 'source' | 'target',
+  snapshot: Record<string, unknown>,
+  canonicalizePath: (value: string) => string
+): Record<string, unknown> & { configHash: string } {
+  const rootKey = kind === 'source' ? 'inputQueueRoot' : 'candidateRoot';
+  const storedRoot = String(snapshot[rootKey] || '');
+  const storedHash = String(snapshot.configHash || '');
+  if (!storedRoot || storedHash !== configurationHash(kind, storedRoot)) {
+    throw new AppError('LOCAL_IMPORT_MANIFEST_INVALID', '本地导入目录快照校验失败，已停止重试', { kind }, 409);
+  }
+  return runtimeConfigurationSnapshot(kind, snapshot, canonicalizePath) as Record<string, unknown> & { configHash: string };
+}
 function sha256(value: string | Buffer) { return createHash('sha256').update(value).digest('hex'); }
 async function fileSha256(file: string) { return sha256(await readFile(file)); }
 function stableJson(value: unknown): string {

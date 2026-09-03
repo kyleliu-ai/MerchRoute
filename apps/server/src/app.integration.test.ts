@@ -5,7 +5,7 @@ import { mkdtemp, mkdir, readFile, readdir, realpath, rm, stat, symlink, writeFi
 import sharp from 'sharp';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { AppError, createDefaultConfig, workflowParameterFileName, workflowParameterOptionsFileName, type AppConfig } from '@n8n-media-review/shared';
-import { buildApp } from './app.js';
+import { applySharedMediaRetryOutcome, buildApp, isLegacyRootSensitiveRequest } from './app.js';
 import { LocalDirectoryOpener } from './services/local-directory-opener.js';
 
 describe.sequential('review and submission integration', () => {
@@ -172,6 +172,26 @@ describe.sequential('review and submission integration', () => {
       expect(refreshAll).toHaveBeenCalledOnce();
     } finally {
       refreshAll.mockRestore();
+    }
+  });
+
+  it('keeps read-only diagnostics available while the durable cutover marker blocks mutations', async () => {
+    const marker = path.join(appData, '.junction-retirement-maintenance-v1.json');
+    await writeFile(marker, JSON.stringify({ startedAt: new Date().toISOString() }), 'utf8');
+    try {
+      const readOnly = await app.inject({ method: 'GET', url: '/api/v1/config' });
+      const mutation = await app.inject({ method: 'POST', url: '/api/v1/stages/rescan' });
+
+      expect(readOnly.statusCode).toBe(200);
+      expect(readOnly.json().readiness.maintenanceMode).toEqual({
+        active: true,
+        acceptingNewTasks: false,
+        reason: 'RETIRE_N8N_GLOBAL_JUNCTION'
+      });
+      expect(mutation.statusCode).toBe(503);
+      expect(mutation.json().error.code).toBe('JUNCTION_RETIREMENT_MAINTENANCE');
+    } finally {
+      await rm(marker, { force: true });
     }
   });
 
@@ -421,7 +441,10 @@ describe.sequential('review and submission integration', () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({
       config: { version: 'v003', wbPublishing: { enabled: false, rootDirectory: '' } },
-      readiness: { complete: true },
+      readiness: {
+        complete: true,
+        legacyRootCompatibility: { enabled: false, required: false, status: 'DISABLED' }
+      },
       wbPublishingReadiness: { status: 'DISABLED', complete: false, enabled: false }
     });
   });
@@ -1033,6 +1056,88 @@ describe.sequential('review and submission integration', () => {
       process.env.APP_DATA_DIR = appData;
       await rm(legacyRoot, { recursive: true, force: true });
     }
+  });
+
+  it('updates only retry outcome fields while preserving frozen historical shared-media identity and roots on disk', async () => {
+    const submissionId = `legacy-retry-${randomUUID()}`;
+    const historical = {
+      submissionId,
+      pendingSubmissionId: submissionId,
+      taskId: 'historical-task-id',
+      sourceStageId: 'E005',
+      targetStageId: 'WB_SHARED_MEDIA',
+      sourceFolder: 'G:\\01_n8n-global\\02_generateFolder\\E005\\product',
+      selectedImageCount: 1,
+      selectedRelativePaths: ['01.png'],
+      productSku: '0000011',
+      productNameSnapshot: '网面跑步鞋',
+      variantId: '11111111-1111-4111-8111-111111111111',
+      variantName: '红色',
+      deliveryType: 'WB_MEDIA' as const,
+      outputRootTemplateSnapshot: 'G:\\01_n8n-global\\WB-Auto-Publish\\inbox\\<SKU>\\variants',
+      resolvedOutputRoot: 'G:\\01_n8n-global\\WB-Auto-Publish\\inbox\\0000011\\variants',
+      status: 'FAILED' as const,
+      errorCode: 'COPY_FAILED',
+      errorMessage: 'old failure',
+      startedAt: '2026-09-01T00:00:00.000Z'
+    };
+    await app.services.store.update((db) => { db.submissionHistory.unshift(structuredClone(historical)); });
+    await app.services.store.update((db) => {
+      const target = db.submissionHistory.find((item) => item.submissionId === submissionId)!;
+      applySharedMediaRetryOutcome(target, {
+        ...historical,
+        taskId: 'runtime-task-id',
+        sourceFolder: 'G:\\01_MerchRoute\\02_generateFolder\\E005\\product',
+        outputRootTemplateSnapshot: 'G:\\01_MerchRoute\\WB-Auto-Publish\\inbox\\<SKU>\\variants',
+        resolvedOutputRoot: 'G:\\01_MerchRoute\\WB-Auto-Publish\\inbox\\0000011\\variants',
+        targetFolder: 'G:\\01_MerchRoute\\WB-Auto-Publish\\target',
+        mediaManifestPath: 'G:\\01_MerchRoute\\WB-Auto-Publish\\variant-media-manifest.json',
+        status: 'SUCCESS',
+        errorCode: undefined,
+        errorMessage: undefined,
+        completedAt: '2026-09-02T00:00:00.000Z'
+      });
+    });
+
+    const persisted = JSON.parse(await readFile(path.join(appData, 'db.json'), 'utf8')).submissionHistory
+      .find((item: any) => item.submissionId === submissionId);
+    expect(persisted).toMatchObject({
+      taskId: historical.taskId,
+      sourceFolder: historical.sourceFolder,
+      outputRootTemplateSnapshot: historical.outputRootTemplateSnapshot,
+      resolvedOutputRoot: historical.resolvedOutputRoot,
+      targetFolder: 'G:\\01_MerchRoute\\WB-Auto-Publish\\target',
+      mediaManifestPath: 'G:\\01_MerchRoute\\WB-Auto-Publish\\variant-media-manifest.json',
+      status: 'SUCCESS',
+      completedAt: '2026-09-02T00:00:00.000Z'
+    });
+    expect(persisted).not.toHaveProperty('errorCode');
+    expect(persisted).not.toHaveProperty('errorMessage');
+    await app.services.store.update((db) => { db.submissionHistory = db.submissionHistory.filter((item) => item.submissionId !== submissionId); });
+  });
+});
+
+describe('legacy-root request gate', () => {
+  it('blocks new filesystem or publication work but permits runtime receipts and lease cleanup', () => {
+    for (const [method, url] of [
+      ['POST', '/api/v1/tasks/task-id/approve'],
+      ['POST', '/api/v1/submissions/submission-id/retry'],
+      ['POST', '/api/v1/purchase-download-jobs/batch'],
+      ['POST', '/api/v1/wb/runtime/jobs/claim'],
+      ['POST', '/api/v1/ozon/listings/0000001/submit'],
+      ['POST', '/api/v1/wb/runtime/recovery/network'],
+      ['POST', '/api/v1/ozon/runtime/jobs/job-id/recover-network'],
+      ['POST', '/api/v1/ozon/runtime/jobs/job-id/recover-known-pre-platform-failure'],
+      ['POST', '/api/v1/ozon/runtime/jobs/job-id/recover-known-post-platform-min-price-failure']
+    ]) expect(isLegacyRootSensitiveRequest(method!, url!)).toBe(true);
+
+    for (const [method, url] of [
+      ['POST', '/api/v1/wb/runtime/jobs/task-id/transition'],
+      ['POST', '/api/v1/wb/runtime/errors'],
+      ['POST', '/api/v1/ozon/runtime/gateway/legacy-receipt'],
+      ['POST', '/api/v1/ozon/runtime/jobs/job-id/lease/release'],
+      ['PATCH', '/api/v1/notifications/notification-id']
+    ]) expect(isLegacyRootSensitiveRequest(method!, url!)).toBe(false);
   });
 });
 
