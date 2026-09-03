@@ -11,10 +11,12 @@ export function developmentEnvironment(config, inherited=process.env) {
   if(!['postgres:','postgresql:'].includes(db.protocol) || !['127.0.0.1','localhost','[::1]'].includes(db.hostname)
     || db.pathname!=='/merchroute_dev' || db.username!=='merchroute_dev_app' || db.search || !db.password)throw new Error('Development requires its dedicated database and unprivileged role');
   if(!path.isAbsolute(config.sandboxRoot))throw new Error('Development sandbox must be absolute');
+  if(config.runtimeKey!==undefined&&(typeof config.runtimeKey!=='string'||config.runtimeKey.length<32))throw new Error('Invalid development runtime key');
+  if(config.encryptionKey!==undefined&&(typeof config.encryptionKey!=='string'||Buffer.from(config.encryptionKey,'base64').length!==32))throw new Error('Invalid development encryption key');
   const env={};
   for(const [key,value] of Object.entries(inherited))if(/^(PATH|PATHEXT|SYSTEMROOT|WINDIR|COMSPEC|TEMP|TMP|HOME|USERPROFILE|LOCALAPPDATA|APPDATA|LANG|LC_ALL)$/i.test(key))env[key]=value;
   return {...env,DATABASE_URL:db.toString(),APP_DATA_DIR:path.join(config.sandboxRoot,'app'),MERCHROUTE_DATA_ROOT:path.join(config.sandboxRoot,'media'),
-    MERCHROUTE_RUNTIME_KEY:randomBytes(32).toString('base64url'),MERCHROUTE_CREDENTIAL_ENCRYPTION_KEY:randomBytes(32).toString('base64'),
+    MERCHROUTE_RUNTIME_KEY:config.runtimeKey||randomBytes(32).toString('base64url'),MERCHROUTE_CREDENTIAL_ENCRYPTION_KEY:config.encryptionKey||randomBytes(32).toString('base64'),
     DOWNLOAD_CONFIG_SYNC:'false',MERCHROUTE_OZON_MULTISTORE_FLEET_READY:'false',MERCHROUTE_OZON_SOURCE_MEDIA_CLEANUP_ENABLED:'false',
     MERCHROUTE_SAFE_DEVELOPMENT:'1',HOST:'127.0.0.1',PORT:'4184',NODE_ENV:'development'};
 }

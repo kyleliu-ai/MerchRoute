@@ -4,10 +4,12 @@ import path from 'node:path';
 import { git, readJson, sourceIdentity, atomicJson, requireApply, assertExternal } from './state.mjs';
 import { isForbiddenPackagePath } from '../package-release-candidate.mjs';
 import { digest } from '../lib/installed-release.mjs';
+import { verifyDevelopmentDatabase } from './development-database.mjs';
 
 export function github(config,args){return execFileSync(config.githubCli||'gh',args,{encoding:'utf8',windowsHide:true,stdio:['ignore','pipe','pipe'],maxBuffer:32*1024*1024}).trim();}
 export function githubJson(config,endpoint){return JSON.parse(github(config,['api','--method','GET',endpoint]));}
 export async function requireVerified(root,home){
+  await verifyDevelopmentDatabase(root,home);
   const identity=sourceIdentity(root), record=await readJson(path.join(home,'verified.json'));
   if(identity.status || record.level!=='full'||record.ok!==true||!record.publishable
     || record.identity.commit!==identity.commit||record.identity.tree!==identity.tree)throw new Error('Current clean candidate has not passed full verification');

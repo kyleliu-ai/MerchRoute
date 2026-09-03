@@ -54,6 +54,9 @@ test('development environment never inherits production secrets, ports or config
   assert.equal(env.PORT,'4184');assert.equal(env.MERCHROUTE_ENV_FILE,undefined);assert.equal(env.WB_API_TOKEN,undefined);assert.equal(env.NODE_OPTIONS,undefined);
   assert.throws(()=>developmentEnvironment({...config,databaseUrl:config.databaseUrl.replace('/merchroute_dev','/merchroute')}),/dedicated/);
   assert.throws(()=>developmentEnvironment({...config,databaseUrl:config.databaseUrl.replace('127.0.0.1','example.com')}),/dedicated/);
+  const stable={...config,runtimeKey:'0'.repeat(40),encryptionKey:Buffer.alloc(32).toString('base64')};
+  assert.equal(developmentEnvironment(stable,{}).MERCHROUTE_RUNTIME_KEY,developmentEnvironment(stable,{}).MERCHROUTE_RUNTIME_KEY);
+  assert.equal(developmentEnvironment(stable,{}).MERCHROUTE_CREDENTIAL_ENCRYPTION_KEY,stable.encryptionKey);
 });
 test('development default blocks real HTTP and fetch requests',async()=>{
   const restore=blockDevelopmentOutbound();try{await assert.rejects(fetch('https://example.invalid'),/BLOCKED/);assert.throws(()=>http.get('https://example.invalid'),/BLOCKED/);}finally{restore();}

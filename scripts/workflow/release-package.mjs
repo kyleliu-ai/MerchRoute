@@ -4,6 +4,7 @@ import path from 'node:path';
 import { collectSourceFromHead, collectPrebuiltFiles, createPackageArtifacts, writeArtifactsWithoutOverwrite } from '../package-release-candidate.mjs';
 import { atomicJson, assertExternal, readJson } from './state.mjs';
 import { inventoryRelease, verifyInstalledRelease, INSTALLED_MANIFEST, digest, gitBlob, assertPlainRoot } from '../lib/installed-release.mjs';
+import { npmForNode } from './toolchain.mjs';
 
 export async function verifyToolchain(config) {
   if (!path.isAbsolute(config.nodePath) || (await lstat(config.nodePath)).isSymbolicLink()
@@ -35,11 +36,13 @@ export async function prepareInstalledRelease(root,home,config) {
     const destination=path.join(target,file.path);await mkdir(path.dirname(destination),{recursive:true});
     await writeFile(destination,file.data,{flag:'wx',mode:file.mode==='100755'?0o755:0o644});
   }
-  const npmCli=path.join(path.dirname(config.nodePath),'node_modules/npm/bin/npm-cli.js');
+  const npmCli=await npmForNode(config.nodePath);
   const env=Object.fromEntries(Object.entries(process.env).filter(([key])=>/^(PATH|PATHEXT|SYSTEMROOT|WINDIR|COMSPEC|TEMP|TMP|HOME|USERPROFILE|LOCALAPPDATA|APPDATA)$/i.test(key)));
   env.PATH=path.dirname(config.nodePath)+path.delimiter+(env.PATH||env.Path||'');
-  execFileSync(config.nodePath,[npmCli,'ci','--omit=dev','--no-audit','--no-fund'],{cwd:target,env,windowsHide:true,stdio:'pipe',maxBuffer:16*1024*1024});
-  const files=await inventoryRelease(target),programNames=new Set([...source.files,...prebuilt].map(x=>x.path));
+  // The frontend is already bundled. Install only server/shared runtime
+  // dependencies, not a second copy of all browser libraries and their sources.
+  execFileSync(config.nodePath,[npmCli,'ci','--omit=dev','--workspace','apps/server','--include-workspace-root','--no-audit','--no-fund'],{cwd:target,env,windowsHide:true,stdio:'pipe',maxBuffer:16*1024*1024});
+  const files=await inventoryRelease(target,{onProgress:value=>console.error('Release integrity: '+value.filesRead+'/'+value.total)}),programNames=new Set([...source.files,...prebuilt].map(x=>x.path));
   if(files.some(x=>!programNames.has(x.path)&&!x.path.split('/').includes('node_modules')))throw new Error('Dependency installation created an undeclared program file');
   const manifest={schemaVersion:1,kind:'MERCHROUTE_INSTALLED_RELEASE',productVersion:version,
     sourceCommit:source.identity.commit,sourceTree:source.identity.headTreeHash,builtAt:build.builtAt,

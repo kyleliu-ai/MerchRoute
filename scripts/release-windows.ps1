@@ -9,12 +9,13 @@ if ($Action -eq 'Inspect' -or $Action -eq 'Stop') {
   if ($listeners.Count -eq 0 -and $Action -eq 'Inspect') { '{"stopped":true}'; exit 0 }
   if ($listeners.Count -ne 1) { throw 'Ambiguous production process.' }
   $proc=Get-CimInstance Win32_Process -Filter ('ProcessId='+[int]$listeners[0])
-  if ($proc.CommandLine -notlike ('*'+$data.entry+'*')) { throw 'Production process path mismatch.' }
+  $entry=$data.entry.Replace('/','\')
+  if ($proc.CommandLine.Replace('/','\').IndexOf($entry,[StringComparison]::OrdinalIgnoreCase) -lt 0 -or $proc.ExecutablePath.Replace('/','\') -ine $data.nodePath.Replace('/','\')) { throw 'Production process path mismatch.' }
   if ($Action -eq 'Stop') {
     if ([int]$data.pid -ne [int]$proc.ProcessId -or $data.createdAt -ne $proc.CreationDate.ToUniversalTime().ToString('o')) { throw 'Production PID identity changed.' }
     Stop-Process -Id $proc.ProcessId -ErrorAction Stop
     Wait-Process -Id $proc.ProcessId -Timeout 20 -ErrorAction SilentlyContinue
-  } else { @{pid=[int]$proc.ProcessId;createdAt=$proc.CreationDate.ToUniversalTime().ToString('o');entry=$data.entry}|ConvertTo-Json -Compress }
+  } else { @{pid=[int]$proc.ProcessId;createdAt=$proc.CreationDate.ToUniversalTime().ToString('o');entry=$data.entry;nodePath=$data.nodePath}|ConvertTo-Json -Compress }
 } elseif ($Action -eq 'Bind') {
   if ((Get-FileHash -LiteralPath $data.launcher -Algorithm SHA256).Hash.ToLowerInvariant() -ne $data.launcherSha256) { throw 'Fixed launcher changed.' }
   $shell=New-Object -ComObject WScript.Shell

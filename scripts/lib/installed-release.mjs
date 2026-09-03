@@ -27,10 +27,11 @@ export async function assertPlainRoot(root) {
   return absolute;
 }
 
-export async function inventoryRelease(root) {
+export async function inventoryRelease(root, { onProgress } = {}) {
   root = await assertPlainRoot(root);
   const files = [];
   const names = new Set();
+  const pending = [];
   async function visit(relative) {
     for (const item of await readdir(path.join(root, relative), { withFileTypes: true })) {
       const name = relative ? relative + '/' + item.name : item.name;
@@ -47,11 +48,19 @@ export async function inventoryRelease(root) {
         if (!name.split('/').includes('node_modules') || !isWithin(root, target)) throw new Error('External or non-dependency release link');
         files.push({ path:name, kind:'link', target:path.relative(root, target).split(path.sep).join('/') });
       } else if (info.isDirectory()) await visit(name);
-      else if (info.isFile()) files.push({ path:name, kind:'file', bytes:info.size, sha256:digest(await readFile(absolute)) });
+      else if (info.isFile()) pending.push({path:name,absolute,bytes:info.size});
       else throw new Error('Unsupported runtime file type');
     }
   }
   await visit('');
+  let cursor=0,done=0;
+  await Promise.all(Array.from({length:Math.min(32,pending.length)},async()=>{
+    while(cursor<pending.length){const item=pending[cursor++];const data=await readFile(item.absolute);
+      if(data.length!==item.bytes)throw new Error('Release file changed during inventory');
+      files.push({path:item.path,kind:'file',bytes:data.length,sha256:digest(data)});
+      done++;if(onProgress&&done%1000===0)onProgress({filesRead:done,total:pending.length});
+    }
+  }));
   return files.sort((a,b) => a.path.localeCompare(b.path, 'en'));
 }
 

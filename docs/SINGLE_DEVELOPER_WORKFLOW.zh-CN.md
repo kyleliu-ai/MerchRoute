@@ -64,6 +64,8 @@ npm run workflow -- release prepare --task-id <owner> --apply --approved
 
 源码 ZIP、源码加预构建 ZIP、候选清单与 SHA256SUMS 来自同一验收构建。它们不是 GitHub 自动生成的源码 ZIP。不同平台的 node_modules 不混用，固定 Node 的可执行文件也核对哈希。日志和缓存只写包外。
 
+独立正式包只安装服务端/共享库的运行依赖，前端由已验收的 dist 提供；开发目录仍安装完整开发依赖。启动引导同时核对其本地校验模块哈希，不能只验证入口文件后加载未经核对的校验器。文件读取使用有上限的并发队列，不减少文件范围或跳过哈希。
+
 相同候选重复 prepare 返回已验证记录，不重复安装；发现没有成功记录的残留目录则停止，保留 `candidate-intent.json` 和现场。智能体必须先检查并经批准将残留隔离到恢复目录，不能覆盖未知文件或把中断目录直接认定成功。
 
 ## 发布与切换（需要下一阶段批准）
@@ -71,6 +73,7 @@ npm run workflow -- release prepare --task-id <owner> --apply --approved
 1. 阶段 A/B 完成候选和 Draft PR、全部 CI 通过后，保持正式服务与旧快捷方式不变，等待用户合并、发布相同版本及上传验收资产。
 2. 用户合并后只读校验 PR、Release、源码树和每份发布资产 SHA-256。提交号可以因 squash 不同，文件树与内容指纹不能伪造。更新映射不能自动 pull 或 rebase 本机。
 3. 重新记录真实运行 PID、开始时间、路径、构建、环境与业务空闲结果到外部 `runtime-before-switch.json`。旧 Git 启动器作为 `legacy` 回滚入口时，记录脚本路径与 SHA-256；不移动旧目录。
+   legacy 记录必须包含原 Node 路径/哈希、全部三个 dist 目录的 `fileHashes`、原唯一已验收记录的不可变备份 `previousAcceptedFile/previousAcceptedSha256`、原 productVersion/commit/tree。它只用于回滚到迁移前的已核验版本，不是新版本绕过独立运行包规则的通道。
 4. 当前用户批准写入外部短期有效 `approval-file`：`operation`、`productionRestartApproved`、`releasePublishedApproved`、`expiresAt`、`expectedCurrentCommit`、`targetCommit`、`expectedPid` 和是否允许 `rollbackApproved`。这些值必须来自本次核验，不能复制历史授权。
 5. `release activate ... --approval-file <外部批准文件> --dry-run` 通过后，才可 `--apply --approved`。先备份入口，检查任务/租约/锁，再核对 PID，只处理确认的当前服务。Windows 固定入口和开机/桌面快捷方式共同使用外部发布指针。
 6. 两次独立检查周期读取运行包、PID、About 和只读页面，随后才能更新唯一已验收发布记录。不得因健康码 200 单独宣布全部功能验收通过。

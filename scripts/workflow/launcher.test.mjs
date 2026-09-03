@@ -6,6 +6,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { digest } from '../lib/installed-release.mjs';
 import { atomicJson, recoverCommandLock } from './state.mjs';
+import { npmForNode } from './toolchain.mjs';
+import { verifyDevelopmentDatabase } from './development-database.mjs';
+import { verifyLegacyRelease } from './legacy-release.mjs';
 
 test('docs preserve local authority, serial ownership, phase boundary and production isolation',async()=>{
   const root=path.resolve(import.meta.dirname,'../..');
@@ -28,8 +31,24 @@ if(process.platform==='win32')for(const shell of ['powershell.exe','pwsh']){
     const root=await mkdtemp(path.join(os.tmpdir(),'merchroute-launcher-test-'));t.after(()=>rm(root,{recursive:true,force:true}));
     await mkdir(path.join(root,'scripts'));const entry=path.join(root,'scripts/release-runtime.mjs');await writeFile(entry,'throw new Error("must not execute")');
     const pointer=path.join(root,'pointer.json'),binding={root,nodePath:process.execPath,nodeSha256:digest(await readFile(process.execPath)),launcherSha256:digest(await readFile(entry))};
+    binding.bootstrapHashes={};
+    for(const file of ['scripts/release-runtime.mjs','scripts/lib/installed-release.mjs','scripts/workflow/development.mjs','scripts/workflow/state.mjs']){
+      const target=path.join(root,file);await mkdir(path.dirname(target),{recursive:true});if(target!==entry)await writeFile(target,'// fixture');binding.bootstrapHashes[file]=digest(await readFile(target));
+    }
     await atomicJson(pointer,binding);const script=path.resolve(import.meta.dirname,'../Start-MerchRoute.ps1');
     const run=()=>execFileSync(shell,['-NoProfile','-File',script,'-ReleasePointer',pointer,'-CheckOnly'],{encoding:'utf8',windowsHide:true,stdio:['ignore','pipe','pipe']});
-    assert.match(run(),/Launcher binding verified/);await writeFile(entry,'changed');assert.throws(run);
+    assert.match(run(),/Launcher binding verified/);await writeFile(path.join(root,'scripts/lib/installed-release.mjs'),'changed verifier');assert.throws(run);
   });
 }
+test('npm lookup supports Windows and macOS archive layouts without relying on PATH',async t=>{
+  const root=await mkdtemp(path.join(os.tmpdir(),'merchroute-toolchain-test-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  for(const [binary,npm] of [['windows/node.exe','windows/node_modules/npm/bin/npm-cli.js'],['mac/bin/node','mac/lib/node_modules/npm/bin/npm-cli.js']]){
+    await mkdir(path.dirname(path.join(root,npm)),{recursive:true});await writeFile(path.join(root,npm),'// fixture');assert.equal(await npmForNode(path.join(root,binary)),path.join(root,npm));
+  }
+  await assert.rejects(npmForNode(path.join(root,'missing/node')),/not found/);
+});
+test('missing local database input and missing legacy inventory fail before service mutation',async t=>{
+  const home=await mkdtemp(path.join(os.tmpdir(),'merchroute-preflight-test-'));t.after(()=>rm(home,{recursive:true,force:true}));
+  await assert.rejects(verifyDevelopmentDatabase(path.resolve(import.meta.dirname,'../..'),home),/not initialized/);
+  await assert.rejects(verifyLegacyRelease({legacy:true}),/inventory is missing/);
+});

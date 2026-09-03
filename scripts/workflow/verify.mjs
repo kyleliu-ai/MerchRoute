@@ -9,6 +9,7 @@ import { atomicJson, sourceIdentity } from './state.mjs';
 import { digest } from '../lib/installed-release.mjs';
 import { collectSourceFromHead } from '../package-release-candidate.mjs';
 import { runVerification, REQUIRED_LOCAL_CHECK_IDS } from '../verify-release-completeness.mjs';
+import { verifyDevelopmentDatabase } from './development-database.mjs';
 
 export function testEnvironment(inherited, databaseUrl, cleanupUrl) {
   const allowed=new Set(['PATH','PATHEXT','SYSTEMROOT','WINDIR','COMSPEC','TEMP','TMP','HOME','USERPROFILE','LOCALAPPDATA','APPDATA','LANG','LC_ALL']);
@@ -37,6 +38,7 @@ export async function withTestPostgres(action) {
 export async function verifyBatch(root,home,options) {
   const identity=sourceIdentity(root);
   if(options.full&&identity.status)throw new Error('Full verification requires a clean committed candidate');
+  if(options.full)await verifyDevelopmentDatabase(root,home);
   const out=path.join(home,'verification',identity.commit+'-'+Date.now());await mkdir(out,{recursive:true,mode:0o700});
   const records=[];
   async function run(id,argv,env,kind) {
