@@ -28,5 +28,7 @@ await run([npmCli, 'ci', '--prefix', integrationRoot, '--engine-strict=false', '
 const names = await readdir(testsRoot);
 const tsTests = names.filter((name) => name.endsWith('.test.ts')).sort().map((name) => path.join(testsRoot, name));
 const cjsTests = names.filter((name) => name.endsWith('.test.cjs')).sort().map((name) => path.join(testsRoot, name));
-await run([path.join(integrationRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs'), '--test', '--test-reporter=dot', ...tsTests]);
+// Serial files retain process isolation and every test while avoiding the
+// pinned Node reporter IPC failure seen during parallel route-test logging.
+await run([path.join(integrationRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs'), '--test', '--test-concurrency=1', '--test-reporter=dot', ...tsTests]);
 await run(['--test', '--test-reporter=dot', ...cjsTests]);

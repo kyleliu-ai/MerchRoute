@@ -14,6 +14,16 @@ import { assertNoActivity } from './business-gate.mjs';
 import { validateManifest, compareBranchInventory } from '../verify-release-completeness.mjs';
 import { candidateSnapshot, verifyAcceptedCandidate } from './candidate-acceptance.mjs';
 
+test('both Jimeng regression entrypoints retain isolated tests with bounded file concurrency',async()=>{
+  const publicRunner=await readFile(new URL('../../deployment/scripts/run-jimeng-tests.mjs',import.meta.url),'utf8');
+  const evidenceRunner=await readFile(new URL('../ci-regression-tests.mjs',import.meta.url),'utf8');
+  for(const source of [publicRunner,evidenceRunner]){
+    assert.match(source,/'--test', '--test-concurrency=1', '--test-reporter=(?:dot|tap)'/);
+    assert.doesNotMatch(source,/--experimental-test-isolation=none|--test-name-pattern/);
+    assert.match(source,/\.endsWith\('\.test\.ts'\)/);
+  }
+});
+
 async function temporary(t){const dir=await realpath(await mkdtemp(path.join(os.tmpdir(),'merchroute-workflow-test-')));t.after(()=>rm(dir,{recursive:true,force:true}));return dir;}
 async function fixture(t){
   const base=await temporary(t),root=path.join(base,'repo'),home=path.join(base,'external');await mkdir(root);await mkdir(home);

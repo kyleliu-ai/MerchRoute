@@ -23,7 +23,9 @@ if (suite === 'jimeng') {
   const ts = names.filter((name) => name.endsWith('.test.ts')).sort().map((name) => path.join(base, 'tests', name));
   const cjs = names.filter((name) => name.endsWith('.test.cjs')).sort().map((name) => path.join(base, 'tests', name));
   if (!ts.length || !cjs.length) throw new Error('Jimeng test inventory unexpectedly empty');
-  await run(['node', path.join(base, 'node_modules/tsx/dist/cli.mjs'), '--test', '--test-reporter=tap', ...ts]);
+  // Keep each test file isolated, but serialize files to avoid the pinned Node
+  // reporter IPC failure reproduced under parallel multilingual route logging.
+  await run(['node', path.join(base, 'node_modules/tsx/dist/cli.mjs'), '--test', '--test-concurrency=1', '--test-reporter=tap', ...ts]);
   await run(['node', '--test', '--test-reporter=tap', ...cjs]);
 } else {
   const files = ['1688-detail-image-stitcher.test.cjs', '1688-downloader.test.cjs', '1688-output-dir-version.test.cjs', 'download-idempotency-v1.test.cjs', 'pdd-detail-image-stitcher-result-file.test.cjs', 'pdd-output-dir-version.test.cjs', 'pdd-product-media-downloader.test.cjs', 'playwright-navigation-retry.test.cjs'];
