@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import path from 'node:path';
 import os from 'node:os';
+import { failureDiagnostics } from './ci-failure-diagnostics.mjs';
 import { captureCommand, isolatedChildEnvironment } from './run-ci-check.mjs';
 import { LEGACY_OZON_SKIPS, PERF_SKIP, POSIX_SKIP, assertCommand, assertOutside, parsePlaywrightReport, parseTestLog, validatePackageContract } from './ci-evidence-contract.mjs';
 
@@ -36,6 +37,30 @@ test('repository-local evidence is rejected', () => {
   const root = path.join(os.tmpdir(), 'candidate');
   assert.throws(() => assertOutside(root, path.join(root, 'evidence')));
   assert.doesNotThrow(() => assertOutside(root, path.join(os.tmpdir(), 'outside-evidence')));
+});
+
+test('failure diagnostics expose only tracked relative locations and fixed categories', () => {
+  const file = 'scripts/package-release-candidate.test.mjs';
+  const secret = 'synthetic-private-value-not-for-publication';
+  const log = `not ok 1 - ${secret}\nAssertionError: ${secret}\n at /Users/private/checkout/${file}:52:9\n at C:\\private\\checkout\\scripts\\package-release-candidate.test.mjs:52:9\n at /private/credentials.json:1:2\n at scripts/untracked.test.mjs:5:6\nclean, committed`;
+  const result = failureDiagnostics(log, { sourceFiles: [file] });
+  assert.deepEqual(result.sourceLocations, [{ file, line: 52, column: 9 }]);
+  assert.deepEqual(result.categories, ['ASSERTION', 'DIRTY_FIXTURE']);
+  assert.equal(result.rawDetailsPublished, false);
+  for (const forbidden of [secret, '/Users/', 'C:', 'credentials', 'untracked']) assert.ok(!JSON.stringify(result).includes(forbidden));
+});
+
+test('E2E diagnostics locate failures without leaking titles, errors or attachments', () => {
+  const report = playwright();
+  const spec = report.suites[0].specs[0];
+  spec.title = 'synthetic-private-title';
+  spec.line = 123;
+  spec.tests[0] = { status: 'unexpected', results: [{ status: 'timedOut', errors: [{ message: 'TimeoutError: synthetic-private-token' }], attachments: [{ path: '/private/screenshot.png' }] }] };
+  const result = failureDiagnostics('', { sourceFiles: ['tests/e2e/ozon-listing.spec.ts'], report });
+  assert.deepEqual(result.failedCases, [{ file: 'tests/e2e/ozon-listing.spec.ts', line: 123 }]);
+  assert.deepEqual(result.categories, ['TIMEOUT']);
+  assert.ok(!JSON.stringify(result).includes('private'));
+  assert.deepEqual(failureDiagnostics('', { sourceFiles: [], report }).failedCases, []);
 });
 
 test('test logs need nonzero passes and reject failures, all skips, TODO and cancellation', () => {
