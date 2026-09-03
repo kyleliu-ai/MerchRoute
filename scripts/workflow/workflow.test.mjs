@@ -13,6 +13,20 @@ import { switchRelease } from './release-transaction.mjs';
 import { assertNoActivity } from './business-gate.mjs';
 import { validateManifest, compareBranchInventory } from '../verify-release-completeness.mjs';
 import { candidateSnapshot, verifyAcceptedCandidate } from './candidate-acceptance.mjs';
+import { commandTranscript } from './verify.mjs';
+import { captureCommand } from '../run-ci-check.mjs';
+
+test('silent successful commands keep actual capture metadata and failing output is preserved',async()=>{
+  const argv=[process.execPath,'-e','process.exit(0)'];
+  const result=await captureCommand(argv[0],argv.slice(1),{cwd:process.cwd()});
+  assert.equal(result.exitCode,0);assert.equal(result.output.length,0);
+  const transcript=commandTranscript(argv,result).toString();
+  const metadata=JSON.parse(transcript.split('\n')[0].slice('# Command capture: '.length));
+  assert.deepEqual(metadata,{argv,exitCode:0,signal:null,outputBytes:0,oversized:false});
+  assert.equal(transcript.split('\n').slice(1).join('\n'),'');
+  const failed=commandTranscript(argv,{...result,exitCode:1,output:Buffer.from('actual failure')});
+  assert.match(failed.toString(),/"exitCode":1/);assert.ok(failed.toString().endsWith('actual failure'));
+});
 
 test('both Jimeng regression entrypoints retain isolated tests with bounded file concurrency',async()=>{
   const publicRunner=await readFile(new URL('../../deployment/scripts/run-jimeng-tests.mjs',import.meta.url),'utf8');

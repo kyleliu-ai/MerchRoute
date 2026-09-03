@@ -257,7 +257,7 @@ export function inspectValidationLog(id, command, log, { playwrightReport, platf
     e2e: /npm(?:-cli\.js|\.cmd)?["']?\s+run\s+test:e2e(?:\s|$)/i,
     jimeng: /(?:npm(?:-cli\.js|\.cmd)?["']?\s+run\s+jimeng:test|node(?:\.exe)?\s+--import\s+tsx\s+scripts\/ci-regression-tests\.mjs\s+--suite\s+jimeng)(?:\s|$)/i,
     'deployment-verify': /npm(?:-cli\.js|\.cmd)?["']?\s+run\s+deployment:verify(?:\s|$)/i,
-    gitleaks: /gitleaks(?:\.exe)?(?:["']|\s|$)/i,
+    gitleaks: /gitleaks(?:-8\.30\.1)?(?:\.exe)?(?:["']|\s|$)/i,
     'diff-check': /^git(?:\.exe)?\s+diff\s+--check(?:\s|$)/i,
     'release-verifier-tests': /--test\s+scripts[\\/]verify-release-completeness\.test\.mjs(?:\s|$)/i,
     'restart-safety': /test-restart-windows-safety\.ps1(?:["']|\s|$)/i,

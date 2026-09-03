@@ -12,6 +12,12 @@ import { runVerification, REQUIRED_LOCAL_CHECK_IDS } from '../verify-release-com
 import { verifyDevelopmentDatabase } from './development-database.mjs';
 import { candidateSnapshot, verifyAcceptedCandidate } from './candidate-acceptance.mjs';
 
+export function commandTranscript(argv,result) {
+  // Successful git diff --check is intentionally silent. Record the actual
+  // capture metadata rather than inventing output or weakening the log gate.
+  return Buffer.concat([Buffer.from('# Command capture: '+JSON.stringify({argv,exitCode:result.exitCode,signal:result.signal??null,outputBytes:result.output.length,oversized:result.oversized})+'\n'),result.output]);
+}
+
 export function testEnvironment(inherited, databaseUrl, cleanupUrl) {
   const allowed=new Set(['PATH','PATHEXT','SYSTEMROOT','WINDIR','COMSPEC','TEMP','TMP','HOME','USERPROFILE','LOCALAPPDATA','APPDATA','LANG','LC_ALL']);
   const env=Object.fromEntries(Object.entries(inherited).filter(([key])=>allowed.has(key.toUpperCase())));
@@ -48,11 +54,12 @@ export async function verifyBatch(root,home,options) {
     console.error('Checking '+id);
     const command=await resolveCommand(argv);
     const result=await captureCommand(command.command,command.args,{cwd:root,env});
-    const file=path.join(out,id+'.log');await writeFile(file,result.output,{mode:0o600});
+    const transcript=commandTranscript(argv,result);
+    const file=path.join(out,id+'.log');await writeFile(file,transcript,{mode:0o600});
     let summary;
     if(result.exitCode===0&&kind==='tests')summary=parseTestLog(result.output.toString('utf8'),{id,platform:process.platform});
     if(result.exitCode===0&&kind==='e2e')summary=parsePlaywrightReport(JSON.parse(await readFile(path.join(out,'playwright.json'),'utf8')),result.output.toString('utf8'));
-    const record={id,argv,exitCode:result.exitCode,log:file,sha256:digest(result.output),summary,completedAt:new Date().toISOString()};records.push(record);
+    const record={id,argv,exitCode:result.exitCode,log:file,sha256:digest(transcript),summary,completedAt:new Date().toISOString()};records.push(record);
     await atomicJson(path.join(out,'progress.json'),{identity,records});
     if(result.exitCode!==0||result.oversized)throw new Error('Verification failed: '+id+'; private log: '+file);
     if(summary?.problems?.length)throw new Error('Verification evidence rejected: '+id);
@@ -85,7 +92,7 @@ export async function verifyBatch(root,home,options) {
   const config=JSON.parse(await readFile(path.join(home,'machine.json'),'utf8'));
   if(!config.gitleaksPath)throw new Error('Pinned Gitleaks executable is not registered');
   await run('gitleaks-version',[config.gitleaksPath,'version'],env);
-  if(!(await readFile(path.join(out,'gitleaks-version.log'),'utf8')).trim().match(/^8\.30\.1$/))throw new Error('Gitleaks version must be 8.30.1');
+  if(!(await readFile(path.join(out,'gitleaks-version.log'),'utf8')).split('\n').slice(1).join('\n').trim().match(/^8\.30\.1$/))throw new Error('Gitleaks version must be 8.30.1');
   await run('gitleaks',[config.gitleaksPath,'git','--redact','--no-banner','--log-opts='+config.baseline.commit+'..HEAD','.'],env);
   const scanRoot=path.join(out,'controlled-source');
   for(const file of (await collectSourceFromHead(root)).files){const target=path.join(scanRoot,file.path);await mkdir(path.dirname(target),{recursive:true});await writeFile(target,file.data,{flag:'wx'});}
