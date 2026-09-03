@@ -13,7 +13,7 @@ export async function requireVerified(root,home){
   const identity=sourceIdentity(root), record=await readJson(path.join(home,'verified.json'));
   if(identity.status || record.level!=='full'||record.ok!==true||!record.publishable
     || record.identity.commit!==identity.commit||record.identity.tree!==identity.tree)throw new Error('Current clean candidate has not passed full verification');
-  const required=['check','postgres-integration','browser-build','e2e','jimeng','gitleaks','gitleaks-files','diff-check','deployment-verify'];
+  const required=['check','postgres-integration','browser-build','e2e','jimeng','isolated-runtime','release-verifier-tests','restart-safety','retirement-safety','gitleaks','gitleaks-files','diff-check','deployment-verify'];
   for(const id of required){const entry=record.records.find(x=>x.id===id);if(!entry||entry.exitCode!==0||digest(await readFile(entry.log))!==entry.sha256)throw new Error('Verification evidence missing or changed: '+id);}
   const strict=await readFile(record.strictResult);
   if(digest(strict)!==record.strictSha256||!JSON.parse(strict).releaseReady||JSON.parse(strict).identity.commit!==identity.commit)throw new Error('Strict retained-feature acceptance is missing or changed');

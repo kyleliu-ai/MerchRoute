@@ -9,6 +9,14 @@ import { atomicJson, recoverCommandLock } from './state.mjs';
 import { npmForNode } from './toolchain.mjs';
 import { verifyDevelopmentDatabase } from './development-database.mjs';
 import { verifyLegacyRelease } from './legacy-release.mjs';
+import { testEnvironment } from './verify.mjs';
+
+test('full local regression bounds workers without relaxing timeouts or inheriting credentials',()=>{
+  const env=testEnvironment({VITEST_MAX_THREADS:'100',VITEST_MAX_FORKS:'100',MERCHROUTE_ENV_FILE:'production',DATABASE_URL:'production'},'synthetic','cleanup');
+  assert.equal(env.VITEST_MAX_THREADS,'2');assert.equal(env.VITEST_MAX_FORKS,'2');
+  assert.equal(env.VITEST_MIN_THREADS,'1');assert.equal(env.VITEST_MIN_FORKS,'1');
+  assert.equal(env.MERCHROUTE_ENV_FILE,undefined);assert.equal(env.DATABASE_URL,'synthetic');
+});
 
 test('docs preserve local authority, serial ownership, phase boundary and production isolation',async()=>{
   const root=path.resolve(import.meta.dirname,'../..');

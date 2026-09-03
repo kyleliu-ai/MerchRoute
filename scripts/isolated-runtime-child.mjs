@@ -2,17 +2,13 @@ import path from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import { blockDevelopmentOutbound } from './workflow/development.mjs';
 import { atomicJson } from './workflow/state.mjs';
-import { verifyInstalledRelease } from './lib/installed-release.mjs';
-const root=path.resolve(import.meta.dirname,'..');
 if(process.env.MERCHROUTE_ISOLATED_PACKAGE_TEST!=='1'||process.env.PORT!=='4183'||process.env.MERCHROUTE_ENV_FILE)throw new Error('Isolated package test authorization missing');
 const database=new URL(process.env.DATABASE_URL);
 if(database.hostname!=='127.0.0.1'||database.pathname!=='/merchroute_ci_test'||database.port==='5432')throw new Error('Disposable isolated database required');
-await verifyInstalledRelease(root,process.env.MERCHROUTE_INSTALLED_MANIFEST_SHA256);
 blockDevelopmentOutbound();
 await mkdir(process.env.APP_DATA_DIR,{recursive:true,mode:0o700});
 const {createDefaultConfig}=await import('../packages/shared/dist/index.js');
 await atomicJson(path.join(process.env.APP_DATA_DIR,'config.json'),createDefaultConfig(process.platform==='win32'?'win32':process.platform==='darwin'?'darwin':'other',process.env.MERCHROUTE_DATA_ROOT));
-const {buildApp}=await import('../apps/server/dist/app.js');
-const app=await buildApp({databaseUrl:process.env.DATABASE_URL});
-await app.listen({host:'127.0.0.1',port:4183});
-for(const signal of ['SIGTERM','SIGINT'])process.once(signal,()=>{void app.close().then(()=>process.exit(0));});
+// Exercise the actual installed entrypoint and its manifest/environment gates,
+// with only the disposable database and generated external sandbox config.
+await import('../apps/server/dist/index.js');

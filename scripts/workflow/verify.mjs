@@ -14,7 +14,9 @@ import { verifyDevelopmentDatabase } from './development-database.mjs';
 export function testEnvironment(inherited, databaseUrl, cleanupUrl) {
   const allowed=new Set(['PATH','PATHEXT','SYSTEMROOT','WINDIR','COMSPEC','TEMP','TMP','HOME','USERPROFILE','LOCALAPPDATA','APPDATA','LANG','LC_ALL']);
   const env=Object.fromEntries(Object.entries(inherited).filter(([key])=>allowed.has(key.toUpperCase())));
-  return {...env,DATABASE_URL:databaseUrl,WB_SOURCE_MEDIA_CLEANUP_TEST_DATABASE_URL:cleanupUrl,CI:'true',NODE_ENV:'test',MEDIA_INDEX_PERF_100K:'0'};
+  // Bound fixture concurrency without relaxing any assertion or test timeout.
+  return {...env,DATABASE_URL:databaseUrl,WB_SOURCE_MEDIA_CLEANUP_TEST_DATABASE_URL:cleanupUrl,CI:'true',NODE_ENV:'test',MEDIA_INDEX_PERF_100K:'0',
+    VITEST_MIN_THREADS:'1',VITEST_MAX_THREADS:'2',VITEST_MIN_FORKS:'1',VITEST_MAX_FORKS:'2'};
 }
 export async function withTestPostgres(action) {
   const name='merchroute-verify-'+randomUUID().slice(0,12);
