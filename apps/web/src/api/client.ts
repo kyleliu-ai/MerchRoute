@@ -1,5 +1,7 @@
 import type {
   AppConfig,
+  ReviewOperation,
+  ReviewOperationProgress,
   OzonAutomaticListingSnapshot,
   OzonCategoryAttributeOrderInput,
   OzonCategoryTemplate,
@@ -927,6 +929,30 @@ export type AboutVersionInfo = {
   error?: string;
 };
 
+export type ReviewOperationView = Omit<ReviewOperation, 'input' | 'requestHash' | 'requestKey'> & { progress?: ReviewOperationProgress };
+const operationRequests = new Map<string, string>();
+function stableOperationKey(identity: string): string {
+  let saved: Record<string, string> = {};
+  try { saved = JSON.parse(localStorage.getItem('merchroute-review-request-keys') || '{}'); } catch { /* storage may be unavailable */ }
+  const key = saved[identity] || operationRequests.get(identity) || crypto.randomUUID();
+  operationRequests.set(identity, key);
+  saved[identity] = key;
+  try { localStorage.setItem('merchroute-review-request-keys', JSON.stringify(Object.fromEntries(Object.entries(saved).slice(-200)))); } catch { /* memory fallback */ }
+  return key;
+}
+async function acceptReviewOperation(url: string, body: unknown, key = stableOperationKey(url + JSON.stringify(body))) {
+  const result = await request<{ operation: ReviewOperationView }>(url, { method: 'POST', headers: { Prefer: 'respond-async', 'Idempotency-Key': key }, body: JSON.stringify(body) });
+  window.dispatchEvent(new Event('merchroute-review-operation-accepted'));
+  return result;
+}
+export function connectReviewOperationEvents(onState: () => void, onError: () => void): () => void {
+  if (typeof EventSource === 'undefined') { onError(); return () => undefined; }
+  const source = new EventSource('/api/v1/review-operations/events');
+  source.addEventListener('review-operation', onState);
+  source.onerror = onError;
+  return () => source.close();
+}
+
 export function connectMediaIndexEvents({ onState, onOpen, onError }: MediaIndexEventHandlers): () => void {
   if (typeof EventSource === 'undefined') {
     onError?.();
@@ -990,12 +1016,15 @@ export const api = {
   openTaskFolder: (taskId: string) => request<{ accepted: true }>(`/api/v1/tasks/${encodeURIComponent(taskId)}/open-folder`, { method: 'POST', body: JSON.stringify({}) }),
   assignProductIdentity: (taskId: string, sku: string) => request<{ productIdentity: TaskDetail['productIdentity'] }>(`/api/v1/tasks/${taskId}/product-identity`, { method: 'PUT', body: JSON.stringify({ sku }) }),
   saveDraft: (taskId: string, selectedRelativePaths: string[], selectedTargets: string[], variantSelectionGroups?: VariantSelectionGroup[]) => request(`/api/v1/tasks/${taskId}/draft`, { method: 'PUT', body: JSON.stringify({ selectedRelativePaths, selectedTargets, variantSelectionGroups }) }),
-  approve: (taskId: string, selectedRelativePaths: string[], targetStageIds: string[], variantSelectionGroups?: VariantSelectionGroup[]) => request(`/api/v1/tasks/${taskId}/approve`, { method: 'POST', body: JSON.stringify({ selectedRelativePaths, targetStageIds, variantSelectionGroups }) }),
+  approve: (taskId: string, selectedRelativePaths: string[], targetStageIds: string[], variantSelectionGroups?: VariantSelectionGroup[], expectedVersion?: number) => acceptReviewOperation(`/api/v1/tasks/${taskId}/approve`, { selectedRelativePaths, targetStageIds, variantSelectionGroups, expectedVersion }),
   reopen: (taskId: string) => request(`/api/v1/tasks/${taskId}/reopen`, { method: 'POST' }),
   pending: () => request<{ items: PendingView[] }>('/api/v1/pending-submissions'),
   updatePending: (id: string, patch: { conflictPolicy?: PendingSubmission['conflictPolicy']; n8nTaskParameters?: WorkflowParameters; n8nTaskParameterOptions?: WorkflowParameterOptions }) => request(`/api/v1/pending-submissions/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   deletePending: (id: string) => request(`/api/v1/pending-submissions/${id}`, { method: 'DELETE' }),
-  submitBatch: (batchId: string, ids: string[], conflictPolicy: PendingSubmission['conflictPolicy']) => request<{ batchId: string; results: unknown[] }>('/api/v1/submissions/batch', { method: 'POST', body: JSON.stringify({ batchId, pendingSubmissionIds: ids, conflictPolicy }) }),
+  submitBatch: (_batchId: string, ids: string[], conflictPolicy: PendingSubmission['conflictPolicy'], expectedVersions?: Record<string, number>) => {
+    const key = stableOperationKey('batch:' + JSON.stringify({ ids, conflictPolicy, expectedVersions }));
+    return acceptReviewOperation('/api/v1/submissions/batch', { batchId: 'BATCH-' + key, pendingSubmissionIds: ids, conflictPolicy, expectedVersions }, key);
+  },
   batch: (batchId: string) => request<SubmissionBatchRecord>(`/api/v1/submissions/batches/${batchId}`),
   history: (filters: SubmissionHistoryQuery = {}) => {
     const params = new URLSearchParams();
@@ -1005,7 +1034,9 @@ export const api = {
     const query = params.toString();
     return request<{ items: SubmissionRecord[] }>(`/api/v1/submissions/history${query ? `?${query}` : ''}`);
   },
-  retry: (submissionId: string) => request(`/api/v1/submissions/${submissionId}/retry`, { method: 'POST' }),
+  retry: (submissionId: string) => acceptReviewOperation(`/api/v1/submissions/${submissionId}/retry`, {}),
+  reviewOperations: () => request<{ items: ReviewOperationView[] }>('/api/v1/review-operations?active=false'),
+  retryReviewOperation: (operationId: string) => acceptReviewOperation(`/api/v1/review-operations/${operationId}/retry`, {}, crypto.randomUUID()),
   thumbnailCache: () => request<{ count: number; bytes: number }>('/api/v1/settings/thumbnail-cache'),
   clearThumbnailCache: () => request<{ removed: number }>('/api/v1/settings/thumbnail-cache', { method: 'DELETE' }),
   staging: () => request<{ items: Array<{ path: string; modifiedAt: string; stale: boolean }> }>('/api/v1/settings/staging'),

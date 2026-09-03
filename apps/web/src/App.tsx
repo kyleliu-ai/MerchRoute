@@ -24,6 +24,7 @@ import { PricingCalculatorPage, PricingQueryPage, PricingTemplatesPage } from '.
 import { WbListingPage } from './wb-listing';
 import { OzonListingPage } from './ozon-listing';
 import { AboutPage } from './about';
+import { ReviewOperationsPanel } from './review-operations';
 import {
   E001VariantColorPassport,
   E001VariantGroupStatus,
@@ -577,6 +578,7 @@ export function App() {
           <Space size={18}><div className="header-status"><Badge status={headerConfigurationStatus.badge} /><span>{headerConfigurationStatus.label}</span></div><NotificationHub /></Space>
         </Header>
         <Content className="app-content">
+          {/^\/(review|task|pending|history)(\/|$)/.test(location.pathname) && <ReviewOperationsPanel />}
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/review/downloads" element={<DownloadCenter />} />
@@ -1072,7 +1074,7 @@ function ReviewDetail() {
     return [...new Map(options.map((item) => [item.sku, item])).values()].map((item) => ({ value: item.sku, label: `${item.sku} · ${item.productName}` }));
   }, [productCandidates.data?.items, task?.productIdentity.candidates]);
   const save = useMutation({ mutationFn: () => api.saveDraft(taskId, allSelectedRelativePaths, activeTargets, isVariantSplit ? variantGroups : undefined), onSuccess: () => { message.success('草稿已保存'); void client.invalidateQueries({ queryKey: ['task', taskId] }); } });
-  const approve = useMutation({ mutationFn: () => api.approve(taskId, allSelectedRelativePaths, activeTargets, isVariantSplit ? variantGroups : undefined), onSuccess: (result: any) => { const partial = result?.deliverySummary?.status === 'PARTIAL'; message[partial ? 'warning' : 'success'](isTerminalDelivery ? partial ? '审核通过，部分平台投递失败，可在历史记录中重试' : '已投递到所选共享媒体库' : '已加入待投递清单'); navigate(isTerminalDelivery ? '/history' : '/pending'); }, onError: (error) => message.error(error.message) });
+  const approve = useMutation({ mutationFn: () => api.approve(taskId, allSelectedRelativePaths, activeTargets, isVariantSplit ? variantGroups : undefined, task?.reviewVersion), onSuccess: () => { message.success('审核请求已接收，可在进度区查看处理结果'); void client.invalidateQueries({ queryKey: ['review-operations'] }); navigate(isTerminalDelivery ? '/history' : '/pending'); }, onError: (error) => message.error(error.message) });
   const updateActiveSelection = (update: (current: string[]) => string[]) => {
     if (!isVariantSplit) return setSelectedRelativePaths((current) => uniqueSelectedRelativePaths(update(current)));
     if (!activeVariantGroup) return;
@@ -1264,8 +1266,8 @@ function PendingPage() {
   const [parameterRecord, setParameterRecord] = useState<PendingView>();
   const [parameterDraftRows, setParameterDraftRows] = useState<WorkflowParameterDraftRow[]>([]);
   const submit = useMutation({
-    mutationFn: () => api.submitBatch(`BATCH-${crypto.randomUUID()}`, selected.map(String), policy),
-    onSuccess: () => { void client.invalidateQueries({ queryKey: ['pending'] }); void client.invalidateQueries({ queryKey: ['history'] }); }
+    mutationFn: () => api.submitBatch(`BATCH-${crypto.randomUUID()}`, selected.map(String), policy, Object.fromEntries((query.data?.items || []).filter((item) => selected.includes(item.id)).map((item) => [item.id, item.version || 0]))),
+    onSuccess: () => { message.success('投递请求已接收，处理进度会自动更新'); setSelected([]); void client.invalidateQueries({ queryKey: ['review-operations'] }); }, onError: (error) => message.error(error.message)
   });
   const remove = useMutation({ mutationFn: api.deletePending, onSuccess: () => void client.invalidateQueries({ queryKey: ['pending'] }) });
   const parameterDefaults = useQuery({ queryKey: ['workflow-parameters', parameterRecord?.targetStageId], queryFn: () => api.workflowParameters(parameterRecord!.targetStageId), enabled: Boolean(parameterRecord) });
@@ -1343,7 +1345,7 @@ function HistoryPage() {
   const [filterError, setFilterError] = useState<string>();
   const query = useQuery({ queryKey: ['history', appliedFilters, queryRevision], queryFn: () => api.history(appliedFilters), retry: false });
   const workflowShortcuts = useWorkflowShortcutData();
-  const retry = useMutation({ mutationFn: api.retry, onSuccess: () => { message.success('重试完成'); void client.invalidateQueries({ queryKey: ['history'] }); void client.invalidateQueries({ queryKey: ['pending'] }); }, onError: (error) => message.error(error.message) });
+  const retry = useMutation({ mutationFn: api.retry, onSuccess: () => { message.success('重试请求已接收，请查看处理进度'); void client.invalidateQueries({ queryKey: ['history'] }); void client.invalidateQueries({ queryKey: ['pending'] }); }, onError: (error) => message.error(error.message) });
   const applyHistoryFilters = () => {
     const sku = skuDraft.trim();
     if (sku && !/^\d{7}$/.test(sku)) {

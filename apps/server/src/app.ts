@@ -2,13 +2,17 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { mkdir, readdir, rm, stat } from 'node:fs/promises';
-import Fastify from 'fastify';
+import Fastify, { type FastifyRequest, type FastifyReply } from 'fastify';
 import cors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';
 import pino from 'pino';
 import sharp from 'sharp';
-import { APP_VERSION, AppError, E001_VARIANT_MAX_IMAGE_COUNT, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, appConfigSchema, workflowParameterFileName, workflowParameterOptionsFileName, pricingBatchCalculationInputSchema, pricingCalculationInputSchema, pricingProductQueryInputSchema, shippingCalculationInputSchema, type AppConfig, type OzonCatalogDictionaryValue, type OzonColorIdentity, type PendingSubmission, type ProductVariant, type ReviewRecord, type StageConfig, type SubmissionRecord, type VariantSelectionGroup, type WbColorIdentity, type WorkflowParameterOptions, type WorkflowParameters } from '@n8n-media-review/shared';
-import { ConfigService, parseOzonMediaOutputRootTemplate, parseWbMediaOutputRootTemplate } from './config/service.js';
+import { APP_VERSION, AppError, E001_VARIANT_MAX_IMAGE_COUNT, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, appConfigSchema, workflowParameterFileName, workflowParameterOptionsFileName, pricingBatchCalculationInputSchema, pricingCalculationInputSchema, pricingProductQueryInputSchema, shippingCalculationInputSchema, type AppConfig, type ReviewOperation, type TaskDetail, type OzonCatalogDictionaryValue, type OzonColorIdentity, type PendingSubmission, type ProductVariant, type ReviewRecord, type StageConfig, type SubmissionRecord, type VariantSelectionGroup, type WbColorIdentity, type WorkflowParameterOptions, type WorkflowParameters } from '@n8n-media-review/shared';
+import { ConfigService, getAppDataDir, parseOzonMediaOutputRootTemplate, parseWbMediaOutputRootTemplate } from './config/service.js';
+import { acquireStateWriterLock } from './utils/state-writer-lock.js';
+import { ReviewOperationService, stableHash } from './services/review-operations.js';
+import { DeliveryReplayService } from './services/delivery-replay.js';
+import { DeliveryOutboxService } from './services/delivery-outbox.js';
 import { StateStore } from './repositories/store.js';
 import { ScannerService } from './services/scanner/index.js';
 import { ThumbnailService } from './services/thumbnails/index.js';
@@ -71,6 +75,7 @@ type Services = {
   mediaIndex: MediaIndexService;
   thumbnails: ThumbnailService;
   submissions: SubmissionService;
+  reviewOperations: ReviewOperationService;
   purchases: PurchaseRepository;
   localImports: LocalImportService;
   downloads: DownloadWorker;
@@ -115,6 +120,15 @@ export type BuildAppOptions = {
 };
 
 export async function buildApp(options: BuildAppOptions = {}) {
+  if (process.env.VITEST && !Object.prototype.hasOwnProperty.call(options, 'databaseUrl')) throw new Error('测试环境必须显式传入 databaseUrl，禁止隐式连接生产 DATABASE_URL');
+  const releaseWriter = await acquireStateWriterLock(getAppDataDir());
+  try {
+    const app = await buildAppWithWriter(options);
+    app.addHook('onClose', releaseWriter);
+    return app;
+  } catch (error) { await releaseWriter(); throw error; }
+}
+async function buildAppWithWriter(options: BuildAppOptions) {
   const hasExplicitDatabaseUrl = Object.prototype.hasOwnProperty.call(options, 'databaseUrl');
   if (process.env.VITEST && !hasExplicitDatabaseUrl) {
     throw new Error('测试环境必须显式传入 databaseUrl，禁止隐式连接生产 DATABASE_URL');
@@ -155,8 +169,8 @@ export async function buildApp(options: BuildAppOptions = {}) {
   const unsubscribeMediaIndexEvents = mediaIndex.onChange(({ stageId, state }) => {
     mediaIndexEvents.publish({ type: 'index-changed', stageId, state });
   });
-  const unsubscribeReviewEvents = store.subscribe(() => {
-    for (const stage of config.get().stages.filter((item) => item.enabled && item.reviewEnabled)) {
+  const unsubscribeReviewEvents = store.subscribe((change) => {
+    for (const stage of config.get().stages.filter((item) => item.enabled && item.reviewEnabled && change.stageIds.includes(item.id))) {
       mediaIndexEvents.publish({ type: 'review-state-changed', stageId: stage.id, state: mediaIndex.getState(stage.id) });
     }
   });
@@ -170,10 +184,10 @@ export async function buildApp(options: BuildAppOptions = {}) {
   await purchases.initialize();
   const assertLegacyRootOperationsReady = async (): Promise<void> => {
     await legacyRootCompatibility.assertOperational();
-    const references = await purchases.legacyRootReferenceCounts(legacyRootCompatibility.legacyRoot);
-    if (references.nonterminalDownloadJobs > 0) {
+    const nonterminalDownloadJobs = await purchases.legacyNonterminalDownloadJobCount(legacyRootCompatibility.legacyRoot);
+    if (nonterminalDownloadJobs > 0) {
       throw new AppError('LEGACY_NONTERMINAL_DOWNLOAD_JOB', '仍有包含旧数据根的非终态下载任务，已阻止继续处理或创建相关任务', {
-        nonterminalDownloadJobs: references.nonterminalDownloadJobs
+        nonterminalDownloadJobs
       }, 503);
     }
   };
@@ -182,7 +196,8 @@ export async function buildApp(options: BuildAppOptions = {}) {
   const productIdentity = new ProductIdentityService(purchases, store);
   await productIdentity.backfillLegacyPending();
   await productIdentity.backfillLegacyVariants();
-  const submissions = new SubmissionService(config, store, scanner, productIdentity, app.log);
+  const reviewOperations = new ReviewOperationService(store, app.log);
+  const submissions = new SubmissionService(config, store, scanner, productIdentity, app.log, reviewOperations);
   const localImports = new LocalImportService(
     config,
     purchases,
@@ -231,12 +246,13 @@ export async function buildApp(options: BuildAppOptions = {}) {
   );
   const wbStores = new WbStoreService(wbStoreRepository, wbPresets, wbPublishing, wbSourceMediaCleanup);
   const wbStoreGateway = new WbStoreGatewayService(wbStoreRepository, wbStores);
+  const historyReplay = new DeliveryReplayService(store);
   const wbAutoPublishing = new WbAutoPublishingCoordinator(
-    wbAutoPublishRepository, wbPresets, wbPublishing, store, app.log, {}, wbStoreRepository, wbSourceMediaCleanup
+    wbAutoPublishRepository, wbPresets, wbPublishing, store, app.log, { historyReplay }, wbStoreRepository, wbSourceMediaCleanup
   );
   const wbTaskStatusSynchronizer = new WbTaskStatusSynchronizer(wb, wbPublishing, app.log, {}, wbSourceMediaCleanup);
   wbPresets.setAutomationChangeHandler(() => wbAutoPublishing.handlePresetChanged());
-  const variantDelivery = new VariantMediaDeliveryService(config, (value) => legacyRootCompatibility.canonicalizePath(value));
+  const variantDelivery = new VariantMediaDeliveryService(config, (value) => legacyRootCompatibility.canonicalizePath(value), store);
   const backfillVariantColors = async (colors: WbColorIdentity[]) => {
     const updated = await purchases.backfillProductVariantColors(colors);
     if (updated) app.log.info({ updated }, '历史产品变体 WB 颜色身份回填完成');
@@ -284,7 +300,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     ozonTitleTranslator,
     store,
     app.log,
-    {},
+    { historyReplay },
     {
       storeRepository: ozonStoreRepository,
       storeService: ozonStores,
@@ -300,7 +316,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const rootDirectory = parseOzonMediaOutputRootTemplate(configuredOzonTemplate).rootDirectory;
     await ozonPublishing.synchronizeRootDirectory(rootDirectory).catch((error) => app.log.warn({ err: error, rootDirectory }, 'OZON 共享媒体根目录启动同步失败'));
   }
-  app.decorate('services', { aboutVersion, aboutGithubAccess, config, store, scanner, localDirectoryOpener, mediaIndex, thumbnails, submissions, purchases, localImports, downloads, shipping, pricing, pricingQuery, productIdentity, wb, wbPresetRepository, wbPresets, wbPublishing, wbTaskStatusSynchronizer, wbAutoPublishRepository, wbAutoPublishing, wbStoreRepository, wbStores, wbStoreGateway, wbSourceMediaCleanup, wbCatalog, ozon, ozonStoreRepository, ozonStores, ozonStoreGateway, ozonSourceMediaCleanup, ozonPublishing, ozonAutoPublishing, ozonCatalog, variantDelivery, legacyRootCompatibility });
+  app.decorate('services', { aboutVersion, aboutGithubAccess, config, store, scanner, localDirectoryOpener, mediaIndex, thumbnails, submissions, reviewOperations, purchases, localImports, downloads, shipping, pricing, pricingQuery, productIdentity, wb, wbPresetRepository, wbPresets, wbPublishing, wbTaskStatusSynchronizer, wbAutoPublishRepository, wbAutoPublishing, wbStoreRepository, wbStores, wbStoreGateway, wbSourceMediaCleanup, wbCatalog, ozon, ozonStoreRepository, ozonStores, ozonStoreGateway, ozonSourceMediaCleanup, ozonPublishing, ozonAutoPublishing, ozonCatalog, variantDelivery, legacyRootCompatibility });
   await app.register(cors, { origin: /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/ });
 
   app.addHook('preHandler', async (request) => {
@@ -735,27 +751,31 @@ export async function buildApp(options: BuildAppOptions = {}) {
     }
     const now = new Date().toISOString();
     let saved!: ReviewRecord;
-    await store.update((db) => {
+    await store.updateSections(['reviews', 'appEvents'], (db) => {
       const existing = db.reviews.find((item) => item.taskId === persistedTaskId);
       saved = existing || { taskId: persistedTaskId, stageId: task.stageId, sourceFolder: task.sourceFolder, sourceFolderName: task.sourceFolderName, selectedRelativePaths: [], selectedTargetStageIds: [], status: 'DRAFT', createdAt: now, updatedAt: now };
       Object.assign(saved, { selectedRelativePaths: selected, selectedTargetStageIds: body.selectedTargets || saved.selectedTargetStageIds, variantSelectionGroups, status: 'DRAFT', updatedAt: now });
       if (!existing) db.reviews.push(saved);
+      store.appendEvent(db, 'DRAFT_SAVED', '审核草稿已保存', { taskId, selectedCount: selected.length });
     });
-    await store.addEvent('DRAFT_SAVED', '审核草稿已保存', { taskId, selectedCount: selected.length });
     return { review: saved };
   });
-  app.post('/api/v1/tasks/:taskId/approve', async (request) => {
-    const { taskId } = request.params as { taskId: string };
-    const body = request.body as { selectedRelativePaths?: string[]; targetStageIds?: string[]; variantSelectionGroups?: VariantSelectionGroup[] };
-    const task = await scanner.getTask(taskId);
+  type ApproveBody = { selectedRelativePaths?: string[]; targetStageIds?: string[]; variantSelectionGroups?: VariantSelectionGroup[]; expectedVersion?: number };
+  async function approveTask(taskId: string, body: ApproveBody, operation: ReviewOperation) {
+    const task = operation.input.task as TaskDetail;
     const persistedTaskId = store.resolvePersistedTaskId(taskId);
-    const resolvedProduct = await productIdentity.requireResolvedTask(task);
-    const stage = requireEnabledStage(config, task.stageId);
+    const resolvedProduct = operation.input.resolvedProduct as Awaited<ReturnType<ProductIdentityService['requireResolvedTask']>>;
+    const stage = operation.input.stage as StageConfig;
+    requireEnabledStage(config, task.stageId);
     assertTaskContextIdentity(task, resolvedProduct.identity);
     if (stage.id === 'E004' || stage.id === 'E005') {
       const selected = validateSelected(task, body.selectedRelativePaths || [], true);
-      for (const relativePath of selected) await scanner.resolveIndexedMedia(taskId, relativePath);
-      const variant = await resolveTaskVariant(purchases, task, resolvedProduct.identity);
+      const needsSource = (body.targetStageIds?.length ? body.targetStageIds : ['WB_SHARED_MEDIA']).map((target) => (operation.input.submissionIds as Record<string, string>)[target === 'WB_SHARED_MEDIA' ? 'WB' : 'OZON']!).some((id) => {
+        const checkpoint = store.select('deliveryCheckpoints', (rows) => rows?.find((row) => row.submissionId === id));
+        return !checkpoint || ['PREPARING', 'VERIFIED'].includes(checkpoint.phase);
+      });
+      if (needsSource) for (const relativePath of selected) await scanner.resolveIndexedMedia(taskId, relativePath);
+      const variant = operation.input.terminalVariant as ProductVariant;
       const requestedTargets = [...new Set(body.targetStageIds || [])];
       const targets = requestedTargets.length ? requestedTargets : ['WB_SHARED_MEDIA'];
       const supportedTargets = new Set(['WB_SHARED_MEDIA', 'OZON_SHARED_MEDIA']);
@@ -773,26 +793,22 @@ export async function buildApp(options: BuildAppOptions = {}) {
       for (const target of targets) {
         const platform = target === 'WB_SHARED_MEDIA' ? 'WB' : 'OZON';
         try {
-          const record = await variantDelivery.deliver({ platform, task, stage, selectedRelativePaths: selected, productSku: resolvedProduct.identity.sku, productName: resolvedProduct.identity.productName, variantId: variant.variantId, variantName: variant.name, variantColor: variant.wbColor, sourceSubmissionId: task.taskContext?.sourceSubmissionId, archiveMedia: !archived });
+          const record = await variantDelivery.deliver({ submissionId: (operation.input.submissionIds as Record<string, string>)[platform], platform, task, stage, selectedRelativePaths: selected, productSku: resolvedProduct.identity.sku, productName: resolvedProduct.identity.productName, variantId: variant.variantId, variantName: variant.name, variantColor: variant.wbColor, sourceSubmissionId: task.taskContext?.sourceSubmissionId, archiveMedia: !archived });
           archived ||= Boolean(record.archiveFolder);
           records.push(record);
           await store.addEvent(`${platform}_MEDIA_DELIVERED`, `${stage.id} 审核媒体已投递到 ${platform} 共享媒体库`, { taskId, submissionId: record.submissionId, sku: resolvedProduct.identity.sku, variantName: variant.name, targetFolder: record.targetFolder });
-          if (platform === 'WB') {
-            await wbAutoPublishing.onMediaDelivered({ sku: resolvedProduct.identity.sku, stageId: stage.id, submissionId: record.submissionId, variantId: variant.variantId, deliveredAt: record.completedAt || record.startedAt })
-              .catch((error) => app.log.warn({ err: error, sku: resolvedProduct.identity.sku, submissionId: record.submissionId }, 'WB 自动上品媒体事件入队失败'));
-          } else {
-            await ozonAutoPublishing.onMediaDelivered({ sku: resolvedProduct.identity.sku, stageId: stage.id, submissionId: record.submissionId, variantId: variant.variantId, deliveredAt: record.completedAt || record.startedAt, resolvedOutputRoot: record.resolvedOutputRoot, selectedRelativePaths: selected })
-              .catch((error) => app.log.warn({ err: error, sku: resolvedProduct.identity.sku, submissionId: record.submissionId }, 'OZON 自动上品媒体事件入队失败'));
-          }
+
         } catch (error) {
           if (!(error instanceof TerminalDeliveryError)) throw error;
+          if (error.record.errorCode === 'DELIVERY_OUTCOME_UNKNOWN') throw new AppError('DELIVERY_OUTCOME_UNKNOWN', error.message, { submissionId: error.record.submissionId }, 409);
           failures.push(error.record);
           await store.addEvent(`${platform}_MEDIA_DELIVERY_FAILED`, `${stage.id} ${platform} 共享媒体投递失败`, { taskId, submissionId: error.record.submissionId, error: error.message });
         }
       }
       const now = new Date().toISOString();
-      await store.update((db) => {
-        db.submissionHistory.unshift(...records, ...failures);
+      await store.updateSections(['reviews', 'submissionHistory'], (db) => {
+        const ids = new Set([...records, ...failures].map((row) => row.submissionId));
+        db.submissionHistory = [...records, ...failures, ...db.submissionHistory.filter((row) => !ids.has(row.submissionId))];
         let review = db.reviews.find((item) => item.taskId === persistedTaskId);
         if (!review) {
           review = { taskId: persistedTaskId, stageId: stage.id, sourceFolder: task.sourceFolder, sourceFolderName: task.sourceFolderName, selectedRelativePaths: selected, selectedTargetStageIds: targets, status: records.length ? 'SUBMITTED' : 'DRAFT', createdAt: now, updatedAt: now };
@@ -840,12 +856,12 @@ export async function buildApp(options: BuildAppOptions = {}) {
     });
     const targetParameterDefaults = new Map<string, { parameters: WorkflowParameters; parameterOptions: WorkflowParameterOptions }>();
     for (const targetStageId of targets) {
-      const template = await config.getWorkflowParameterTemplate(targetStageId);
+      const template = (operation.input.templates as Record<string, { parameters: WorkflowParameters; parameterOptions: WorkflowParameterOptions }>)[targetStageId]!;
       targetParameterDefaults.set(targetStageId, { ...template, parameters: inheritedVariant ? productIdentity.injectVariant(template.parameters, resolvedProduct.identity, inheritedVariant.name) : productIdentity.inject(template.parameters, resolvedProduct.identity) });
     }
     const now = new Date().toISOString();
     const pendingCreated: PendingSubmission[] = [];
-    await store.update((db) => {
+    await store.updateSections(['reviews', 'pendingSubmissions', 'appEvents', 'reviewOperations'], (db) => {
       let review = db.reviews.find((item) => item.taskId === persistedTaskId);
       if (!review) {
         review = { taskId: persistedTaskId, stageId: task.stageId, sourceFolder: task.sourceFolder, sourceFolderName: task.sourceFolderName, selectedRelativePaths: selected, selectedTargetStageIds: targets, status: 'APPROVED_PENDING_SUBMISSION', createdAt: now, updatedAt: now, approvedAt: now, productSku: resolvedProduct.identity.sku, productNameSnapshot: resolvedProduct.identity.productName, productIdentitySource: resolvedProduct.source, variantSelectionGroups: variantGroups, variantId: inheritedVariant?.variantId, variantName: inheritedVariant?.name };
@@ -868,10 +884,12 @@ export async function buildApp(options: BuildAppOptions = {}) {
           pendingCreated.push(pending);
         }
       }
+      store.appendEvent(db, 'REVIEW_APPROVED', '产品已审核并加入待投递清单', { taskId, targets });
+      const current = db.reviewOperations?.find((row) => row.operationId === operation.operationId);
+      if (current) { current.result = { pendingSubmissions: structuredClone(pendingCreated) }; current.status = 'SUCCEEDED'; current.completedAt = now; }
     });
-    await store.addEvent('REVIEW_APPROVED', '产品已审核并加入待投递清单', { taskId, targets, variantGroups: variantGroups?.map((group) => ({ groupId: group.groupId, variantName: group.variantName, selectedCount: group.selectedRelativePaths.length })) });
     return { pendingSubmissions: pendingCreated };
-  });
+  }
   app.post('/api/v1/tasks/:taskId/reopen', async (request) => {
     const { taskId } = request.params as { taskId: string };
     const persistedTaskId = store.resolvePersistedTaskId(taskId);
@@ -895,9 +913,9 @@ export async function buildApp(options: BuildAppOptions = {}) {
   });
 
   app.get('/api/v1/pending-submissions', async () => {
-    const db = store.read();
-    return { items: await Promise.all(db.pendingSubmissions.map(async (item) => {
-      const review = db.reviews.find((candidate) => candidate.taskId === item.taskId);
+    const pendingItems = store.section('pendingSubmissions');
+    return { items: await Promise.all(pendingItems.map(async (item) => {
+      const review = store.getReview(item.taskId);
       const sourceStage = config.get().stages.find((candidate) => candidate.id === item.sourceStageId);
       const targetStage = config.get().stages.find((candidate) => candidate.id === item.targetStageId);
       const target = sourceStage?.targets.find((candidate) => candidate.targetStageId === item.targetStageId);
@@ -939,26 +957,126 @@ export async function buildApp(options: BuildAppOptions = {}) {
       pending.updatedAt = new Date().toISOString();
     });
     if (hasTaskParameters || hasTaskOptions) await store.addEvent('PENDING_PARAMETERS_SAVED', '待投递任务 n8n 参数已保存', { pendingSubmissionId: id });
-    return { item: store.read().pendingSubmissions.find((item) => item.id === id) };
+    return { item: store.getPending(id) };
   });
   app.delete('/api/v1/pending-submissions/:id', async (request) => {
     const { id } = request.params as { id: string };
     await store.update((db) => { db.pendingSubmissions = db.pendingSubmissions.filter((item) => item.id !== id); });
     return { ok: true };
   });
-  app.post('/api/v1/submissions/batch', async (request) => {
-    const body = request.body as { batchId?: string; pendingSubmissionIds?: string[]; conflictPolicy?: PendingSubmission['conflictPolicy'] };
-    return submissions.runBatch(body.batchId || `BATCH-${randomUUID()}`, body.pendingSubmissionIds || [], body.conflictPolicy || 'new-revision');
+  const respondOperation = async (request: FastifyRequest, reply: FastifyReply, operation: ReviewOperation) => {
+    reply.header('Location', '/api/v1/review-operations/' + operation.operationId);
+    if (String(request.headers.prefer || '').includes('respond-async')) return reply.code(202).send({ operation: reviewOperations.view(operation.operationId) });
+    return reviewOperations.wait(operation.operationId);
+  };
+  const requestKey = (request: FastifyRequest, fallback?: string) => String(request.headers['idempotency-key'] || fallback || randomUUID());
+  const assertVersion = (actual: number, expected: number) => {
+    if (!Number.isInteger(expected) || expected < 0 || actual !== expected) throw new AppError('STALE_REVIEW_VERSION', '任务已被其他操作更新，请刷新后重新提交', { actualVersion: actual, expectedVersion: expected }, 409);
+  };
+  const assertFrozenStages = (operation: ReviewOperation) => {
+    const stages = operation.input.stages as StageConfig[] | undefined;
+    if (stages?.some((stage) => stableHash(config.get().stages.find((row) => row.id === stage.id)) !== stableHash(stage))) throw new AppError('CONFIG_CHANGED', '接收任务后流程配置已变化，请核对原任务', undefined, 409);
+  };
+  reviewOperations.register('APPROVE', async (operation) => {
+    assertFrozenStages(operation);
+    return approveTask(operation.input.taskId as string, operation.input.body as ApproveBody, operation);
   });
+  reviewOperations.register('BATCH', async (operation) => {
+    assertFrozenStages(operation);
+    return submissions.runBatch(operation.input.batchId as string, operation.input.pendingSubmissionIds as string[], operation.input.conflictPolicy as PendingSubmission['conflictPolicy']);
+  });
+  reviewOperations.register('RETRY', async (operation) => retrySubmission(operation.input.submissionId as string));
+
+  app.post('/api/v1/tasks/:taskId/approve', async (request, reply) => {
+    const { taskId } = request.params as { taskId: string };
+    const body = (request.body || {}) as ApproveBody;
+    const key = requestKey(request);
+    const requestBody = { taskId, body };
+    const existing = reviewOperations.lookup('APPROVE', key, requestBody);
+    if (existing) return respondOperation(request, reply, existing);
+    const task = await scanner.getTask(taskId);
+    const stage = requireEnabledStage(config, task.stageId);
+    const persistedTaskId = store.resolvePersistedTaskId(taskId);
+    const resolvedProduct = await productIdentity.requireResolvedTask(task);
+    assertTaskContextIdentity(task, resolvedProduct.identity);
+    const terminalVariant = ['E004', 'E005'].includes(stage.id) ? await resolveTaskVariant(purchases, task, resolvedProduct.identity) : undefined;
+    const expectedVersion = body.expectedVersion ?? task.reviewVersion ?? 0;
+    const templates: Record<string, unknown> = {};
+    for (const id of body.targetStageIds || []) {
+      if (!id.endsWith('_SHARED_MEDIA') && config.get().stages.some((row) => row.id === id)) templates[id] = await config.getWorkflowParameterTemplate(id);
+    }
+    const operation = await reviewOperations.accept({
+      kind: 'APPROVE', requestKey: key, request: requestBody, subjectKeys: ['task:' + persistedTaskId],
+      input: { taskId, body, task, stage, resolvedProduct, terminalVariant, stages: config.get().stages.filter((row) => row.id === stage.id || body.targetStageIds?.includes(row.id)), templates, expectedVersion, submissionIds: { WB: randomUUID(), OZON: randomUUID() } },
+      validate: (db) => assertVersion(db.reviews.find((row) => row.taskId === persistedTaskId)?.version || 0, expectedVersion)
+    });
+    return respondOperation(request, reply, operation);
+  });
+  app.post('/api/v1/submissions/batch', async (request, reply) => {
+    const body = (request.body || {}) as { batchId?: string; pendingSubmissionIds?: string[]; conflictPolicy?: PendingSubmission['conflictPolicy']; expectedVersions?: Record<string, number> };
+    const key = requestKey(request, body.batchId);
+    const existing = reviewOperations.lookup('BATCH', key, body);
+    if (existing) return respondOperation(request, reply, existing);
+    const ids = [...new Set(body.pendingSubmissionIds || [])];
+    if (!ids.length) throw new AppError('CONFIG_INVALID', '至少选择一个待投递任务');
+    const pending = ids.map((id) => {
+      const row = store.getPending(id);
+      if (!row) throw new AppError('CONFIG_INVALID', '待投递任务不存在', { id }, 404);
+      if (['PACKAGING', 'FAILED'].includes(row.status)
+        && !store.select('deliveryCheckpoints', (rows) => rows?.some((checkpoint) => checkpoint.pendingSubmissionId === id))
+        && !store.operations().some((operation) => (operation.input.pendingSubmissionIds as string[] | undefined)?.includes(id))) {
+        throw new AppError('LEGACY_DELIVERY_REQUIRES_RECONCILIATION', '历史处理中或失败项缺少交付检查点，请先核对原投递结果，避免重复入队', { pendingSubmissionId: id }, 409);
+      }
+      return row;
+    });
+    const taskSnapshots: Record<string, TaskDetail> = {};
+    const taskSnapshotErrors: Record<string, { code: string; message: string; statusCode: number }> = {};
+    for (const taskId of new Set(pending.map((row) => row.taskId))) {
+      try { taskSnapshots[taskId] = await scanner.getTask(taskId); }
+      catch (error: any) { taskSnapshotErrors[taskId] = { code: error?.code || 'SOURCE_FOLDER_MISSING', message: error?.message || '来源任务无法读取', statusCode: error?.statusCode || 409 }; }
+    }
+    const stageIds = new Set(pending.flatMap((row) => [row.sourceStageId, row.targetStageId]));
+    const operation = await reviewOperations.accept({
+      kind: 'BATCH', requestKey: key, request: body, subjectKeys: pending.map((row) => 'task:' + row.taskId),
+      input: { batchId: body.batchId || 'BATCH-' + randomUUID(), pendingSubmissionIds: ids, pending, taskSnapshots, taskSnapshotErrors, conflictPolicy: body.conflictPolicy || 'new-revision', stages: config.get().stages.filter((row) => stageIds.has(row.id)) },
+      validate: (db) => { for (const item of pending) {
+        const current = db.pendingSubmissions.find((row) => row.id === item.id);
+        if (!current) throw new AppError('CONFIG_INVALID', '待投递任务已变更', { id: item.id }, 409);
+        assertVersion(current.version || 0, body.expectedVersions?.[item.id] ?? item.version ?? 0);
+      } }
+    });
+    return respondOperation(request, reply, operation);
+  });
+  app.post('/api/v1/submissions/:submissionId/retry', async (request, reply) => {
+    const { submissionId } = request.params as { submissionId: string };
+    const key = requestKey(request);
+    const existing = reviewOperations.lookup('RETRY', key, { submissionId });
+    if (existing) return respondOperation(request, reply, existing);
+    const history = store.getSubmission(submissionId);
+    if (!history) throw new AppError('CONFIG_INVALID', '投递记录不存在', { submissionId }, 404);
+    const checkpoint = store.select('deliveryCheckpoints', (rows) => rows?.find((row) => row.submissionId === submissionId));
+    const owner = checkpoint?.operationId ? store.getOperation(checkpoint.operationId) : undefined;
+    if (owner?.status === 'NEEDS_ATTENTION') return respondOperation(request, reply, await reviewOperations.retry(owner.operationId));
+    const operation = await reviewOperations.accept({ kind: 'RETRY', requestKey: key, request: { submissionId }, subjectKeys: ['task:' + store.resolvePersistedTaskId(history.taskId)], input: { submissionId } });
+    return respondOperation(request, reply, operation);
+  });
+  app.get('/api/v1/review-operations', async (request) => ({ items: reviewOperations.list((request.query as { active?: string }).active !== 'false') }));
+  app.get('/api/v1/review-operations/events', async (request, reply) => {
+    reply.hijack();
+    const remove = reviewOperations.addClient(reply.raw);
+    request.raw.on('close', remove);
+  });
+  app.get('/api/v1/review-operations/:operationId', async (request) => reviewOperations.view((request.params as { operationId: string }).operationId));
+  app.post('/api/v1/review-operations/:operationId/retry', async (request, reply) => respondOperation(request, reply, await reviewOperations.retry((request.params as { operationId: string }).operationId)));
   app.get('/api/v1/submissions/batches/:batchId', async (request) => {
     const { batchId } = request.params as { batchId: string };
-    const batch = store.read().submissionBatches.find((item) => item.batchId === batchId);
+    const batch = submissions.getBatch(batchId);
     if (!batch) throw new AppError('CONFIG_INVALID', '投递批次不存在', { batchId }, 404);
     return batch;
   });
   app.get('/api/v1/submissions/history', async (request) => {
     const query = request.query as { status?: string; sourceStageId?: string; targetStageId?: string; search?: string; sku?: string; completedFrom?: string; completedTo?: string };
-    let items = store.read().submissionHistory;
+    let items = store.section('submissionHistory');
     if (query.sku !== undefined) {
       const sku = String(query.sku).trim();
       if (!/^\d{7}$/.test(sku)) throw new AppError('CONFIG_INVALID', 'SKU 必须是完整的 7 位数字', { sku });
@@ -985,13 +1103,12 @@ export async function buildApp(options: BuildAppOptions = {}) {
   });
   app.get('/api/v1/submissions/:submissionId', async (request) => {
     const { submissionId } = request.params as { submissionId: string };
-    const item = store.read().submissionHistory.find((candidate) => candidate.submissionId === submissionId);
+    const item = store.section('submissionHistory').find((candidate) => candidate.submissionId === submissionId);
     if (!item) throw new AppError('CONFIG_INVALID', '投递记录不存在', { submissionId }, 404);
     return item;
   });
-  app.post('/api/v1/submissions/:submissionId/retry', async (request) => {
-    const { submissionId } = request.params as { submissionId: string };
-    const existing = store.read().submissionHistory.find((item) => item.submissionId === submissionId);
+  async function retrySubmission(submissionId: string) {
+    const existing = store.section('submissionHistory').find((item) => item.submissionId === submissionId);
     if (existing?.deliveryType === 'WB_MEDIA' || existing?.deliveryType === 'OZON_MEDIA') {
       if (existing.status === 'SUCCESS') return existing;
       if (!existing.selectedRelativePaths?.length || !existing.productSku || !existing.productNameSnapshot || !existing.variantId || !existing.variantName || !existing.outputRootTemplateSnapshot || !existing.resolvedOutputRoot) {
@@ -1000,14 +1117,17 @@ export async function buildApp(options: BuildAppOptions = {}) {
       const stage = requireEnabledStage(config, existing.sourceStageId);
       const effectiveSourceFolder = legacyRootCompatibility.canonicalizePath(existing.sourceFolder);
       const runtimeTaskId = scanner.taskId(existing.sourceStageId, effectiveSourceFolder);
-      const task = await scanner.getTask(runtimeTaskId).catch(async (error) => {
+      const recoveryCheckpoint = store.select('deliveryCheckpoints', (rows) => rows?.find((row) => row.submissionId === submissionId));
+      const originalOperation = recoveryCheckpoint?.operationId ? store.getOperation(recoveryCheckpoint.operationId) : undefined;
+      const frozenTask = originalOperation?.input.task as TaskDetail | undefined;
+      const task = frozenTask && recoveryCheckpoint && !['PREPARING', 'VERIFIED'].includes(recoveryCheckpoint.phase) ? frozenTask : await scanner.getTask(runtimeTaskId).catch(async (error) => {
         if (runtimeTaskId === existing.taskId) throw error;
         return scanner.getTask(existing.taskId);
       });
       const historicalIdentityTask = { ...task, taskId: existing.taskId, sourceFolder: effectiveSourceFolder };
       const platform = existing.deliveryType === 'WB_MEDIA' ? 'WB' : 'OZON';
       const compatibleTaskIds = new Set([existing.taskId, task.taskId]);
-      const alreadyArchived = store.read().submissionHistory.some((item) => compatibleTaskIds.has(item.taskId) && item.submissionId !== submissionId && item.status === 'SUCCESS' && Boolean(item.archiveFolder));
+      const alreadyArchived = store.section('submissionHistory').some((item) => compatibleTaskIds.has(item.taskId) && item.submissionId !== submissionId && item.status === 'SUCCESS' && Boolean(item.archiveFolder));
       try {
         const record = await variantDelivery.deliver({ platform, task: historicalIdentityTask, stage, selectedRelativePaths: existing.selectedRelativePaths, productSku: existing.productSku, productName: existing.productNameSnapshot, variantId: existing.variantId, variantName: existing.variantName, sourceSubmissionId: existing.sourceSubmissionId, archiveMedia: !alreadyArchived, retry: { submissionId, outputRootTemplateSnapshot: existing.outputRootTemplateSnapshot, resolvedOutputRoot: existing.resolvedOutputRoot } });
         await store.update((db) => {
@@ -1016,14 +1136,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
           const review = db.reviews.find((item) => item.taskId === existing.taskId);
           if (review) Object.assign(review, { status: 'SUBMITTED', updatedAt: new Date().toISOString(), approvedAt: new Date().toISOString() });
         });
-        if (platform === 'WB') {
-          await wbAutoPublishing.onMediaDelivered({ sku: existing.productSku, stageId: existing.sourceStageId as 'E004' | 'E005', submissionId: record.submissionId, variantId: existing.variantId, deliveredAt: record.completedAt || record.startedAt })
-            .catch((error) => app.log.warn({ err: error, sku: existing.productSku, submissionId }, 'WB 自动上品重试媒体事件入队失败'));
-        } else {
-          await ozonAutoPublishing.onMediaDelivered({ sku: existing.productSku, stageId: existing.sourceStageId as 'E004' | 'E005', submissionId: record.submissionId, variantId: existing.variantId, deliveredAt: record.completedAt || record.startedAt, resolvedOutputRoot: record.resolvedOutputRoot, selectedRelativePaths: existing.selectedRelativePaths })
-            .catch((error) => app.log.warn({ err: error, sku: existing.productSku, submissionId }, 'OZON 自动上品重试媒体事件入队失败'));
-        }
-        return store.read().submissionHistory.find((item) => item.submissionId === submissionId) || record;
+        return store.section('submissionHistory').find((item) => item.submissionId === submissionId) || record;
       } catch (error) {
         if (error instanceof TerminalDeliveryError) {
           await store.update((db) => {
@@ -1036,7 +1149,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
       }
     }
     return submissions.retrySubmission(submissionId);
-  });
+  }
 
   app.get('/api/v1/settings/thumbnail-cache', async () => thumbnails.stats());
   app.delete('/api/v1/settings/thumbnail-cache', async () => thumbnails.clear());
@@ -1045,6 +1158,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const body = request.body as { path?: string };
     const stale = await scanStaging(config);
     const item = stale.find((candidate) => candidate.path === body.path);
+    if (item && store.select('deliveryCheckpoints', (rows) => rows?.some((row) => row.phase !== 'COMPLETE' && [row.targetTemp, row.archiveTemp].some((target) => target && (path.resolve(target) === path.resolve(item.path) || path.resolve(target).startsWith(path.resolve(item.path) + path.sep)))))) throw new AppError('TASK_LOCKED', '该暂存目录属于尚未完成的投递，不能清理', undefined, 409);
     if (!item || !item.stale) throw new AppError('CONFIG_INVALID', '只能清理已识别且超过 24 小时的暂存目录');
     await rm(item.path, { recursive: true, force: true });
     return { ok: true };
@@ -1062,6 +1176,14 @@ export async function buildApp(options: BuildAppOptions = {}) {
       return reply.code(404).send({ error: { code: 'NOT_FOUND', message: '请求的资源不存在' } });
     });
   }
+  const deliveryOutbox = new DeliveryOutboxService(store, app.log, async (entry, record) => {
+    const common = { sku: record.productSku!, stageId: record.sourceStageId as 'E004' | 'E005', submissionId: record.submissionId, variantId: record.variantId!, deliveredAt: record.completedAt || record.startedAt };
+    if (entry.platform === 'WB') {
+      if (wbSourceMediaCleanupRepository.configured && await wbSourceMediaCleanup.confirmsCleanedDelivery(common)) return;
+      await wbAutoPublishing.onMediaDelivered(common);
+    }
+    else await ozonAutoPublishing.onMediaDelivered({ ...common, resolvedOutputRoot: record.resolvedOutputRoot, selectedRelativePaths: record.selectedRelativePaths || [] });
+  });
   let legacyBackgroundWorkersReady = true;
   try {
     await assertLegacyRootOperationsReady();
@@ -1078,8 +1200,11 @@ export async function buildApp(options: BuildAppOptions = {}) {
     ozonAutoPublishing.start();
     ozonSourceMediaCleanup.start();
   }
+  if (legacyBackgroundWorkersReady) { await reviewOperations.start(); deliveryOutbox.start(); }
   await store.addEvent('APP_STARTED', '应用服务已启动', { appDataDir: config.appDataDir });
   app.addHook('onClose', async () => {
+    await reviewOperations.stop();
+    await deliveryOutbox.stop();
     downloads.stop();
     ozonSourceMediaCleanup.stop();
     await Promise.all([mediaIndex.close(), wbCatalog.stop(), ozonCatalog.stop(), wbTaskStatusSynchronizer.stop(), wbAutoPublishing.stop(), ozonAutoPublishing.stop()]);
@@ -1388,6 +1513,7 @@ export function isLegacyRootSensitiveRequest(method: string, url: string): boole
   }
   return /^\/api\/v1\/local-import\/(?:preview|imports(?:\/[^/]+\/retry)?)$/.test(pathname)
     || /^\/api\/v1\/submissions\/(?:batch|[^/]+\/retry)$/.test(pathname)
+    || /^\/api\/v1\/review-operations\/[^/]+\/retry$/.test(pathname)
     || pathname === '/api/v1/purchase-download-jobs/batch'
     || /^\/api\/v1\/purchases\/[^/]+\/downloads$/.test(pathname)
     || /^\/api\/v1\/notifications\/[^/]+\/retry$/.test(pathname)

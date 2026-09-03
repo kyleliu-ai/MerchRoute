@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "candidateId": "merchroute-release-acceptance-gates-20260903-1432",
+  "candidateId": "merchroute-review-delivery-reliability-20260903-1758",
   "baseline": {
     "commit": "8a52c7760032167d86b26f36b045a849a6b0569f",
     "status": "USER_AUTHORIZED_RECONSTRUCTION_NOT_ACCEPTED_RELEASE"
@@ -199,9 +199,24 @@
       "head": "e8c357247173a912fb588d92ce3d30e11ed09e91",
       "featureId": "core-deployment",
       "relation": "TREE_EQUIVALENT_LOCAL_CI_REPAIR"
+    },
+    {
+      "name": "work/release-acceptance-gates-20260903-1432",
+      "head": "8568914f30a9d639f7df92590808d887f4f0809e",
+      "featureId": "core-deployment",
+      "relation": "USER_CONFIRMED_LOCAL_BASELINE"
     }
   ],
   "equivalenceEvidence": [
+    {
+      "kind": "tree",
+      "refs": [
+        "8568914f30a9d639f7df92590808d887f4f0809e",
+        "182c1e70d4926384c1e8f84a4268cbc6248cacfa"
+      ],
+      "hash": "3fd51bb8dbe1d60a26a00bb4484b5dd8042d51a6",
+      "meaning": "本次只读核验：用户确认的本机优化基线与 GitHub main 完整源码树相同；保留原有 320px 侧边栏待修事项。"
+    },
     {
       "kind": "tree",
       "refs": [
@@ -601,6 +616,34 @@
         "diff-check"
       ],
       "sourceDocumentSha256": "106d42a6e9b461d3a36e79f3c10fff5f3d5068efddada5e1a2a61f48ba931382"
+    },
+    {
+      "id": "review-delivery-reliability",
+      "title": "图片审核与投递持久化操作、恢复及性能优化",
+      "action": "INTEGRATE",
+      "sourceChecks": [
+        {
+          "path": "apps/server/src/services/review-operations.ts"
+        },
+        {
+          "path": "apps/server/src/utils/delivery-files.ts"
+        },
+        {
+          "path": "apps/server/src/services/delivery-outbox.ts"
+        },
+        {
+          "path": "apps/web/src/review-operations.tsx"
+        },
+        {
+          "path": "tests/e2e/review-operation-recovery.spec.ts"
+        }
+      ],
+      "checkIds": [
+        "check",
+        "postgres-integration",
+        "e2e",
+        "isolated-runtime"
+      ]
     }
   ]
 }

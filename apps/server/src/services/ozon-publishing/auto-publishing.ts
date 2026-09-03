@@ -21,6 +21,8 @@ import {
   type PricingCalculationItem,
   type ProductVariant
 } from '@n8n-media-review/shared';
+import type { DeliveryReplayService } from '../delivery-replay.js';
+import { stableHash } from '../review-operations.js';
 import type { StateStore } from '../../repositories/store.js';
 import type {
   OzonAutomaticPreparationReplanTarget,
@@ -105,7 +107,7 @@ type OzonVariantPublicationScope = {
   requiredVariantIds: string[];
 };
 
-type CoordinatorOptions = { workerIntervalMs?: number; reconciliationIntervalMs?: number; stableProbeMs?: number; concurrency?: number };
+type CoordinatorOptions = { historyReplay?: DeliveryReplayService; workerIntervalMs?: number; reconciliationIntervalMs?: number; stableProbeMs?: number; concurrency?: number };
 type OzonMultistoreAutoDependencies = {
   storeRepository: Pick<OzonStoreRepository,
     'completeFanoutPreparation' | 'finalizeMediaFanoutBatch' | 'freezePreparationFanoutPlan' | 'getStore' | 'isFleetCapabilityReady' | 'listEligibleAutoStores' | 'listStores'>;
@@ -138,7 +140,7 @@ export class OzonAutoPublishingCoordinator {
     private readonly titleTranslator: OzonTitleTranslator,
     private readonly store: StateStore,
     private readonly logger: FastifyBaseLogger,
-    options: CoordinatorOptions = {},
+    private readonly options: CoordinatorOptions = {},
     private readonly multistore?: OzonMultistoreAutoDependencies
   ) {
     this.workerIntervalMs = Math.max(1_000, options.workerIntervalMs ?? 10_000);
@@ -1375,11 +1377,14 @@ export class OzonAutoPublishingCoordinator {
         durableKeys.add(key);
         deliveryByKey.set(key, notification);
       }
-      const historyDeliveries = this.store.read().submissionHistory
+      const historyDeliveries = (this.options.historyReplay ? this.store.section('submissionHistory') : this.store.read().submissionHistory)
         .filter((record) => record.status === 'SUCCESS' && record.deliveryType === 'OZON_MEDIA' && Boolean(record.productSku)
           && (record.sourceStageId === 'E004' || record.sourceStageId === 'E005'))
         .sort((left, right) => Date.parse(left.completedAt || left.startedAt) - Date.parse(right.completedAt || right.startedAt));
-      for (const record of historyDeliveries) {
+      const historyNotification = (record: (typeof historyDeliveries)[number]): DeliveryNotification => ({
+        sku: record.productSku!, stageId: record.sourceStageId as 'E004' | 'E005', submissionId: record.submissionId, variantId: record.variantId, deliveredAt: record.completedAt || record.startedAt, resolvedOutputRoot: record.resolvedOutputRoot, selectedRelativePaths: record.selectedRelativePaths
+      });
+      for (const record of this.options.historyReplay ? [] : historyDeliveries) {
         const notification: DeliveryNotification = {
           sku: record.productSku!,
           stageId: record.sourceStageId as 'E004' | 'E005',
@@ -1404,6 +1409,17 @@ export class OzonAutoPublishingCoordinator {
         // A delivery attached to a mutable round must be reconsidered after that
         // round freezes or finishes. Cache only terminal no-job decisions.
         if (!result?.deferred && !result?.job) this.reconciledDeliveries.add(key);
+      }
+      if (this.options.historyReplay) {
+        const epoch = stableHash(await this.repository.getSettings());
+        await this.options.historyReplay.run('OZON', historyDeliveries, epoch, async (record) => {
+          const notification = historyNotification(record);
+          const key = mediaReconciliationKey(notification);
+          if (durableKeys.has(key)) return false;
+          const result = await this.handleMediaDelivered(notification, false);
+          if (result?.becameRunnable) shouldKickWorker = true;
+          return !result?.deferred && !result?.job;
+        });
       }
       if (shouldKickWorker) void this.runWorkerNow();
       this.lastReconciledAt = new Date().toISOString();
