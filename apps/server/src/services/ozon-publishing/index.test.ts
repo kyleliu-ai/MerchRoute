@@ -36,10 +36,13 @@ import {
 } from './rfbs-stock-callback.js';
 
 const roots: string[] = [];
+// Historical inputs remain Windows paths; the compatibility adapter must map
+// them to an absolute path on the OS executing the service, not a fake G: drive.
+const runtimeFixtureDataRoot = path.resolve(os.tmpdir(), 'merchroute-ozon-runtime-fixture', 'current');
 
 describe('OZON legacy runtime path compatibility', () => {
   it('derives the current work directory from a historical productJsonPath without changing the stored payload', async () => {
-    const rootDirectory = 'G:\\01_MerchRoute\\OZON-Auto-Publish';
+    const rootDirectory = path.join(runtimeFixtureDataRoot, 'OZON-Auto-Publish');
     const configuredLegacyRootDirectory = 'G:\\01_n8n-global\\OZON-Auto-Publish';
     const historicalProductJsonPath = 'G:\\01_n8n-global\\OZON-Auto-Publish\\processing\\0000123__r4\\product.json';
     const job = {
@@ -53,7 +56,7 @@ describe('OZON legacy runtime path compatibility', () => {
       listRuntimeJobs: vi.fn(async () => ({ items: [job], total: 1, page: 1, pageSize: 20 }))
     } as unknown as OzonRepository;
     const canonicalizePath = (value: string) => value.toLocaleLowerCase('en-US').startsWith('g:\\01_n8n-global\\')
-      ? `G:\\01_MerchRoute\\${value.slice('G:\\01_n8n-global\\'.length)}`
+      ? path.join(runtimeFixtureDataRoot, ...value.slice('G:\\01_n8n-global\\'.length).split('\\'))
       : value;
     const service = new OzonPublishingService(
       repository,
@@ -83,7 +86,7 @@ describe('OZON legacy runtime path compatibility', () => {
     'D:\\foreign-root\\processing\\0000123__r4\\product.json',
     'G:\\01_n8n-global\\..\\foreign-root\\0000123__r4\\product.json'
   ])('fails closed instead of redirecting an unsupported absolute history path into inbox: %s', async (productJsonPath) => {
-    const rootDirectory = 'G:\\01_MerchRoute\\OZON-Auto-Publish';
+    const rootDirectory = path.join(runtimeFixtureDataRoot, 'OZON-Auto-Publish');
     const job = { id: '22222222-2222-4222-8222-222222222222', sku: '0000123', workRelPath: '', payload: { productJsonPath } } as any;
     const repository = {
       getSettings: vi.fn(async () => ({ enabled: true, rootDirectory })),
@@ -91,7 +94,7 @@ describe('OZON legacy runtime path compatibility', () => {
     } as unknown as OzonRepository;
     const canonicalizePath = (value: string) => value.toLocaleLowerCase('en-US').startsWith('g:\\01_n8n-global\\')
       && !value.includes('..')
-      ? `G:\\01_MerchRoute\\${value.slice('G:\\01_n8n-global\\'.length)}`
+      ? path.join(runtimeFixtureDataRoot, ...value.slice('G:\\01_n8n-global\\'.length).split('\\'))
       : value;
     const service = new OzonPublishingService(
       repository, {} as PurchaseRepository, {} as FastifyBaseLogger,
@@ -106,9 +109,9 @@ describe('OZON legacy runtime path compatibility', () => {
 });
 
 describe('OZON historical recovery legacy runtime projection', () => {
-  const rootDirectory = 'G:\\01_MerchRoute\\OZON-Auto-Publish';
+  const rootDirectory = path.join(runtimeFixtureDataRoot, 'OZON-Auto-Publish');
   const legacyDataRoot = 'G:\\01_n8n-global';
-  const currentDataRoot = 'G:\\01_MerchRoute';
+  const currentDataRoot = runtimeFixtureDataRoot;
   const historicalProductJsonPath = `${legacyDataRoot}\\OZON-Auto-Publish\\processing\\0000123__r4\\product.json`;
   const expectedWorkDirectory = path.join(rootDirectory, 'processing', '0000123__r4');
 
@@ -119,7 +122,7 @@ describe('OZON historical recovery legacy runtime projection', () => {
     if (normalized.split('\\').includes('..')) return value;
     if (normalizedIdentity === legacyIdentity) return currentDataRoot;
     if (!normalizedIdentity.startsWith(`${legacyIdentity}\\`)) return value;
-    return `${currentDataRoot}${normalized.slice(legacyDataRoot.length)}`;
+    return path.join(currentDataRoot, ...normalized.slice(legacyDataRoot.length + 1).split('\\'));
   };
 
   const historicalJob = (productJsonPath = historicalProductJsonPath) => ({
