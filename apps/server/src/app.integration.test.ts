@@ -839,16 +839,40 @@ describe.sequential('review and submission integration', () => {
     await rm(path.join(config.stages[1]!.candidateRoot!, '多变体选图产品'), { recursive: true, force: true });
   });
 
-  it('fails safely when a selected source file disappears before submission', async () => {
-    await createProduct(config.stages[1]!.candidateRoot!, '待删除源文件', ['white/image_01.png']);
+  it.each([false, true])('fails safely when a selected source file disappears before submission (refresh=%s)', async (refreshIndex) => {
+    const folderName = refreshIndex ? '待删除源文件刷新索引' : '待删除源文件保留索引';
+    // Keep an unselected image so a watcher refresh cannot remove the whole
+    // task while this case specifically exercises the missing-file contract.
+    await createProduct(config.stages[1]!.candidateRoot!, folderName, ['white/image_01.png', 'unselected/keep.png']);
     await app.services.mediaIndex.refreshStage(config.stages[1]!.id);
-    const task = (await app.inject({ method: 'GET', url: '/api/v1/stages/E001/tasks' })).json().items.find((item: any) => item.sourceFolderName === '待删除源文件');
+    const task = (await app.inject({ method: 'GET', url: '/api/v1/stages/E001/tasks' })).json().items.find((item: any) => item.sourceFolderName === folderName);
     const approve = await app.inject({ method: 'POST', url: `/api/v1/tasks/${task.taskId}/approve`, payload: { ...e001Approval(['white/image_01.png']), targetStageIds: ['E002'] } });
+    expect(approve.statusCode).toBe(200);
     const pendingId = approve.json().pendingSubmissions[0].id;
-    await rm(path.join(config.stages[1]!.candidateRoot!, '待删除源文件', 'white', 'image_01.png'));
-    const batch = await app.inject({ method: 'POST', url: '/api/v1/submissions/batch', payload: { batchId: 'BATCH-TEST-MISSING', pendingSubmissionIds: [pendingId], conflictPolicy: 'skip' } });
+    await rm(path.join(config.stages[1]!.candidateRoot!, folderName, 'white', 'image_01.png'));
+    if (refreshIndex) await app.services.mediaIndex.refreshStage('E001');
+    const batch = await app.inject({ method: 'POST', url: '/api/v1/submissions/batch', payload: { batchId: `BATCH-TEST-MISSING-${refreshIndex}`, pendingSubmissionIds: [pendingId], conflictPolicy: 'skip' } });
+    expect(batch.statusCode).toBe(200);
     expect(batch.json().results[0]).toMatchObject({ status: 'FAILED', errorCode: 'SOURCE_FILE_MISSING' });
-    expect(await stat(path.join(config.stages[1]!.targets[0]!.targetQueueRoot, '待删除源文件-已经审核')).catch(() => null)).toBeNull();
+    expect((await stat(path.join(task.sourceFolder, 'unselected', 'keep.png'))).isFile()).toBe(true);
+    expect(await stat(path.join(config.stages[1]!.targets[0]!.targetQueueRoot, `${folderName}-已经审核`)).catch(() => null)).toBeNull();
+    expect(await stat(path.join(config.stages[1]!.approvedArchiveRoot!, `${folderName}-已经审核`)).catch(() => null)).toBeNull();
+  });
+
+  it('fails safely when a refreshed task no longer contains any media', async () => {
+    const folderName = '已无媒体的源任务';
+    await createProduct(config.stages[1]!.candidateRoot!, folderName, ['white/image_01.png']);
+    await app.services.mediaIndex.refreshStage('E001');
+    const task = (await app.inject({ method: 'GET', url: '/api/v1/stages/E001/tasks' })).json().items.find((item: any) => item.sourceFolderName === folderName);
+    const approve = await app.inject({ method: 'POST', url: `/api/v1/tasks/${task.taskId}/approve`, payload: { ...e001Approval(['white/image_01.png']), targetStageIds: ['E002'] } });
+    expect(approve.statusCode).toBe(200);
+    await rm(path.join(task.sourceFolder, 'white', 'image_01.png'));
+    await app.services.mediaIndex.refreshStage('E001');
+    const batch = await app.inject({ method: 'POST', url: '/api/v1/submissions/batch', payload: { batchId: 'BATCH-TEST-EMPTY-SOURCE', pendingSubmissionIds: [approve.json().pendingSubmissions[0].id], conflictPolicy: 'skip' } });
+    expect(batch.statusCode).toBe(200);
+    expect(batch.json().results[0]).toMatchObject({ status: 'FAILED', errorCode: 'SOURCE_FOLDER_MISSING' });
+    expect(await stat(path.join(config.stages[1]!.targets[0]!.targetQueueRoot, `${folderName}-已经审核`)).catch(() => null)).toBeNull();
+    expect(await stat(path.join(config.stages[1]!.approvedArchiveRoot!, `${folderName}-已经审核`)).catch(() => null)).toBeNull();
   });
 
   it('retries only the archive leg after a partial submission', async () => {
