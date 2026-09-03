@@ -9,6 +9,7 @@ import { startBoundRelease } from '../release-runtime.mjs';
 import { switchRelease } from './release-transaction.mjs';
 import { inspectBusinessIdle } from './business-gate.mjs';
 import { verifyLegacyRelease } from './legacy-release.mjs';
+import { probeReadOnlyPages } from './read-only-pages.mjs';
 
 export async function releaseCommand(command,{root,home,config,options}) {
   if(command==='prepare'){
@@ -85,7 +86,9 @@ export async function releaseCommand(command,{root,home,config,options}) {
       if(cycle===2)await new Promise(resolve=>setTimeout(resolve,15000));
       const live=await inspect(binding);if(live.pid!==running.pid)throw new Error('Runtime did not remain alive');
       await verifyTarget(binding);
-      for(const route of ['/api/v1/health','/about','/purchases','/review/E003']){const response=await fetch('http://127.0.0.1:4173'+route,{signal:AbortSignal.timeout(30000)});if(!response.ok)throw new Error('Read-only route failed: '+route);}
+      const health=await fetch('http://127.0.0.1:4173/api/v1/health',{signal:AbortSignal.timeout(30000)});
+      if(!health.ok)throw new Error('Read-only health check failed');
+      await probeReadOnlyPages('http://127.0.0.1:4173');
       const about=await (await fetch('http://127.0.0.1:4173/api/v1/about/version',{signal:AbortSignal.timeout(60000)})).json();
       if(about.current.commitSha!==binding.sourceCommit||about.current.productVersion!==binding.productVersion||about.runtimeStatus!=='CURRENT')throw new Error('About identity mismatch');
     },

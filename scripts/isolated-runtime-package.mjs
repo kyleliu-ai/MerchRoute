@@ -6,6 +6,7 @@ import { randomBytes } from 'node:crypto';
 import { prepareInstalledRelease } from './workflow/release-package.mjs';
 import { assertPortFree } from './workflow/development.mjs';
 import { verifyInstalledRelease } from './lib/installed-release.mjs';
+import { probeReadOnlyPages } from './workflow/read-only-pages.mjs';
 const root=path.resolve(import.meta.dirname,'..'),home=process.argv[2];
 if(!path.isAbsolute(home||''))throw new Error('External development home is required');
 const config=JSON.parse(await readFile(path.join(home,'machine.json')));
@@ -25,7 +26,7 @@ try{
   const about=await (await fetch('http://127.0.0.1:4183/api/v1/about/version',{signal:AbortSignal.timeout(60000)})).json();
   assert.equal(about.current.productVersion,candidate.productVersion);assert.equal(about.current.commitSha,candidate.sourceCommit);
   assert.equal(about.current.buildChannel,'candidate');assert.equal(about.runtimeStatus,'CURRENT');
-  for(const route of ['/about','/purchases','/review/E003'])assert.equal((await fetch('http://127.0.0.1:4183'+route)).status,200);
+  await probeReadOnlyPages('http://127.0.0.1:4183');
   await verifyInstalledRelease(candidate.root,candidate.manifestSha256);
   console.log(JSON.stringify({assertionsPassed:9,assertionsFailed:0,gitFree:true,productVersion:candidate.productVersion,sourceCommit:candidate.sourceCommit,productionTouched:false}));
 }finally{

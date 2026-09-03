@@ -10,6 +10,20 @@ import { npmForNode } from './toolchain.mjs';
 import { verifyDevelopmentDatabase } from './development-database.mjs';
 import { verifyLegacyRelease } from './legacy-release.mjs';
 import { testEnvironment } from './verify.mjs';
+import { probeReadOnlyPages } from './read-only-pages.mjs';
+
+test('runtime page probes request the browser HTML contract and reject non-page responses',async()=>{
+  const seen=[];
+  const fetchPage=async(url,options)=>{
+    seen.push(url);assert.equal(options.headers.Accept,'text/html');
+    return new Response('<html><div id="root"></div></html>',{status:200,headers:{'content-type':'text/html; charset=utf-8'}});
+  };
+  assert.deepEqual(await probeReadOnlyPages('http://127.0.0.1:4183',fetchPage),{pages:3});
+  assert.equal(seen.length,3);
+  await assert.rejects(probeReadOnlyPages('https://example.invalid',fetchPage),/Unapproved/);
+  await assert.rejects(probeReadOnlyPages('http://127.0.0.1:4183',async()=>new Response('{}',{headers:{'content-type':'application/json'}})),/page failed/);
+  await assert.rejects(probeReadOnlyPages('http://127.0.0.1:4183',async()=>new Response('wrong page',{headers:{'content-type':'text/html'}})),/application shell/);
+});
 
 test('full local regression bounds workers without relaxing timeouts or inheriting credentials',()=>{
   const env=testEnvironment({VITEST_MAX_THREADS:'100',VITEST_MAX_FORKS:'100',MERCHROUTE_ENV_FILE:'production',DATABASE_URL:'production'},'synthetic','cleanup');
