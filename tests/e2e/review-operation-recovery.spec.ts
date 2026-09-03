@@ -1,6 +1,8 @@
 import { expect, test } from '@playwright/test';
 
 test('recovers a lost approval acknowledgement and reloads batch progress without SSE', async ({ page }) => {
+  const before = (await (await page.request.get('/api/v1/submissions/history')).json()).items;
+  const existingIds = new Set(before.map((record: any) => record.submissionId));
   await page.route('**/api/v1/review-operations/events', (route) => route.abort());
   await page.goto('/review/E006');
   const row = page.locator('.task-table .ant-table-tbody tr').filter({ hasText: 'E2E-测试产品A' });
@@ -40,6 +42,13 @@ test('recovers a lost approval acknowledgement and reloads batch progress withou
   await page.reload();
   await expect(page.getByTestId('review-operation').filter({ hasText: batchOperationId })).toContainText('已完成');
   await expect(pending).toHaveCount(0);
+  const batchReplay = await page.request.post(response.url(), {
+    headers: { Prefer: 'respond-async', 'Idempotency-Key': response.request().headers()['idempotency-key']! },
+    data: response.request().postDataJSON()
+  });
+  expect(batchReplay.status()).toBe(202);
+  expect((await batchReplay.json()).operation.operationId).toBe(batchOperationId);
   const history = (await (await page.request.get('/api/v1/submissions/history')).json()).items;
-  expect(history.filter((record: any) => record.sourceFolder.includes('E2E-测试产品A'))).toHaveLength(1);
+  const delivered = history.filter((record: any) => record.sourceFolder.includes('E2E-测试产品A') && !existingIds.has(record.submissionId));
+  expect(delivered).toHaveLength(1);
 });
