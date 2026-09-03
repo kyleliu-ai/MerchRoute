@@ -42,11 +42,7 @@ test.describe.serial('E000 local import and E001 delivery', () => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await platformRows.filter({ hasText: 'PDD' }).getByRole('button', { name: '导入产品媒体' }).click();
     const directoryHeader = page.locator('.local-directory-header.is-product-media-header');
-    await expect(directoryHeader).toContainText('变体目录');
-    await expect(directoryHeader).toContainText('创建日期');
-    await expect(directoryHeader).toContainText('平台来源');
-    await expect(directoryHeader).toContainText('导入状态');
-    await expect(directoryHeader).toContainText('操作');
+    await expect(directoryHeader.locator(':scope > span')).toHaveText(['选择', '变体目录', '创建日期', '平台来源', '导入状态', '操作']);
     const directoryResponse = await page.request.get('/api/v1/local-import/directories?path=PDD');
     expect(directoryResponse.ok()).toBeTruthy();
     const directoryPayload = await directoryResponse.json() as { directories: Array<{ name: string; createdAt: string; importStatus: 'IMPORTED' | 'NEW' }> };
@@ -58,6 +54,7 @@ test.describe.serial('E000 local import and E001 delivery', () => {
     await expect(mediaRows.locator('.local-directory-created-at').first()).toHaveText(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
     await expect(mediaRows.locator('.local-directory-platform').first()).toContainText('PDD');
     await expect(mediaRows.locator('.local-directory-import-status')).toHaveText(['新下载', '新下载']);
+    await expect(mediaRows.first().locator('.local-directory-import-status .ant-tag')).toHaveClass(/ant-tag-cyan/);
     await page.setViewportSize({ width: 320, height: 760 });
     await expect(directoryHeader).toBeHidden();
     await expect(mediaRows.first().locator('.local-directory-import-status')).toHaveAttribute('data-label', '导入状态');
@@ -109,6 +106,11 @@ test.describe.serial('E000 local import and E001 delivery', () => {
     const text = await success.textContent();
     sku = text?.match(/内部 SKU (\d{7})/)?.[1] || '';
     expect(sku).toMatch(/^\d{7}$/);
+    await expect(mediaRows.locator('.local-directory-import-status')).toHaveText(['已导入', '已导入']);
+    await expect(mediaRows.first().locator('.local-directory-import-status .ant-tag')).toHaveClass(/ant-tag-green/);
+    const unimportedResponse = await page.request.get('/api/v1/local-import/directories?path=WB');
+    expect(unimportedResponse.ok()).toBeTruthy();
+    expect((await unimportedResponse.json()).directories.map((item: { importStatus: string }) => item.importStatus)).toEqual(['NEW', 'NEW']);
 
     const purchase = await page.request.get(`/api/v1/purchases/${sku}`);
     expect(purchase.ok()).toBeTruthy();
@@ -181,6 +183,11 @@ test.describe.serial('E000 local import and E001 delivery', () => {
     await expect(importedRows.locator('.local-directory-import-status')).toHaveText(['已导入', '已导入']);
     await expect(page.getByRole('checkbox', { name: '选择 PDD/E2E红色' })).toBeEnabled();
     await expect(importedRows.filter({ hasText: 'E2E红色' }).getByRole('button', { name: '打开' })).toBeVisible();
+    await importedRows.filter({ hasText: 'E2E红色' }).getByRole('button', { name: '打开' }).click();
+    await expect(page.locator('.local-import-browser .ant-breadcrumb')).toContainText('E2E红色');
+    await expect(page.locator('.local-directory-import-status')).toHaveCount(0);
+    await page.locator('.local-import-browser .ant-breadcrumb').getByRole('button', { name: 'PDD', exact: true }).click();
+    await expect(importedRows.locator('.local-directory-import-status')).toHaveText(['已导入', '已导入']);
     await page.setViewportSize({ width: 320, height: 760 });
     await expect(importedRows.first().locator('.local-directory-import-status')).toHaveAttribute('data-label', '导入状态');
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true);

@@ -78,6 +78,76 @@ describe('OzonSourceMediaCleanupService gates', () => {
     }));
   });
 
+  it('历史 DB 批次的旧根只在文件系统检查时映射，不改写原对象', async () => {
+    const legacyRoot = 'G:\\01_n8n-global';
+    const currentRoot = 'G:\\01_MerchRoute';
+    const current = evidence('HISTORICAL');
+    current.versionSnapshot = {
+      sharedMaterial: {
+        mediaAssets: [{
+          assetId: 'asset-1', relativePath: 'variants/01/image.png', kind: 'IMAGE', sizeBytes: 12,
+          sha256: 'abc', productVariantId: 'variant-1', sourceStageId: 'E005',
+          sourceSubmissionId: 'submission-1', deliveredAt: '2026-08-14T00:00:00.000Z'
+        }],
+        variants: [{ productVariantId: 'variant-1', media: [{ assetId: 'asset-1', sortOrder: 0 }] }]
+      }
+    };
+    const sourceMediaIdentityHash = sourceMediaIdentityHashFromSnapshot(current.versionSnapshot);
+    current.versionSourceMediaIdentityHash = sourceMediaIdentityHash;
+    current.batch = Object.freeze({
+      ...current.batch,
+      rootDirectory: legacyRoot,
+      sourceMediaIdentityHash
+    });
+    current.targets = [];
+    current.actualPublicationIds = [];
+    current.artifacts = [{
+      cleanupId: current.batch.id,
+      kind: 'RAW_INBOX',
+      state: 'READY',
+      sourceRelPath: 'inbox/0000123',
+      mediaIdentityHash: sourceMediaIdentityHash,
+      fileCount: 0,
+      totalBytes: 0,
+      reclaimedBytes: 0,
+      updatedAt: '2026-08-14T00:00:00.000Z'
+    }];
+    const persistedBatch = current.batch;
+    const repository = {
+      evidence: vi.fn(async () => current),
+      getByGeneratedVersion: vi.fn(async () => ({ id: current.batch.id }))
+    };
+    const files = { snapshot: vi.fn(async () => ({
+      exists: false,
+      absolutePath: currentRoot,
+      directorySignature: '',
+      fileCount: 0,
+      totalBytes: 0,
+      files: [],
+      stagingEmpty: true
+    })) };
+    const canonicalizePath = vi.fn((value: string) => value === legacyRoot ? currentRoot : value);
+    const service = new OzonSourceMediaCleanupService(
+      repository as any,
+      files as any,
+      { warn: vi.fn() } as any,
+      60_000,
+      5,
+      canonicalizePath
+    );
+
+    await expect(service.inspect(current.batch.id)).resolves.toMatchObject({
+      artifacts: [expect.objectContaining({ kind: 'RAW_INBOX', exists: false })]
+    });
+
+    expect(files.snapshot).toHaveBeenCalledWith(expect.objectContaining({
+      rootDirectory: currentRoot,
+      sourceRelPath: 'inbox/0000123'
+    }));
+    expect(current.batch).toBe(persistedBatch);
+    expect(current.batch.rootDirectory).toBe(legacyRoot);
+  });
+
   it('媒体身份哈希冻结路径、类型、大小、SHA、变体归属和顺序', () => {
     const snapshot = {
       sharedMaterial: {

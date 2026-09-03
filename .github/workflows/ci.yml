@@ -2,133 +2,431 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'work/merchroute-github-publish-*']
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  MERCHROUTE_CI_EXPECTED_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
 
 jobs:
   deployment-contract:
     name: Deployment contract (${{ matrix.os }})
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-14]
+        include:
+          - os: windows-latest
+            label: windows
+          - os: macos-14
+            label: macos
     runs-on: ${{ matrix.os }}
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v7
-      - name: Set up Node.js
-        uses: actions/setup-node@v7
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
-      - name: Pin npm
-        run: npm install --global npm@10.9.8
+          cache: npm
+      - name: Pin npm and install dependencies
+        run: |
+          npm install --global npm@10.9.8
+          npm ci
+      - name: Ensure real FFmpeg fixture dependency (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
+            choco install ffmpeg --yes --no-progress
+            if ($LASTEXITCODE -ne 0) { throw 'FFmpeg installation failed' }
+          }
+      - name: Ensure real FFmpeg fixture dependency (macOS)
+        if: runner.os == 'macOS'
+        run: command -v ffmpeg >/dev/null || brew install ffmpeg
       - name: Verify deployment contracts
-        run: npm run deployment:test
-      - name: Verify n8n runtime scripts
-        run: npm run n8n-runtime:test
-      - name: Verify public deployment package
-        run: npm run deployment:verify
+        run: node --import tsx scripts/run-ci-check.mjs --id deployment-${{ matrix.label }}-tests --record-dir "$RUNNER_TEMP/ci-records" --expected-commit "$MERCHROUTE_CI_EXPECTED_COMMIT" -- npm run deployment:test
+      - name: Verify n8n runtime scripts and actual TAP counts
+        run: node --import tsx scripts/run-ci-check.mjs --id deployment-${{ matrix.label }}-runtime --record-dir "$RUNNER_TEMP/ci-records" --expected-commit "$MERCHROUTE_CI_EXPECTED_COMMIT" -- node --import tsx scripts/ci-regression-tests.mjs --suite n8n-runtime
+      - name: Verify public deployment source
+        run: node --import tsx scripts/run-ci-check.mjs --id deployment-${{ matrix.label }}-verify --record-dir "$RUNNER_TEMP/ci-records" --expected-commit "$MERCHROUTE_CI_EXPECTED_COMMIT" -- npm run deployment:verify
+      - name: Upload sanitized check records only
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-evidence-deployment-${{ matrix.label }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ci-records/*.json
+          if-no-files-found: warn
+          retention-days: 14
 
   jimeng-source:
     name: Jimeng source, image, and ping
     runs-on: ubuntu-latest
+    timeout-minutes: 35
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v7
-      - name: Set up Node.js
-        uses: actions/setup-node@v7
+      - uses: actions/checkout@v7
         with:
-          node-version-file: .nvmrc
-      - name: Pin npm
-        run: npm install --global npm@10.9.8
-      - name: Run offline Jimeng regression tests
-        run: npm run jimeng:test
-      - name: Build pinned Jimeng image
-        run: npm run jimeng:build
-      - name: Verify Jimeng health endpoint
-        shell: bash
-        run: |
-          set -euo pipefail
-          container_id="$(docker run --detach --rm --publish 127.0.0.1:8000:8000 --tmpfs /app/data:rw merchroute/jimeng-free-api-all:0.9.1-e002-20260813)"
-          trap 'docker stop "$container_id" >/dev/null 2>&1 || true' EXIT
-          for attempt in {1..30}; do
-            response="$(curl --silent --fail http://127.0.0.1:8000/ping || true)"
-            [[ "${response//\"/}" == "pong" ]] && exit 0
-            sleep 2
-          done
-          docker logs "$container_id"
-          exit 1
-
-  verify:
-    name: Verify pinned toolchain
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v7
-      - name: Set up Node.js
-        uses: actions/setup-node@v7
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
-      - name: Pin npm
-        run: npm install --global npm@10.9.8
-      - name: Install dependencies
-        run: npm ci
-      - name: Verify source
-        run: npm run check
-      - name: Audit production dependencies
-        run: npm audit --omit=dev --audit-level=moderate
+      - name: Pin npm and install dependencies
+        run: |
+          npm install --global npm@10.9.8
+          npm ci
+      - name: Run original offline regression and same real TAP tests
+        run: node --import tsx scripts/run-ci-check.mjs --id jimeng-tests --record-dir "$RUNNER_TEMP/ci-records" --expected-commit "$MERCHROUTE_CI_EXPECTED_COMMIT" -- node --import tsx scripts/ci-regression-tests.mjs --suite jimeng
+      - name: Build pinned Jimeng image
+        run: node --import tsx scripts/run-ci-check.mjs --id jimeng-image --record-dir "$RUNNER_TEMP/ci-records" --expected-commit "$MERCHROUTE_CI_EXPECTED_COMMIT" -- npm run jimeng:build
+      - name: Verify owned disposable Jimeng container health
+        run: node --import tsx scripts/run-ci-check.mjs --id jimeng-ping --record-dir "$RUNNER_TEMP/ci-records" --expected-commit "$MERCHROUTE_CI_EXPECTED_COMMIT" -- node scripts/ci-jimeng-ping.mjs
+      - name: Upload sanitized check records only
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-evidence-jimeng-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ci-records/*.json
+          if-no-files-found: warn
+          retention-days: 14
 
-  browser-tests:
-    name: Playwright browser tests
+  verify:
+    name: Verify pinned toolchain and source
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     services:
       postgres:
-        image: postgres:18-alpine
+        image: postgres:18
         env:
           POSTGRES_USER: merchroute_ci
-          POSTGRES_DB: merchroute_ci
+          POSTGRES_DB: merchroute_ci_test
           POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_INITDB_ARGS: --encoding=UTF8 --locale-provider=icu --icu-locale=und
         ports:
           - 5432:5432
         options: >-
-          --health-cmd="pg_isready -U merchroute_ci -d merchroute_ci"
+          --health-cmd="pg_isready -U merchroute_ci -d merchroute_ci_test"
           --health-interval=10s
           --health-timeout=5s
           --health-retries=5
     env:
-      DATABASE_URL: postgresql://merchroute_ci@127.0.0.1:5432/merchroute_ci
+      DATABASE_URL: postgresql://merchroute_ci@127.0.0.1:5432/merchroute_ci_test
+      WB_SOURCE_MEDIA_CLEANUP_TEST_DATABASE_URL: postgresql://merchroute_ci@127.0.0.1:5432/merchroute_ci_cleanup_test
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v7
-      - name: Set up Node.js
-        uses: actions/setup-node@v7
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
-      - name: Pin npm
-        run: npm install --global npm@10.9.8
-      - name: Install dependencies
-        run: npm ci
-      - name: Build application
-        run: npm run build
-      - name: Install Chromium
-        run: npx playwright install --with-deps chromium
-      - name: Run browser tests
-        run: npm run test:e2e
-      - name: Upload test report on failure
-        if: failure()
+      - name: Pin npm and install dependencies
+        run: |
+          npm install --global npm@10.9.8
+          npm ci
+      - name: Install real FFmpeg fixture dependency
+        run: sudo apt-get update && sudo apt-get install --yes ffmpeg
+      - name: Verify isolated ICU PostgreSQL and separate cleanup database
+        run: node scripts/prepare-ci-postgres.mjs
+      - name: Run complete source checks with real isolated PostgreSQL
+        run: node --import tsx scripts/run-ci-check.mjs --id check --record-dir "$RUNNER_TEMP/ci-records" --expected-commit "$MERCHROUTE_CI_EXPECTED_COMMIT" -- npm run check
+      - name: Audit production dependencies
+        run: node --import tsx scripts/run-ci-check.mjs --id dependency-audit --record-dir "$RUNNER_TEMP/ci-records" --expected-commit "$MERCHROUTE_CI_EXPECTED_COMMIT" -- npm audit --omit=dev --audit-level=moderate
+      - name: Upload sanitized check records only
+        if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-report
-          path: playwright-report/
-          if-no-files-found: ignore
-          retention-days: 7
+          name: ci-evidence-check-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ci-records/*.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  postgres-integration:
+    name: PostgreSQL integration (ICU UTF8)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: merchroute_ci
+          POSTGRES_DB: merchroute_ci_test
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_INITDB_ARGS: --encoding=UTF8 --locale-provider=icu --icu-locale=und
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U merchroute_ci -d merchroute_ci_test"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    env:
+      DATABASE_URL: postgresql://merchroute_ci@127.0.0.1:5432/merchroute_ci_test
+      WB_SOURCE_MEDIA_CLEANUP_TEST_DATABASE_URL: postgresql://merchroute_ci@127.0.0.1:5432/merchroute_ci_cleanup_test
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Pin npm and install dependencies
+        run: |
+          npm install --global npm@10.9.8
+          npm ci
+      - name: Prepare isolated databases and shared build
+        run: |
+          node scripts/prepare-ci-postgres.mjs
+          npm run build -w packages/shared
+      - name: Run actual PostgreSQL integration tests
+        run: node --import tsx scripts/run-ci-check.mjs --id postgres-integration --record-dir "$RUNNER_TEMP/ci-records" --expected-commit "$MERCHROUTE_CI_EXPECTED_COMMIT" -- node node_modules/vitest/vitest.mjs run .integration.test.ts --root apps/server --maxWorkers=2 --reporter=verbose
+      - name: Upload sanitized check records only
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-evidence-postgres-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ci-records/*.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  browser-tests:
+    name: Playwright browser tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: merchroute_ci
+          POSTGRES_DB: merchroute_ci_test
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_INITDB_ARGS: --encoding=UTF8 --locale-provider=icu --icu-locale=und
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U merchroute_ci -d merchroute_ci_test"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    env:
+      DATABASE_URL: postgresql://merchroute_ci@127.0.0.1:5432/merchroute_ci_test
+      WB_SOURCE_MEDIA_CLEANUP_TEST_DATABASE_URL: postgresql://merchroute_ci@127.0.0.1:5432/merchroute_ci_cleanup_test
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Pin npm and install dependencies
+        run: |
+          npm install --global npm@10.9.8
+          npm ci
+      - name: Prepare isolated ICU database
+        run: node scripts/prepare-ci-postgres.mjs
+      - name: Build application
+        run: node --import tsx scripts/run-ci-check.mjs --id browser-build --record-dir "$RUNNER_TEMP/ci-records" --expected-commit "$MERCHROUTE_CI_EXPECTED_COMMIT" -- npm run build
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Run browser tests and graceful teardown
+        run: node --import tsx scripts/run-ci-check.mjs --id e2e --record-dir "$RUNNER_TEMP/ci-records" --expected-commit "$MERCHROUTE_CI_EXPECTED_COMMIT" -- npm run test:e2e -- --reporter=list,json
+      - name: Upload sanitized check records only
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-evidence-e2e-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ci-records/*.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  source-integrity:
+    name: Exact source identity and Gitleaks
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Pin npm and install dependencies
+        run: |
+          npm install --global npm@10.9.8
+          npm ci
+      - name: Install fixed Gitleaks and verify download checksum
+        run: |
+          set -euo pipefail
+          version=8.28.0
+          archive="gitleaks_${version}_linux_x64.tar.gz"
+          directory="$RUNNER_TEMP/ci-gitleaks"
+          mkdir -p "$directory"
+          curl --fail --silent --show-error --location "https://github.com/gitleaks/gitleaks/releases/download/v${version}/$archive" --output "$directory/$archive"
+          curl --fail --silent --show-error --location "https://github.com/gitleaks/gitleaks/releases/download/v${version}/gitleaks_${version}_checksums.txt" --output "$directory/checksums.txt"
+          (cd "$directory" && grep "  $archive$" checksums.txt | sha256sum --check --strict)
+          tar -xzf "$directory/$archive" -C "$directory" gitleaks
+          echo "$directory" >> "$GITHUB_PATH"
+      - name: Verify portable source contract for exact event head
+        run: node --import tsx scripts/run-ci-check.mjs --id portable-source --record-dir "$RUNNER_TEMP/ci-records" --expected-commit "$MERCHROUTE_CI_EXPECTED_COMMIT" -- node --import tsx scripts/verify-release-completeness.mjs --mode ci --expected-commit "$MERCHROUTE_CI_EXPECTED_COMMIT"
+      - name: Test CI evidence and failure gates
+        run: node --import tsx scripts/run-ci-check.mjs --id ci-helper-tests --record-dir "$RUNNER_TEMP/ci-records" --expected-commit "$MERCHROUTE_CI_EXPECTED_COMMIT" -- node --import tsx --test scripts/run-ci-check.test.mjs scripts/verify-ci-gate.test.mjs
+      - name: Scan current source with redacted results
+        run: node --import tsx scripts/run-ci-check.mjs --id gitleaks-source --record-dir "$RUNNER_TEMP/ci-records" --expected-commit "$MERCHROUTE_CI_EXPECTED_COMMIT" -- gitleaks dir . --redact=100 --no-banner --no-color
+      - name: Scan reachable history with redacted results
+        run: node --import tsx scripts/run-ci-check.mjs --id gitleaks-history --record-dir "$RUNNER_TEMP/ci-records" --expected-commit "$MERCHROUTE_CI_EXPECTED_COMMIT" -- gitleaks git . --log-opts=--all --redact=100 --no-banner --no-color
+      - name: Upload sanitized check records only
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-evidence-source-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ci-records/*.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  windows-safety:
+    name: Windows restart and retirement safety simulations
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Pin npm and install dependencies
+        run: |
+          npm install --global npm@10.9.8
+          npm ci
+      - name: Verify restart safety without real operations
+        run: node --import tsx scripts/run-ci-check.mjs --id restart-safety --record-dir "$RUNNER_TEMP/ci-records" --expected-commit "$MERCHROUTE_CI_EXPECTED_COMMIT" -- powershell.exe -NoProfile -File scripts/test-restart-windows-safety.ps1
+      - name: Verify retirement safety without production operations
+        run: node --import tsx scripts/run-ci-check.mjs --id retirement-safety --record-dir "$RUNNER_TEMP/ci-records" --expected-commit "$MERCHROUTE_CI_EXPECTED_COMMIT" -- pwsh -NoProfile -File scripts/test-retire-n8n-global-junction-safety.ps1
+      - name: Upload sanitized check records only
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-evidence-windows-safety-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ci-records/*.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  candidate-package:
+    name: Build source and prebuilt candidate packages
+    needs: [deployment-contract, jimeng-source, verify, postgres-integration, browser-tests, source-integrity, windows-safety]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Pin npm and install dependencies
+        run: |
+          npm install --global npm@10.9.8
+          npm ci
+      - name: Build clean candidate artifacts
+        run: node --import tsx scripts/run-ci-check.mjs --id candidate-build --record-dir "$RUNNER_TEMP/ci-records" --expected-commit "$MERCHROUTE_CI_EXPECTED_COMMIT" -- npm run build
+      - name: Verify exact candidate build identity
+        run: node --import tsx scripts/run-ci-check.mjs --id candidate-static --record-dir "$RUNNER_TEMP/ci-records" --expected-commit "$MERCHROUTE_CI_EXPECTED_COMMIT" -- node --import tsx scripts/verify-release-completeness.mjs --mode ci --expected-commit "$MERCHROUTE_CI_EXPECTED_COMMIT"
+      - name: Create verified candidate packages (not a Release)
+        run: node --import tsx scripts/run-ci-check.mjs --id candidate-package --record-dir "$RUNNER_TEMP/ci-records" --expected-commit "$MERCHROUTE_CI_EXPECTED_COMMIT" -- node --import tsx scripts/package-release-candidate.mjs --output "$RUNNER_TEMP/candidate-package"
+      - name: Upload source and prebuilt candidate packages only
+        uses: actions/upload-artifact@v4
+        with:
+          name: merchroute-candidate-${{ env.MERCHROUTE_CI_EXPECTED_COMMIT }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/candidate-package/*.zip
+            ${{ runner.temp }}/candidate-package/candidate-package-manifest.json
+            ${{ runner.temp }}/candidate-package/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload sanitized check records only
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-evidence-package-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ci-records/*.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  release-gate:
+    name: MerchRoute release gate
+    if: ${{ always() }}
+    needs: [deployment-contract, jimeng-source, verify, postgres-integration, browser-tests, source-integrity, windows-safety, candidate-package]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      MERCHROUTE_CI_NEEDS_JSON: ${{ toJSON(needs) }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Pin npm and install dependencies
+        run: |
+          npm install --global npm@10.9.8
+          npm ci
+      - name: Download this attempt's sanitized records
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ci-evidence-*-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/downloaded-ci-records
+      - name: Download this attempt's candidate package manifest
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: merchroute-candidate-${{ env.MERCHROUTE_CI_EXPECTED_COMMIT }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/downloaded-candidate-package
+      - name: Reject missing, failed, skipped, cancelled or wrong-identity evidence
+        run: node --import tsx scripts/verify-ci-gate.mjs --expected-commit "$MERCHROUTE_CI_EXPECTED_COMMIT" --records "$RUNNER_TEMP/downloaded-ci-records" --package-manifest "$RUNNER_TEMP/downloaded-candidate-package/candidate-package-manifest.json" --output "$RUNNER_TEMP/merchroute-ci-gate.json"
+      - name: Upload sanitized final gate report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: merchroute-release-gate-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/merchroute-ci-gate.json
+          if-no-files-found: warn
+          retention-days: 14

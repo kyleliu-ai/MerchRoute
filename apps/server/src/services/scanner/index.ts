@@ -9,6 +9,10 @@ import { fromApiRelativePath, isPathInside, normalizedTaskPath, secureResolve, t
 const collator = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' });
 const ignoredFiles = new Set(['.DS_Store', 'Thumbs.db', 'desktop.ini', '_READY.json', 'selection-manifest.json', 'handoff.json', '.review-draft.json']);
 
+function rawTaskId(stageId: string, sourceFolder: string): string {
+  return createHash('sha256').update(`${stageId}${normalizedTaskPath(sourceFolder)}`).digest('hex');
+}
+
 export type PersistedMediaTaskSnapshot = Omit<ProductTask, 'status'> & { images: ImageItem[] };
 
 export type PersistedMediaStageSnapshot = {
@@ -40,14 +44,20 @@ export class ScannerService {
   private allScanFlight?: Promise<Map<string, IndexedMediaTask>>;
   private persistentIndexAuthoritative = false;
   private readonly invalidationListeners = new Set<(event: IndexedTaskInvalidation) => void | Promise<void>>();
-  constructor(private readonly config: ConfigService, private readonly store: StateStore) {}
+  constructor(
+    private readonly config: ConfigService,
+    private readonly store: StateStore,
+    private readonly canonicalizePath: (value: string) => string = (value) => value
+  ) {
+    this.store.configureTaskIdResolver((stageId, sourceFolder) => this.taskId(stageId, sourceFolder));
+  }
 
   setPersistentIndexAuthoritative(authoritative: boolean): void {
     this.persistentIndexAuthoritative = authoritative;
   }
 
   taskId(stageId: string, sourceFolder: string): string {
-    return createHash('sha256').update(`${stageId}${normalizedTaskPath(sourceFolder)}`).digest('hex');
+    return rawTaskId(stageId, this.canonicalizePath(sourceFolder));
   }
 
   async scanStage(stageId: string): Promise<ProductTask[]> {
@@ -221,7 +231,8 @@ export class ScannerService {
   }
 
   async getIndexedTask(taskId: string, options: ResolveIndexedMediaOptions = {}): Promise<IndexedMediaTask | undefined> {
-    const task = this.index.get(taskId);
+    const runtimeTaskId = this.store.resolveRuntimeTaskId(taskId);
+    const task = this.index.get(runtimeTaskId);
     if (!task) return undefined;
     const stage = this.config.get().stages.find((item) => item.id === task.stageId);
     if (!stage) throw new AppError('SOURCE_FOLDER_MISSING', '产品任务所属流程已被删除', { taskId, stageId: task.stageId }, 404);
@@ -231,18 +242,18 @@ export class ScannerService {
     const expectedFolder = stage.candidateRoot ? path.resolve(stage.candidateRoot, fromApiRelativePath(task.sourceFolderName)) : undefined;
     if (!options.allowDisabledStage && (!expectedFolder || !isImmediateChild(stage.candidateRoot!, expectedFolder)
       || normalizedTaskPath(expectedFolder) !== normalizedTaskPath(task.sourceFolder))) {
-      if (this.index.get(taskId) === task) this.index.delete(taskId);
+      if (this.index.get(runtimeTaskId) === task) this.index.delete(runtimeTaskId);
       throw new AppError('SOURCE_FOLDER_MISSING', '产品任务不属于当前阶段候选目录', { taskId, stageId: task.stageId }, 404);
     }
     const source = await lstat(task.sourceFolder).catch(() => null);
-    if (this.index.get(taskId) !== task) return this.getIndexedTask(taskId, options);
+    if (this.index.get(runtimeTaskId) !== task) return this.getIndexedTask(taskId, options);
     if (!source?.isDirectory() || source.isSymbolicLink()) {
-      if (this.index.get(taskId) === task) {
-        this.index.delete(taskId);
+      if (this.index.get(runtimeTaskId) === task) {
+        this.index.delete(runtimeTaskId);
         this.emitInvalidation({
           stageId: task.stageId,
           relativeTaskDirectory: task.sourceFolderName,
-          taskId,
+          taskId: runtimeTaskId,
           reason: 'TASK_DIRECTORY_MISSING'
         });
       }
@@ -295,23 +306,25 @@ export class ScannerService {
   }
 
   markSourceFileMissing(taskId: string): void {
-    const task = this.index.get(taskId);
+    const runtimeTaskId = this.store.resolveRuntimeTaskId(taskId);
+    const task = this.index.get(runtimeTaskId);
     if (!task) return;
     this.emitInvalidation({
       stageId: task.stageId,
       relativeTaskDirectory: task.sourceFolderName,
-      taskId,
+      taskId: runtimeTaskId,
       reason: 'SOURCE_FILE_MISSING'
     });
   }
 
   markSourceFileChanged(taskId: string): void {
-    const task = this.index.get(taskId);
+    const runtimeTaskId = this.store.resolveRuntimeTaskId(taskId);
+    const task = this.index.get(runtimeTaskId);
     if (!task) return;
     this.emitInvalidation({
       stageId: task.stageId,
       relativeTaskDirectory: task.sourceFolderName,
-      taskId,
+      taskId: runtimeTaskId,
       reason: 'SOURCE_FILE_CHANGED'
     });
   }
@@ -346,17 +359,19 @@ export class ScannerService {
     const relativeTaskDirectory = normalizeRelativeTaskDirectory(snapshot.sourceFolderName);
     const sourceFolder = stage.candidateRoot ? path.resolve(stage.candidateRoot, fromApiRelativePath(relativeTaskDirectory)) : '';
     if (!stage.candidateRoot || snapshot.stageId !== stage.id || !isImmediateChild(stage.candidateRoot, sourceFolder)
-      || normalizedTaskPath(sourceFolder) !== normalizedTaskPath(snapshot.sourceFolder)) {
+      || normalizedTaskPath(sourceFolder) !== normalizedTaskPath(this.canonicalizePath(snapshot.sourceFolder))) {
       throw new AppError('CONFIG_INVALID', '媒体索引任务路径与当前阶段配置不一致', { stageId: stage.id, taskId: snapshot.taskId });
     }
-    if (this.taskId(stage.id, sourceFolder) !== snapshot.taskId) {
+    const runtimeTaskId = this.taskId(stage.id, sourceFolder);
+    const historicalTaskId = rawTaskId(stage.id, snapshot.sourceFolder);
+    if (runtimeTaskId !== snapshot.taskId && historicalTaskId !== snapshot.taskId) {
       throw new AppError('CONFIG_INVALID', '媒体索引任务 ID 与源目录不匹配', { stageId: stage.id, taskId: snapshot.taskId });
     }
     const images = snapshot.images.map((image) => validateSnapshotImage(image, stage.mediaTypes));
     const imageCount = images.filter((item) => item.mediaType !== 'video').length;
     const videoCount = images.filter((item) => item.mediaType === 'video').length;
     return {
-      taskId: snapshot.taskId,
+      taskId: runtimeTaskId,
       stageId: stage.id,
       sourceFolder,
       sourceFolderName: relativeTaskDirectory,

@@ -5,6 +5,7 @@ import { loadRuntimeEnvironment } from '../runtime-environment.js';
 import { OzonSourceMediaCleanupRepository } from '../repositories/ozon-source-media-cleanup.js';
 import { OzonSourceMediaCleanupService } from '../services/ozon-source-media/index.js';
 import { OzonSourceMediaFiles } from '../services/ozon-source-media/source-files.js';
+import { LegacyRootCompatibility } from '../utils/legacy-root-compatibility.js';
 
 const projectRoot = path.resolve(import.meta.dirname, '../../../..');
 loadRuntimeEnvironment({ projectRoot });
@@ -17,7 +18,15 @@ if (!databaseUrl) throw new Error('未配置 DATABASE_URL');
 const cleanupRepository = new OzonSourceMediaCleanupRepository(databaseUrl);
 await cleanupRepository.initialize({ migrate: false });
 const logger = pino({ level: 'silent' }) as unknown as FastifyBaseLogger;
-const service = new OzonSourceMediaCleanupService(cleanupRepository, new OzonSourceMediaFiles(), logger);
+const legacyRootCompatibility = LegacyRootCompatibility.fromEnvironment();
+const service = new OzonSourceMediaCleanupService(
+  cleanupRepository,
+  new OzonSourceMediaFiles(),
+  logger,
+  60_000,
+  5,
+  (value) => legacyRootCompatibility.canonicalizePath(value)
+);
 
 try {
   const rootDirectory = await cleanupRepository.getConfiguredRootDirectory();

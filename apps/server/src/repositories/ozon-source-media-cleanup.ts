@@ -347,6 +347,17 @@ export class OzonSourceMediaCleanupRepository {
     return { items, total: items.length, reclaimedBytes: items.reduce((sum, item) => sum + item.reclaimedBytes, 0) };
   }
 
+  async legacyRootReferenceCounts(isLegacyPath: (value: string) => boolean): Promise<{ databaseConfigured: boolean; batches: number; actionableBatches: number }> {
+    if (!this.configured) return { databaseConfigured: false, batches: 0, actionableBatches: 0 };
+    const result = await this.query<SqlRow>('SELECT state,root_directory FROM ozon_source_media_cleanup_batches');
+    const matches = result.rows.filter((row) => isLegacyPath(String(row.root_directory || '')));
+    return {
+      databaseConfigured: true,
+      batches: matches.length,
+      actionableBatches: matches.filter((row) => !['CLEANED', 'SUPERSEDED', 'BLOCKED'].includes(String(row.state))).length
+    };
+  }
+
   async claimDue(owner: string, limit = 10): Promise<OzonSourceMediaCleanupBatch[]> {
     const claimed: OzonSourceMediaCleanupBatch[] = [];
     for (let index = 0; index < Math.max(0, Math.min(limit, 100)); index += 1) {

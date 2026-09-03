@@ -823,7 +823,7 @@ button, input { font: inherit; }
 .local-import-workflow-label { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 11px 13px; border: 1px solid rgba(57, 189, 205, .28); border-radius: 8px; background: #edf9fa; }
 .local-import-workflow-label .ant-tag { margin-inline-end: 0; }
 .local-directory-list { min-height: 190px; margin-top: 14px; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: #f9fbfc; }
-.local-directory-header, .local-directory-row.is-product-media-row { grid-template-columns: 24px minmax(190px, 1fr) minmax(132px, .42fr) minmax(90px, .26fr) minmax(82px, .24fr) minmax(56px, auto); }
+.local-directory-header, .local-directory-row.is-product-media-row { grid-template-columns: 32px minmax(190px, 1fr) minmax(132px, .42fr) minmax(90px, .26fr) minmax(82px, .24fr) minmax(56px, auto); }
 .local-directory-header.is-platform-root-header, .local-directory-row.is-platform-root-row { grid-template-columns: minmax(170px, 1fr) minmax(82px, .24fr) minmax(150px, .46fr) minmax(112px, auto); }
 .local-directory-header { display: grid; align-items: center; gap: 10px; min-height: 40px; padding: 8px 12px; color: #627488; border-bottom: 1px solid #d8e4e7; background: #edf5f6; font-size: 11px; font-weight: 750; letter-spacing: .04em; }
 .local-directory-header .creation-date-heading, .local-directory-header .modified-date-heading { display: inline-flex; align-items: center; gap: 5px; color: #0f6772; }

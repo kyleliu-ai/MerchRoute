@@ -1,9 +1,11 @@
 import path from 'node:path';
 import os from 'node:os';
-import { mkdtemp, mkdir, rm, symlink, utimes, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdtemp, mkdir, readFile, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ConfigService } from '../../config/service.js';
 import type { PurchaseRepository } from '../../repositories/purchases.js';
+import { LegacyRootCompatibility } from '../../utils/legacy-root-compatibility.js';
 import {
   LocalImportService,
   assertStrictDirectory,
@@ -49,6 +51,7 @@ describe('LocalImportService', () => {
       mkdir(path.join(newer, 'A-detail')),
       mkdir(path.join(newer, '.runtime'))
     ]);
+    await symlink(newer, path.join(sourceRoot, 'PDD', 'linked-media'), process.platform === 'win32' ? 'junction' : 'dir');
     const aPlatformModifiedAt = new Date('2026-08-25T08:00:00.000Z');
     const pddModifiedAt = new Date('2026-08-26T08:00:00.000Z');
     const zPlatformModifiedAt = new Date('2026-08-27T08:00:00.000Z');
@@ -102,6 +105,44 @@ describe('LocalImportService', () => {
     expect(entries.map((item) => item.name)).toEqual(['Z-R1', 'A-R1']);
   });
 
+  it.each(['COPYING', 'IMPORTED', 'COPY_FAILED_RETRYABLE'] as const)(
+    'marks every registered color directory imported during %s without changing historical root snapshots',
+    async (status) => {
+      await Promise.all(['red', 'blue', 'new'].map((name) => mkdir(path.join(sourceRoot, 'PDD', name), { recursive: true })));
+      const historicalRoot = path.join(root, 'retired-source');
+      const registrations = [
+        { normalizedPathKey: 'pdd/red', sourceRoot: historicalRoot, status },
+        { normalizedPathKey: 'pdd/blue', sourceRoot: historicalRoot, status },
+        { normalizedPathKey: 'pdd/new', sourceRoot: undefined, status }
+      ];
+      const originalSnapshots = JSON.stringify(registrations);
+      const listLocalImportSourceRegistrations = vi.fn().mockResolvedValue(registrations);
+      const compatibility = new LegacyRootCompatibility({ legacyRoot: historicalRoot, canonicalRoot: sourceRoot });
+      const canonicalizePath = vi.fn((value: string) => compatibility.canonicalizePath(value));
+      const service = new LocalImportService(
+        config as unknown as ConfigService,
+        { listLocalImportSourceRegistrations } as unknown as PurchaseRepository,
+        vi.fn(), canonicalizePath
+      );
+
+      const result = await service.listDirectories('PDD');
+
+      expect(Object.fromEntries(result.directories.map((entry) => [entry.name, entry.importStatus])))
+        .toEqual({ red: 'IMPORTED', blue: 'IMPORTED', new: 'NEW' });
+      expect(listLocalImportSourceRegistrations).toHaveBeenCalledTimes(1);
+      expect(listLocalImportSourceRegistrations).toHaveBeenCalledWith(expect.arrayContaining(['pdd/red', 'pdd/blue', 'pdd/new']));
+      expect(canonicalizePath).toHaveBeenCalledWith(historicalRoot);
+      expect(JSON.stringify(registrations)).toBe(originalSnapshots);
+
+      const changedRoot = path.join(root, 'changed-source');
+      await mkdir(path.join(changedRoot, 'PDD', 'red'), { recursive: true });
+      config.get = () => ({ stages: [{ id: 'E000', enabled: true, inputQueueRoot: changedRoot, candidateRoot }] });
+      expect((await service.listDirectories('PDD')).directories).toEqual([
+        expect.objectContaining({ name: 'red', importStatus: 'NEW' })
+      ]);
+    }
+  );
+
   it('matches source roots with operating-system path semantics', () => {
     expect(localImportSourceRootKey(' C:/MerchRoute/Source/ ', 'win32')).toBe('c:\\merchroute\\source');
     expect(isSameLocalImportSourceRoot('C:\\MerchRoute\\Source', 'c:/merchroute/source/', 'win32')).toBe(true);
@@ -109,6 +150,8 @@ describe('LocalImportService', () => {
     expect(isSameLocalImportSourceRoot('/srv/MerchRoute/source', '/srv/merchroute/source', 'linux')).toBe(false);
     expect(isSameLocalImportSourceRoot('/srv/MerchRoute/source', '/srv/MerchRoute/other', 'linux')).toBe(false);
     expect(isSameLocalImportSourceRoot('/srv/MerchRoute/source', undefined, 'linux')).toBe(false);
+    expect(localImportSourceRootKey('relative/source', 'linux')).toBeUndefined();
+    expect(localImportSourceRootKey('C:\\media\\source', 'darwin')).toBeUndefined();
   });
 
   it('maps the primary information file, preserves multiple same-platform folders and filters runtime/video files', async () => {
@@ -240,6 +283,54 @@ describe('LocalImportService', () => {
     expect(purchases.reserveLocalImport).not.toHaveBeenCalled();
   });
 
+  it('retries a historical failed import through canonical roots and writes only canonical paths to the new manifest', async () => {
+    const mediaDirectory = path.join(sourceRoot, 'PDD', 'legacy-product');
+    const mediaFile = path.join(mediaDirectory, 'main.jpg');
+    await mkdir(mediaDirectory, { recursive: true });
+    await writeFile(mediaFile, 'historical-media');
+    const sha256 = createHash('sha256').update(await readFile(mediaFile)).digest('hex');
+    const legacyBase = path.join(root, 'legacy-root');
+    const legacySourceRoot = path.join(legacyBase, 'source');
+    const legacyCandidateRoot = path.join(legacyBase, 'candidate');
+    const canonicalizePath = (value: string) => {
+      const relative = path.relative(legacyBase, value);
+      return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative)) ? path.join(root, relative) : value;
+    };
+    const hash = (kind: string, value: string) => createHash('sha256').update(stableTestJson({
+      stageId: 'E000', kind, root: process.platform === 'win32' ? path.normalize(path.resolve(value)).toLocaleLowerCase('en-US') : path.normalize(path.resolve(value))
+    })).digest('hex');
+    const record = {
+      id: '11111111-1111-4111-8111-111111111111', idempotencyKey: 'legacy-retry', sku: '0000001',
+      status: 'COPY_FAILED_RETRYABLE', sourcePlatform: 'PDD', importWorkflowLabel: '本地导入-PDD',
+      sourceConfigSnapshot: { stageId: 'E000', inputQueueRoot: legacySourceRoot, configHash: hash('source', legacySourceRoot) },
+      targetConfigSnapshot: { stageId: 'E000', candidateRoot: legacyCandidateRoot, configHash: hash('target', legacyCandidateRoot) },
+      previewHash: 'preview-hash', retryCount: 1, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      sources: [{
+        id: 'source-1', platform: 'PDD', relativePath: 'PDD/legacy-product', normalizedPathKey: 'pdd/legacy-product',
+        isPrimary: true, targetSubdirectory: 'legacy-product', copyManifest: { files: [{ relativePath: 'main.jpg', sha256, sizeBytes: 16 }] }
+      }]
+    } as any;
+    const completeLocalImport = vi.fn(async (_id, targetFolder) => ({ ...record, status: 'IMPORTED', targetFolder }));
+    const purchases = {
+      getLocalImport: vi.fn(async () => record),
+      markLocalImportCopying: vi.fn(async () => ({ ...record, status: 'COPYING' })),
+      getPurchase: vi.fn(async () => ({ sku: '0000001', productName: '历史商品' })),
+      completeLocalImport,
+      failLocalImport: vi.fn()
+    } as unknown as PurchaseRepository;
+    const service = new LocalImportService(config as unknown as ConfigService, purchases, vi.fn(), canonicalizePath);
+
+    await expect(service.retry(record.id)).resolves.toMatchObject({ status: 'IMPORTED' });
+
+    const target = path.join(candidateRoot, '0000001-历史商品');
+    const manifest = JSON.parse(await readFile(path.join(target, 'local-import-manifest.json'), 'utf8'));
+    expect(manifest.sourceConfigSnapshot).toMatchObject({ inputQueueRoot: sourceRoot, configHash: hash('source', sourceRoot) });
+    expect(manifest.targetConfigSnapshot).toMatchObject({ candidateRoot, configHash: hash('target', candidateRoot) });
+    expect(JSON.stringify(manifest)).not.toContain(legacyBase);
+    expect(record.sourceConfigSnapshot.inputQueueRoot).toBe(legacySourceRoot);
+    expect(completeLocalImport).toHaveBeenCalledWith(record.id, target);
+  });
+
   it('validates current-platform absolute paths and refuses a volume root', async () => {
     expect(isAbsolutePathForPlatform('C:\\media\\source', 'win32')).toBe(true);
     expect(isAbsolutePathForPlatform('/Volumes/media/source', 'darwin')).toBe(true);
@@ -248,3 +339,9 @@ describe('LocalImportService', () => {
     await expect(assertStrictDirectory(sourceRoot, false, '测试目录')).resolves.toBeUndefined();
   });
 });
+
+function stableTestJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableTestJson).join(',')}]`;
+  if (value && typeof value === 'object') return `{${Object.entries(value as Record<string, unknown>).sort(([left], [right]) => left.localeCompare(right)).map(([key, item]) => `${JSON.stringify(key)}:${stableTestJson(item)}`).join(',')}}`;
+  return JSON.stringify(value);
+}

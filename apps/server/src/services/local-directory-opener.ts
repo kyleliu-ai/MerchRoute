@@ -14,6 +14,7 @@ export type DirectoryLaunch = (command: string, args: string[], options: Directo
 export type LocalDirectoryOpenerOptions = {
   platform?: NodeJS.Platform;
   launch?: DirectoryLaunch;
+  canonicalizePath?: (value: string) => string;
 };
 
 export type OpenTaskDirectoryInput = {
@@ -24,35 +25,39 @@ export type OpenTaskDirectoryInput = {
 export class LocalDirectoryOpener {
   private readonly platform: NodeJS.Platform;
   private readonly launch: DirectoryLaunch;
+  private readonly canonicalizePath: (value: string) => string;
 
   constructor(options: LocalDirectoryOpenerOptions = {}) {
     this.platform = options.platform ?? process.platform;
     this.launch = options.launch ?? launchDetached;
+    this.canonicalizePath = options.canonicalizePath ?? ((value) => value);
   }
 
   async openTaskDirectory(input: OpenTaskDirectoryInput): Promise<void> {
-    const sourceInfo = await lstat(input.sourceFolder).catch(() => null);
+    const candidateRoot = this.canonicalizePath(input.candidateRoot);
+    const sourceFolder = this.canonicalizePath(input.sourceFolder);
+    const sourceInfo = await lstat(sourceFolder).catch(() => null);
     if (!sourceInfo) {
-      throw new AppError('SOURCE_FOLDER_MISSING', '产品任务不存在或已被移动', { sourceFolder: input.sourceFolder }, 404);
+      throw new AppError('SOURCE_FOLDER_MISSING', '产品任务不存在或已被移动', { sourceFolder }, 404);
     }
     if (sourceInfo.isSymbolicLink()) {
-      throw new AppError('PATH_TRAVERSAL_BLOCKED', '不允许打开符号链接产品目录', { sourceFolder: input.sourceFolder });
+      throw new AppError('PATH_TRAVERSAL_BLOCKED', '不允许打开符号链接产品目录', { sourceFolder });
     }
     if (!sourceInfo.isDirectory()) {
-      throw new AppError('SOURCE_FOLDER_MISSING', '产品任务不存在或已被移动', { sourceFolder: input.sourceFolder }, 404);
+      throw new AppError('SOURCE_FOLDER_MISSING', '产品任务不存在或已被移动', { sourceFolder }, 404);
     }
 
     let resolvedRoot: string;
     let resolvedSource: string;
     try {
-      [resolvedRoot, resolvedSource] = await Promise.all([realpath(input.candidateRoot), realpath(input.sourceFolder)]);
+      [resolvedRoot, resolvedSource] = await Promise.all([realpath(candidateRoot), realpath(sourceFolder)]);
     } catch {
-      throw new AppError('SOURCE_FOLDER_MISSING', '产品任务不存在或已被移动', { sourceFolder: input.sourceFolder }, 404);
+      throw new AppError('SOURCE_FOLDER_MISSING', '产品任务不存在或已被移动', { sourceFolder }, 404);
     }
 
     const relative = path.relative(resolvedRoot, resolvedSource);
     if (!isPathInside(resolvedRoot, resolvedSource) || !relative || relative === '.' || relative.split(path.sep).length !== 1) {
-      throw new AppError('PATH_TRAVERSAL_BLOCKED', '产品目录不属于当前流程候选根目录', { sourceFolder: input.sourceFolder });
+      throw new AppError('PATH_TRAVERSAL_BLOCKED', '产品目录不属于当前流程候选根目录', { sourceFolder });
     }
 
     const command = directoryOpenCommand(this.platform);

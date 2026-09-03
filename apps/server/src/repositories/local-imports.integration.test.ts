@@ -100,10 +100,16 @@ describe.runIf(Boolean(connectionString))('local import PostgreSQL integration',
 
   it('skips an entire conflicting import without creating a product or media source', async () => {
     const before = await isolated.query<{ count: string }>('SELECT COUNT(*)::text AS count FROM products');
-    const conflict = await purchases.reserveLocalImport(input('local-conflict', ['https://example.com/local/red', 'https://example.com/local/green']));
+    const conflictingInput = input('local-conflict', ['https://example.com/local/red', 'https://example.com/local/green']);
+    conflictingInput.sources = conflictingInput.sources.map((source, index) => ({
+      ...source, relativePath: `PDD/skipped-${index + 1}`, normalizedPathKey: `pdd/skipped-${index + 1}`
+    }));
+    const conflict = await purchases.reserveLocalImport(conflictingInput);
     const after = await isolated.query<{ count: string }>('SELECT COUNT(*)::text AS count FROM products');
     expect(conflict.import).toMatchObject({ status: 'SKIPPED_DUPLICATE', duplicateSku: '0000001', sku: undefined, sources: [] });
     expect(after.rows[0]!.count).toBe(before.rows[0]!.count);
+    expect(await purchases.listLocalImportSourceRegistrations(['pdd/skipped-1', 'pdd/skipped-2'])).toEqual([]);
+    expect(await purchases.listLocalImportSourceRegistrations([])).toEqual([]);
   });
 
   it('keeps the SKU when copy fails and retries only the media state', async () => {

@@ -1,4 +1,4 @@
-param(
+﻿param(
   [switch]$ForceActiveDownloads,
   [switch]$ForceActiveWbPublishing
 )

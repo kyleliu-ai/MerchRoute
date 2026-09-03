@@ -603,6 +603,17 @@ export class WbSourceMediaCleanupRepository {
     return result.rows.map(toBatch);
   }
 
+  async legacyRootReferenceCounts(isLegacyPath: (value: string) => boolean): Promise<{ databaseConfigured: boolean; batches: number; actionableBatches: number }> {
+    if (!this.configured) return { databaseConfigured: false, batches: 0, actionableBatches: 0 };
+    const result = await this.query<SqlRow>('SELECT status,root_directory FROM wb_source_media_cleanup_batches');
+    const matches = result.rows.filter((row) => isLegacyPath(String(row.root_directory || '')));
+    return {
+      databaseConfigured: true,
+      batches: matches.length,
+      actionableBatches: matches.filter((row) => !['CLEANED', 'SUPERSEDED'].includes(String(row.status))).length
+    };
+  }
+
   private async cas(batch: WbSourceMediaCleanupBatch, sql: string, values: unknown[]): Promise<void> {
     const result = await this.query(sql, [batch.id, batch.rowVersion, batch.leaseToken, ...values]);
     if (result.rowCount !== 1) throw new AppError('VERSION_CONFLICT', 'WB 来源媒体清理批次已被其他 worker 更新', { cleanupId: batch.id }, 409);

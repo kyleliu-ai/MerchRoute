@@ -55,7 +55,8 @@ export class OzonSourceMediaCleanupService {
     readonly files: OzonSourceMediaFiles,
     private readonly logger: FastifyBaseLogger,
     private readonly intervalMs = 60_000,
-    private readonly batchSize = 5
+    private readonly batchSize = 5,
+    private readonly canonicalizePath: (value: string) => string = (value) => value
   ) {}
 
   start(): void {
@@ -91,7 +92,7 @@ export class OzonSourceMediaCleanupService {
       sku: input.plan.sku,
       revision: input.plan.revision,
       source: input.source,
-      rootDirectory: input.rootDirectory,
+      rootDirectory: this.canonicalizePath(input.rootDirectory),
       materialHash: input.plan.materialHash,
       sourceMediaIdentityHash: input.plan.sourceMediaIdentityHash,
       expectedTargetHash,
@@ -159,13 +160,14 @@ export class OzonSourceMediaCleanupService {
     artifacts: Array<{ kind: OzonSourceMediaCleanupArtifactKind; exists: boolean; fileCount: number; totalBytes: number; directorySignature: string }>;
   }> {
     const evidence = await this.repository.evidence(cleanupId);
+    const runtimeBatch = this.withRuntimeRoot(evidence.batch);
     const frozenMedia = frozenMediaFromVersion(evidence);
     const reasons = ozonSourceMediaCleanupDatabaseBlockers(evidence);
     const artifacts: Array<{ kind: OzonSourceMediaCleanupArtifactKind; exists: boolean; fileCount: number; totalBytes: number; directorySignature: string }> = [];
     for (const artifact of evidence.artifacts) {
       try {
         const snapshot = await this.files.snapshot({
-          rootDirectory: evidence.batch.rootDirectory,
+          rootDirectory: runtimeBatch.rootDirectory,
           sourceRelPath: artifact.sourceRelPath,
           mediaIdentityHash: evidence.batch.sourceMediaIdentityHash,
           frozenMedia
@@ -185,7 +187,7 @@ export class OzonSourceMediaCleanupService {
       }
     }
     for (const target of evidence.targets) {
-      try { await validateSuccessArchive(evidence.batch, target); }
+      try { await validateSuccessArchive(runtimeBatch, target); }
       catch (error) { reasons.push(error instanceof AppError ? error.code : 'OZON_SUCCESS_ARCHIVE_INVALID'); }
     }
     return {
@@ -203,6 +205,7 @@ export class OzonSourceMediaCleanupService {
   }
 
   async planHistorical(rootDirectory: string, skus?: string[]): Promise<OzonSourceMediaHistoricalPlanItem[]> {
+    rootDirectory = this.canonicalizePath(rootDirectory);
     const groups = await this.repository.listHistoricalGroups(skus);
     const output: OzonSourceMediaHistoricalPlanItem[] = [];
     for (const group of groups) {
@@ -274,6 +277,7 @@ export class OzonSourceMediaCleanupService {
   }
 
   async registerHistorical(generatedVersionId: string, rootDirectory: string): Promise<OzonSourceMediaCleanupBatch> {
+    rootDirectory = this.canonicalizePath(rootDirectory);
     const group = (await this.repository.listHistoricalGroups()).find((item) => item.generatedVersionId === generatedVersionId);
     if (!group) throw new AppError('NOT_FOUND', 'OZON 历史稳定版本不存在或已登记清理批次', { generatedVersionId }, 404);
     const snapshot = await this.readVersionEvidence(generatedVersionId);
@@ -306,13 +310,14 @@ export class OzonSourceMediaCleanupService {
   private async processWithSkuLock(batch: OzonSourceMediaCleanupBatch, mutate: boolean): Promise<'waiting' | 'cleaned' | 'supersededArtifacts'> {
     if (!batch.leaseToken) throw new AppError('TASK_LOCKED', 'OZON 媒体清理批次缺少 lease', { cleanupId: batch.id }, 409);
     const evidence = await this.repository.evidence(batch.id);
+    const runtimeBatch = this.withRuntimeRoot(batch);
     const blockers = ozonSourceMediaCleanupDatabaseBlockers(evidence);
     if (blockers.length) {
       if (mutate) await this.repository.releaseWaiting(batch, blockers);
       return 'waiting';
     }
     const frozenMedia = frozenMediaFromVersion(evidence);
-    for (const target of evidence.targets) await validateSuccessArchive(batch, target);
+    for (const target of evidence.targets) await validateSuccessArchive(runtimeBatch, target);
     let superseded = false;
     for (const artifact of evidence.artifacts) {
       if (['CLEANED', 'SUPERSEDED'].includes(artifact.state)) continue;
@@ -329,7 +334,7 @@ export class OzonSourceMediaCleanupService {
         superseded = true;
         continue;
       }
-      await this.processArtifact(batch, evidence, artifact.kind, frozenMedia);
+      await this.processArtifact(runtimeBatch, evidence, artifact.kind, frozenMedia);
     }
     await this.repository.finalize(batch);
     return superseded ? 'supersededArtifacts' : 'cleaned';
@@ -458,6 +463,10 @@ export class OzonSourceMediaCleanupService {
     const evidence = await this.repository.evidenceForVersionSnapshot?.(generatedVersionId);
     if (evidence) return evidence;
     throw new AppError('NOT_FOUND', 'OZON 稳定版本快照不可读取', { generatedVersionId }, 404);
+  }
+
+  private withRuntimeRoot<T extends OzonSourceMediaCleanupBatch>(batch: T): T {
+    return { ...batch, rootDirectory: this.canonicalizePath(batch.rootDirectory) };
   }
 }
 

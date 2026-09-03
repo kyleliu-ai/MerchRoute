@@ -50,7 +50,8 @@ export class WbSourceMediaCleanupService {
   constructor(
     readonly repository: WbSourceMediaCleanupRepository,
     private readonly files: WbSourceMediaFiles,
-    private readonly logger: FastifyBaseLogger
+    private readonly logger: FastifyBaseLogger,
+    private readonly canonicalizePath: (value: string) => string = (value) => value
   ) {}
 
   async noteMediaDelivered(sku: string): Promise<void> {
@@ -66,7 +67,8 @@ export class WbSourceMediaCleanupService {
     targets: WbSourceMediaCleanupAutomationTargetRegistration[];
   }): Promise<WbSourceMediaCleanupBatch> {
     if (!input.targets.length) throw new AppError('CONFIG_INVALID', 'WB 自动媒体清理批次不能登记零目标');
-    const snapshot = await this.requireSnapshot(input.rootDirectory, input.sku);
+    const rootDirectory = this.canonicalizePath(input.rootDirectory);
+    const snapshot = await this.requireSnapshot(rootDirectory, input.sku);
     const expectedStoreIds = input.targets.map((target) => target.storeId).sort();
     const mediaBatchId = automaticMediaBatchId({ ...input, mediaSignature: snapshot.mediaSignature!, expectedStoreIds });
     return this.repository.registerAutomationBatch({
@@ -74,7 +76,7 @@ export class WbSourceMediaCleanupService {
       source: 'AUTOMATION',
       batchKey: `automation:${mediaBatchId}`,
       expectedStoreIds,
-      rootDirectory: input.rootDirectory,
+      rootDirectory,
       mediaSignature: snapshot.mediaSignature!,
       mediaBatchId,
       deliveredAt: input.deliveredAt
@@ -88,7 +90,8 @@ export class WbSourceMediaCleanupService {
     submissionId: string;
     expectedStoreIds: string[];
   }): Promise<boolean> {
-    const snapshot = await this.files.snapshot(input.rootDirectory, input.sku);
+    const rootDirectory = this.canonicalizePath(input.rootDirectory);
+    const snapshot = await this.files.snapshot(rootDirectory, input.sku);
     if (!snapshot.exists || !snapshot.mediaSignature) return false;
     const mediaBatchId = automaticMediaBatchId({ ...input, mediaSignature: snapshot.mediaSignature });
     return this.repository.supersedeIncompleteAutomationBatch(
@@ -105,13 +108,14 @@ export class WbSourceMediaCleanupService {
     draftVersion: number;
     expectedStoreIds: string[];
   }): Promise<WbSourceMediaCleanupBatch> {
-    const snapshot = await this.requireSnapshot(input.rootDirectory, input.sku);
+    const rootDirectory = this.canonicalizePath(input.rootDirectory);
+    const snapshot = await this.requireSnapshot(rootDirectory, input.sku);
     return this.repository.registerBatch({
       sku: input.sku,
       source: 'MANUAL',
       batchKey: `manual:${input.sku}:${input.planHash}`,
       expectedStoreIds: input.expectedStoreIds,
-      rootDirectory: input.rootDirectory,
+      rootDirectory,
       mediaSignature: snapshot.mediaSignature!,
       planHash: input.planHash,
       draftVersion: input.draftVersion
@@ -158,6 +162,7 @@ export class WbSourceMediaCleanupService {
   }
 
   async planHistorical(rootDirectory: string, requestedSkus?: string[]): Promise<WbHistoricalSourceMediaPlanItem[]> {
+    rootDirectory = this.canonicalizePath(rootDirectory);
     const inbox = path.join(rootDirectory, 'inbox');
     const entries = await readdir(inbox, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => error.code === 'ENOENT' ? [] : Promise.reject(error));
     const allowed = requestedSkus?.length ? new Set(requestedSkus) : undefined;
@@ -252,8 +257,9 @@ export class WbSourceMediaCleanupService {
     if (candidate.status !== 'CANDIDATE' || candidate.rowVersion !== rowVersion) {
       throw new AppError('VERSION_CONFLICT', 'WB 历史清理候选已变化，请重新 dry-run', { candidateId, rowVersion }, 409);
     }
-    const snapshot = await this.files.snapshot(candidate.rootDirectory, candidate.sku);
-    const validation = await this.validateHistoricalCandidate({ batch: candidate, snapshot });
+    const runtimeCandidate = this.withRuntimeRoot(candidate);
+    const snapshot = await this.files.snapshot(runtimeCandidate.rootDirectory, runtimeCandidate.sku);
+    const validation = await this.validateHistoricalCandidate({ batch: runtimeCandidate, snapshot });
     if (!validation.eligible) {
       throw new AppError('WB_SOURCE_MEDIA_CLEANUP_BLOCKED', 'WB 历史清理候选二次校验未通过', {
         candidateId,
@@ -267,7 +273,7 @@ export class WbSourceMediaCleanupService {
   async inspectOrphanAutomaticBatch(id: string): Promise<WbOrphanAutomaticCleanupInspection> {
     const evidence = await this.repository.inspectOrphanAutomationBatch(id);
     const reasons = [...evidence.reasons];
-    const snapshot = await this.files.snapshot(evidence.batch.rootDirectory, evidence.batch.sku);
+    const snapshot = await this.files.snapshot(this.canonicalizePath(evidence.batch.rootDirectory), evidence.batch.sku);
     if (!snapshot.exists) reasons.push('SOURCE_ABSENT');
     if (!snapshot.stagingEmpty) reasons.push('STAGING_NOT_EMPTY');
     if (snapshot.mediaSignature !== evidence.batch.mediaSignature) reasons.push('SOURCE_CHANGED');
@@ -313,6 +319,7 @@ export class WbSourceMediaCleanupService {
   }
 
   private async process(batch: WbSourceMediaCleanupBatch): Promise<keyof Omit<WbSourceMediaCleanupRunResult, 'checked'>> {
+    const runtimeBatch = this.withRuntimeRoot(batch);
     const targets = await this.repository.targets(batch.id);
     const blockers = this.targetBlockers(batch, targets);
     if (blockers.length) {
@@ -324,7 +331,7 @@ export class WbSourceMediaCleanupService {
       await this.repository.releaseWaiting(batch);
       return 'waiting';
     }
-    const snapshot = await this.files.snapshot(batch.rootDirectory, batch.sku);
+    const snapshot = await this.files.snapshot(runtimeBatch.rootDirectory, runtimeBatch.sku);
     if (snapshot.exists && !snapshot.stagingEmpty) {
       await this.repository.releaseWaiting(batch);
       return 'waiting';
@@ -335,9 +342,9 @@ export class WbSourceMediaCleanupService {
         actual: snapshot.mediaSignature
       }, 409);
     }
-    for (const target of targets) await this.validateSuccessArchive(batch, target, snapshot);
+    for (const target of targets) await this.validateSuccessArchive(runtimeBatch, target, snapshot);
     const quarantine = await this.files.quarantine({
-      rootDirectory: batch.rootDirectory,
+      rootDirectory: runtimeBatch.rootDirectory,
       cleanupId: batch.id,
       sku: batch.sku,
       batchKey: batch.batchKey,
@@ -351,7 +358,7 @@ export class WbSourceMediaCleanupService {
     }
     const quarantined = await this.repository.markQuarantined(batch, quarantine.quarantineRelPath);
     await this.files.deleteQuarantine({
-      rootDirectory: quarantined.rootDirectory,
+      rootDirectory: this.canonicalizePath(quarantined.rootDirectory),
       cleanupId: quarantined.id,
       sku: quarantined.sku,
       batchKey: quarantined.batchKey,
@@ -395,8 +402,9 @@ export class WbSourceMediaCleanupService {
     if (!relPath.startsWith(expectedPrefix) || relPath.split('/').some((part) => !part || part === '.' || part === '..')) {
       throw archiveError('WB 成功归档路径无效', { cleanupId: batch.id, relPath });
     }
-    const archiveRoot = path.resolve(batch.rootDirectory, ...relPath.split('/'));
-    const rootReal = await realpath(batch.rootDirectory);
+    const runtimeRoot = this.canonicalizePath(batch.rootDirectory);
+    const archiveRoot = path.resolve(runtimeRoot, ...relPath.split('/'));
+    const rootReal = await realpath(runtimeRoot);
     if (!isPathInside(rootReal, archiveRoot)) throw archiveError('WB 成功归档路径超出根目录', { archiveRoot });
     const archiveInfo = await lstat(archiveRoot).catch((error: NodeJS.ErrnoException) => error.code === 'ENOENT' ? undefined : Promise.reject(error));
     if (!archiveInfo || !archiveInfo.isDirectory() || archiveInfo.isSymbolicLink()) throw archiveError('WB 成功归档目录不存在或不安全', { archiveRoot });
@@ -433,12 +441,16 @@ export class WbSourceMediaCleanupService {
   }
 
   private async requireSnapshot(rootDirectory: string, sku: string): Promise<WbSourceMediaFileSnapshot> {
-    const snapshot = await this.files.snapshot(rootDirectory, sku);
+    const snapshot = await this.files.snapshot(this.canonicalizePath(rootDirectory), sku);
     if (!snapshot.exists || !snapshot.mediaSignature || snapshot.fileCount < 2) {
       throw new AppError('WB_SOURCE_MEDIA_CLEANED', '公共媒体已在成功上品后清理，请重新投递媒体', { sku }, 410);
     }
     if (!snapshot.stagingEmpty) throw new AppError('WB_SOURCE_MEDIA_BUSY', '公共媒体仍在投递，请稍后重试', { sku }, 409);
     return snapshot;
+  }
+
+  private withRuntimeRoot<T extends WbSourceMediaCleanupBatch>(batch: T): T {
+    return { ...batch, rootDirectory: this.canonicalizePath(batch.rootDirectory) };
   }
 }
 

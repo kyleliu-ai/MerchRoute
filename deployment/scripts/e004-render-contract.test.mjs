@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -193,8 +193,17 @@ test('S015 renders a synthetic video through the real FFmpeg and FFprobe chain w
   const lookup = spawnSync(process.platform === 'win32' ? 'where.exe' : 'which', ['ffmpeg'], { encoding: 'utf8' });
   const ffmpegPath = String(lookup.stdout || '').split(/\r?\n/).map((value) => value.trim()).find(Boolean);
   if (lookup.status !== 0 || !ffmpegPath) return context.skip('本机 PATH 中没有 FFmpeg');
-  const root = await mkdtemp(path.join(os.tmpdir(), "merchroute-s015-o'brien-中文-"));
-  context.after(() => rm(root, { recursive: true, force: true }));
+  const temporaryParent = await mkdtemp(path.join(os.tmpdir(), 'merchroute-s015-contract-'));
+  context.after(() => rm(temporaryParent, { recursive: true, force: true }));
+  const actualParent = path.join(temporaryParent, 'real');
+  const aliasParent = path.join(temporaryParent, 'alias');
+  await mkdir(actualParent);
+  await symlink(actualParent, aliasParent, process.platform === 'win32' ? 'junction' : 'dir');
+  // macOS temp paths can traverse /var -> /private/var. Use canonical fixture
+  // paths, as required by the renderer's strict output containment checks.
+  // A synthetic parent alias exercises this on Windows and Linux too.
+  const root = await realpath(await mkdtemp(path.join(aliasParent, "render-o'brien-中文-")));
+  assert.equal(path.dirname(root), await realpath(actualParent));
   const source = path.join(root, 'source');
   const outputParent = path.join(root, 'output');
   const outputSubDir = path.join(outputParent, 'job');
