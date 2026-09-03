@@ -241,13 +241,14 @@ describe.runIf(Boolean(connectionString))('MediaIndexRepository PostgreSQL integ
     expect(claimed[0]).toMatchObject({ id: first.id, eventRevision: '2', leaseOwner: 'worker-one' });
     expect(claimed[0]?.leaseToken).toBeTruthy();
     await expect(repository.renewReconcileLease(first.id, randomUUID(), 60_000)).resolves.toBe(false);
-    await database.query(`UPDATE media_index_reconcile_queue SET lease_until=NOW()+INTERVAL '10 milliseconds'
-      WHERE id=$1`, [first.id]);
-    await expect(repository.renewReconcileLease(first.id, claimed[0]!.leaseToken!, 60_000)).resolves.toBe(true);
-    const renewedLease = await database.query<{ remaining_ms: number }>(`SELECT EXTRACT(EPOCH FROM (lease_until-NOW()))*1000 AS remaining_ms
+    // Control the lease deadline in PostgreSQL; a 10 ms wall-clock window can
+    // legitimately expire before the next query on a busy CI runner.
+    const beforeRenewal = await database.query<{ lease_until: Date }>(`UPDATE media_index_reconcile_queue
+      SET lease_until=NOW()+INTERVAL '5 minutes' WHERE id=$1 RETURNING lease_until`, [first.id]);
+    await expect(repository.renewReconcileLease(first.id, claimed[0]!.leaseToken!, 600_000)).resolves.toBe(true);
+    const renewedLease = await database.query<{ lease_until: Date }>(`SELECT lease_until
       FROM media_index_reconcile_queue WHERE id=$1`, [first.id]);
-    expect(Number(renewedLease.rows[0]?.remaining_ms)).toBeGreaterThan(50_000);
-    await database.query('SELECT pg_sleep(0.025)');
+    expect(renewedLease.rows[0]!.lease_until.getTime() - beforeRenewal.rows[0]!.lease_until.getTime()).toBeGreaterThanOrEqual(300_000);
     await expect(repository.recoverExpiredLeases()).resolves.toBe(0);
     await expect(repository.claimReconcile('heartbeat-competitor', 1)).resolves.toEqual([]);
 
@@ -269,22 +270,34 @@ describe.runIf(Boolean(connectionString))('MediaIndexRepository PostgreSQL integ
     expect(taskASecond).toMatchObject({ relativeTaskDirectory: '产品/任务甲', pathKey: '产品/任务甲' });
     expect(taskB.id).not.toBe(taskA.id);
 
+    // Claims are ordered by due_at, not by retry priority. Anchor both jobs and
+    // retryAt to database timestamps instead of assuming the test takes <1 s.
+    const dueDates = await database.query<{ id: string; due_at: Date }>(`UPDATE media_index_reconcile_queue
+      SET due_at=CASE WHEN id=$1 THEN NOW()-INTERVAL '2 days' ELSE NOW()-INTERVAL '1 day' END
+      WHERE id IN ($1,$2) RETURNING id,due_at`, [taskA.id, taskB.id]);
+    const retryAt = new Date(dueDates.rows.find((row) => row.id === taskA.id)!.due_at.getTime() - 1_000).toISOString();
     const [failedClaim] = await repository.claimReconcile('worker-failure', 1);
+    expect(failedClaim!.id).toBe(taskA.id);
     await expect(repository.failReconcile({
       id: failedClaim!.id,
       leaseToken: failedClaim!.leaseToken!,
       eventRevision: failedClaim!.eventRevision,
       error: 'temporary failure',
-      retryAt: new Date(Date.now() - 1_000).toISOString()
+      retryAt
     })).resolves.toBe('RETRY_SCHEDULED');
+    const scheduled = await database.query<{ due_at: Date }>('SELECT due_at FROM media_index_reconcile_queue WHERE id=$1', [taskA.id]);
+    expect(scheduled.rows[0]!.due_at.toISOString()).toBe(retryAt);
     expect(await repository.getSource('E001')).toMatchObject({ lastError: 'temporary failure' });
     const retried = await repository.claimReconcile('worker-retry', 1);
     expect(retried[0]).toMatchObject({ id: failedClaim!.id, retryCount: 1, lastError: 'temporary failure' });
     await database.query("UPDATE media_index_reconcile_queue SET lease_until=NOW()-INTERVAL '1 second' WHERE id=$1", [retried[0]!.id]);
+    await expect(repository.renewReconcileLease(retried[0]!.id, retried[0]!.leaseToken!, 60_000)).resolves.toBe(false);
     expect(await repository.recoverExpiredLeases()).toBe(1);
 
     const recovered = await repository.claimReconcile('worker-recovered', 1);
     expect(recovered[0]).toMatchObject({ id: failedClaim!.id, retryCount: 2, lastError: 'LEASE_EXPIRED' });
+    expect(recovered[0]!.leaseToken).not.toBe(retried[0]!.leaseToken);
+    await expect(repository.renewReconcileLease(recovered[0]!.id, retried[0]!.leaseToken!, 60_000)).resolves.toBe(false);
     await repository.completeReconcile(recovered[0]!.id, recovered[0]!.leaseToken!, recovered[0]!.eventRevision);
 
     const remaining = await repository.claimReconcile('worker-remaining', 5);

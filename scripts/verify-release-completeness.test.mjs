@@ -10,6 +10,7 @@ import { LEGACY_OZON_SKIPS, POSIX_SKIP } from './ci-evidence-contract.mjs';
 import {
   collectContentIdentity,
   compareBranchInventory,
+  compareInventorySnapshots,
   evaluateCiGate,
   evaluateGate,
   identityMatches,
@@ -17,11 +18,14 @@ import {
   inspectModeConstraints,
   inspectValidationLog,
   parseVerificationArguments,
+  parseLocalTree,
+  githubRepositoryFromPackage,
   REQUIRED_FEATURE_IDS,
   REQUIRED_LOCAL_CHECK_IDS,
   validateManifest,
   verifyBuildIdentity,
   verifyExpectedCommit,
+  verifyGithubMainMapping,
   verifyEvidence
 } from './verify-release-completeness.mjs';
 
@@ -34,6 +38,7 @@ const exampleIdentity = {
   scopeContractSha256: '4'.repeat(64), agentsSha256: '5'.repeat(64), featureManifestSha256: '6'.repeat(64)
 };
 const noEvidence = { status: 'NOT_PROVIDED', errors: [], checks: [] };
+const candidateBranch = 'work/new-acceptance-candidate';
 
 async function tempDirectory(t, label) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'merchroute-release-' + label + '-'));
@@ -41,17 +46,25 @@ async function tempDirectory(t, label) {
   return root;
 }
 
-test('原 25 个分支和 12 项功能完整保留，并追加已提交 C1 候选来源', () => {
+test('原 25 个分支和 12 项功能完整保留，另追加 C1、发布及 CI 修复来源', () => {
   assert.deepEqual(validateManifest(manifest), []);
-  assert.equal(manifest.branches.length, 26);
+  assert.equal(manifest.branches.length, 29);
   assert.equal(digest(JSON.stringify(manifest.branches.slice(0, 25))), '7fa2eea22e55675c5cdf373683a07ebe15b7eb2c110987708574f7c74cf835bf');
-  assert.deepEqual(manifest.branches.at(-1), {
+  assert.deepEqual(manifest.branches[25], {
     name: 'work/merchroute-complete-release-20260903-0951', head: '26235db67baa4b99d15952571f152af8c6c65c9d',
     featureId: 'core-deployment', relation: 'COMMITTED_COMPLETE_CANDIDATE'
   });
-  assert.equal(manifest.sourceCandidate.commit, manifest.branches.at(-1).head);
+  assert.equal(manifest.sourceCandidate.commit, manifest.branches[25].head);
   assert.equal(manifest.sourceCandidate.headTreeHash, '188f6431b2587ec3a4ad9a34f315c6a2c5cdb4ec');
-  assert.equal(manifest.policy.currentBranch, 'work/merchroute-github-publish-20260903-1108');
+  assert.equal(manifest.policy.currentBranch, undefined);
+  assert.equal(manifest.policy.candidateBinding, 'EXPLICIT_EXPECTED_COMMIT');
+  assert.deepEqual(manifest.branches.slice(26).map(({ name, head }) => [name, head]), [
+    ['work/merchroute-github-publish-20260903-1108', 'cbcec116aa57e13c3c212c45e112f12bb0649ba1'],
+    ['work/pr23-ci-fix-20260903-1336', '4315999b0c23f4651412b597bfbdc1455d85c212'],
+    ['work/pr23-ci-publish-20260903-1336', 'e8c357247173a912fb588d92ce3d30e11ed09e91']
+  ]);
+  assert.equal(manifest.integrationParent.commit, manifest.branches[27].head);
+  assert.equal(manifest.integrationParent.headTreeHash, '22ecc597f1230bcc280d63b032e06b4c72bfee23');
   assert.deepEqual(manifest.features.filter((feature) => feature.action === 'INTEGRATE').map((feature) => feature.id).sort(),
     ['local-import-directory-status', 'project-release-guardrails', 'wb-restart-protection']);
   assert.equal(manifest.features.length, 12);
@@ -78,18 +91,53 @@ test('两种模式共用不可删减的 12 项关键功能与本机 11 类检查
   const missingSource = structuredClone(manifest);
   delete missingSource.sourceCandidate;
   assert.match(validateManifest(missingSource).join(' '), /已提交阶段 1/);
+  const missingParent = structuredClone(manifest);
+  delete missingParent.integrationParent;
+  assert.match(validateManifest(missingParent).join(' '), /已审计本机来源/);
+  const oldBinding = structuredClone(manifest);
+  oldBinding.policy.currentBranch = 'work/obsolete-branch';
+  assert.match(validateManifest(oldBinding).join(' '), /不能硬编码/);
 });
 
-test('当前候选以外的分支移动、缺失或新增都要求重新审计', () => {
+test('当前候选以真实提交绑定；历史移动、缺失或未知新提交仍阻断', () => {
   const branches = manifest.branches.map(({ name, head }) => ({ name, head }));
-  branches.push({ name: manifest.policy.currentBranch, head: 'c'.repeat(40) });
-  assert.deepEqual(compareBranchInventory(manifest, branches, manifest.policy.currentBranch), []);
+  branches.push({ name: candidateBranch, head: exampleIdentity.commit });
+  const inspect = (items, current = candidateBranch, expected = exampleIdentity.commit) => compareBranchInventory(manifest, items, current, expected);
+  assert.deepEqual(inspect(branches), []);
   const moved = structuredClone(branches);
   moved[0].head = 'd'.repeat(40);
-  assert.match(compareBranchInventory(manifest, moved, manifest.policy.currentBranch).join(' '), /发生变化/);
-  assert.match(compareBranchInventory(manifest, branches.slice(1), manifest.policy.currentBranch).join(' '), /缺失/);
-  assert.match(compareBranchInventory(manifest, [...branches, { name: 'work/unreviewed', head: 'e'.repeat(40) }], manifest.policy.currentBranch).join(' '), /未纳入台账/);
-  assert.match(compareBranchInventory(manifest, branches, 'main').join(' '), /独立候选/);
+  assert.match(inspect(moved).join(' '), /发生变化/);
+  assert.match(inspect(branches.slice(1)).join(' '), /缺失/);
+  assert.match(inspect([...branches, { name: 'work/unreviewed', head: 'e'.repeat(40) }]).join(' '), /未纳入台账/);
+  assert.match(inspect(branches, 'main').join(' '), /独立候选/);
+  assert.match(inspect(branches, '').join(' '), /独立候选/);
+  assert.match(inspect(branches, candidateBranch, 'b'.repeat(40)).join(' '), /expected-commit/);
+  assert.match(compareBranchInventory(manifest, branches, candidateBranch).join(' '), /expected-commit/);
+});
+
+test('新 Worktree 的同提交别名必须显式声明；不能豁免历史分支或不同提交', () => {
+  const alias = 'work/explicit-same-commit-alias';
+  const branches = [...manifest.branches, { name: candidateBranch, head: exampleIdentity.commit }, { name: alias, head: exampleIdentity.commit }];
+  const inspect = (items, aliases) => compareBranchInventory(manifest, items, candidateBranch, exampleIdentity.commit, aliases);
+  assert.match(inspect(branches, []).join(' '), /未纳入台账/);
+  assert.deepEqual(inspect(branches, [alias]), []);
+  assert.match(inspect(branches, [alias, alias]).join(' '), /重复/);
+  assert.match(inspect(branches, [alias, 'work/missing']).join(' '), /完全相同提交/);
+  assert.match(inspect(branches, [alias, manifest.branches[0].name]).join(' '), /非历史条目/);
+  const movedAlias = structuredClone(branches);
+  movedAlias.at(-1).head = 'e'.repeat(40); // Even an equal tree is not an equal commit.
+  assert.match(inspect(movedAlias, [alias]).join(' '), /完全相同提交/);
+  const movedHistorical = structuredClone(branches);
+  movedHistorical[0].head = exampleIdentity.commit;
+  assert.match(inspect(movedHistorical, [alias, movedHistorical[0].name]).join(' '), /发生变化/);
+});
+
+test('检查结束重新核对完整分支集合，不能遗漏并发新增、删除或移动', () => {
+  const branches = [{ name: candidateBranch, head: exampleIdentity.commit }];
+  assert.deepEqual(compareInventorySnapshots(branches, structuredClone(branches)), []);
+  for (const after of [[], [...branches, { name: 'work/new', head: exampleIdentity.commit }], [{ ...branches[0], head: 'f'.repeat(40) }]]) {
+    assert.match(compareInventorySnapshots(branches, after).join(' '), /检查期间变化/);
+  }
 });
 
 test('源码锚点成功不宣称行为通过，缺少字面表头会失败', async (t) => {
@@ -311,8 +359,12 @@ test('严格构建必须匹配真实提交、三类指纹和范围版本，不�
   assert.notDeepEqual(verifyBuildIdentity(exampleIdentity, { ...build, fingerprints: { ...build.fingerprints, documentation: 'stale' } }), []);
 });
 
-test('local 默认及显式 strict 保持原门禁；CI 必须显式绑定完整 expected commit', () => {
-  assert.deepEqual(parseVerificationArguments([]), { mode: 'local', strict: false, evidencePath: undefined, expectedCommit: undefined });
+test('local 与 CI 均显式绑定完整 expected commit，不能隐式猜测验收身份', () => {
+  assert.throws(() => parseVerificationArguments([]), /expected-commit/);
+  assert.throws(() => parseVerificationArguments(['--strict']), /expected-commit/);
+  assert.deepEqual(parseVerificationArguments(['--expected-commit', exampleIdentity.commit]), {
+    mode: 'local', strict: false, evidencePath: undefined, expectedCommit: exampleIdentity.commit, candidateAliases: [], githubCommit: undefined
+  });
   const local = parseVerificationArguments(['--mode', 'local', '--strict', '--expected-commit', exampleIdentity.commit]);
   assert.equal(local.strict, true);
   assert.equal(local.mode, 'local');
@@ -332,9 +384,74 @@ test('CI 不依赖本机 refs 或分支名，但错误真实 HEAD 与 dirty 源�
   assert.match(inspectModeConstraints({ ...input, commit: 'f'.repeat(40) }).join(' '), /真实 Git HEAD/);
   assert.match(inspectModeConstraints({ ...input, dirty: true }).join(' '), /干净且已提交/);
   assert.match(inspectModeConstraints({ ...input, expectedCommit: undefined }).join(' '), /expected-commit/);
-  assert.match(inspectModeConstraints({ ...input, mode: 'local', currentBranch: manifest.policy.currentBranch }).join(' '), /分支发生变化或缺失/);
+  assert.match(inspectModeConstraints({ ...input, mode: 'local', currentBranch: candidateBranch }).join(' '), /分支发生变化或缺失/);
   assert.deepEqual(verifyExpectedCommit(undefined, exampleIdentity.commit), []);
   assert.notDeepEqual(verifyExpectedCommit(exampleIdentity.commit, 'f'.repeat(40)), []);
+});
+
+test('GitHub 映射只能附加到有实际证据的 local strict，不能让 CI 冒充本机验收', () => {
+  const args = ['--expected-commit', exampleIdentity.commit, '--github-commit', 'c'.repeat(40)];
+  assert.throws(() => parseVerificationArguments(args), /local --strict/);
+  assert.throws(() => parseVerificationArguments([...args, '--strict']), /实际证据/);
+  assert.throws(() => parseVerificationArguments([...args, '--mode', 'ci']), /local --strict/);
+  assert.throws(() => parseVerificationArguments(['--mode', 'ci', '--expected-commit', exampleIdentity.commit, '--candidate-alias', 'work/alias']), /不接受/);
+  const parsed = parseVerificationArguments([...args, '--strict', '--evidence', '/external/evidence.json', '--candidate-alias', 'work/alias']);
+  assert.equal(parsed.githubCommit, 'c'.repeat(40));
+  assert.deepEqual(parsed.candidateAliases, ['work/alias']);
+});
+
+test('只从受控仓库声明读取 GitHub 身份；Git tree 使用 NUL 分隔保留完整文件名', () => {
+  assert.equal(githubRepositoryFromPackage({ repository: { url: 'git+https://github.com/owner/repo.git' } }), 'owner/repo');
+  for (const url of ['https://elsewhere/owner/repo', 'git+https://token@github.com/owner/repo.git', 'git+https://github.com/owner/repo.git?token=x']) {
+    assert.throws(() => githubRepositoryFromPackage({ repository: { url } }), /明确声明/);
+  }
+  assert.deepEqual(parseLocalTree('100644 blob ' + 'd'.repeat(40) + '\t中文\nfile.md\0'), [
+    { mode: '100644', type: 'blob', sha: 'd'.repeat(40), path: '中文\nfile.md' }
+  ]);
+  assert.throws(() => parseLocalTree('invalid'), /无法解析/);
+});
+
+test('只读 main 映射允许不同提交相同源码，但仍逐项核对 tree 和并发 main', async () => {
+  const main = 'c'.repeat(40);
+  const entries = [{ path: 'AGENTS.md', mode: '100644', type: 'blob', sha: 'd'.repeat(40) }];
+  const fixture = () => [
+    { object: { type: 'commit', sha: main } },
+    { sha: main, tree: { sha: exampleIdentity.headTreeHash } },
+    { sha: exampleIdentity.headTreeHash, truncated: false, tree: structuredClone(entries) },
+    { object: { type: 'commit', sha: main } }
+  ];
+  const run = async (responses, calls = []) => verifyGithubMainMapping({
+    repository: 'owner/repo', expectedGithubCommit: main, identity: exampleIdentity, localEntries: entries,
+    readJson: async (endpoint) => { calls.push(endpoint); return responses.shift(); }
+  });
+  const calls = [];
+  const result = await run(fixture(), calls);
+  assert.equal(result.status, 'PASS');
+  assert.equal(result.localCommit, exampleIdentity.commit);
+  assert.equal(result.githubMainCommit, main);
+  assert.equal(result.published, false);
+  assert.deepEqual(calls, [
+    'repos/owner/repo/git/ref/heads/main', 'repos/owner/repo/git/commits/' + main,
+    'repos/owner/repo/git/trees/' + exampleIdentity.headTreeHash + '?recursive=1', 'repos/owner/repo/git/ref/heads/main'
+  ]);
+  const cases = [
+    (rows) => { rows[0].object.sha = 'f'.repeat(40); },
+    (rows) => { rows[1].tree.sha = 'f'.repeat(40); },
+    (rows) => { rows[2].truncated = true; },
+    (rows) => { rows[2].tree[0].path = 'renamed.md'; },
+    (rows) => { rows[2].tree[0].mode = '100755'; },
+    (rows) => { rows[2].tree[0].sha = 'f'.repeat(40); },
+    (rows) => { rows[2].tree.push(rows[2].tree[0]); },
+    (rows) => { rows[3].object.sha = 'f'.repeat(40); }
+  ];
+  for (const mutate of cases) {
+    const rows = fixture(); mutate(rows);
+    await assert.rejects(run(rows));
+  }
+  await assert.rejects(verifyGithubMainMapping({
+    repository: 'owner/repo', expectedGithubCommit: main, identity: exampleIdentity, localEntries: entries,
+    readJson: async () => { throw new Error('read denied'); }
+  }), /read denied/);
 });
 
 test('CI 静态通过永不宣称本机行为验收或发布；缺锚点与过期构建均拒绝', () => {
