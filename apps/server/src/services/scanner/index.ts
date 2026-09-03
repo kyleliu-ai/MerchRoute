@@ -105,6 +105,7 @@ export class ScannerService {
       ...toProductTask(task, review?.status),
       tree: this.buildTree(task.images),
       images: task.images.map(cloneImage),
+      reviewVersion: review?.version || 0,
       selectedRelativePaths: review?.selectedRelativePaths || [],
       selectedTargetStageIds: review?.selectedTargetStageIds || [],
       variantSelectionGroups: review?.variantSelectionGroups || [],

@@ -1061,6 +1061,48 @@ describe.sequential('review and submission integration', () => {
     expect(patch.json().error.code).toBe('TASK_LOCKED');
   });
 
+  it('durably accepts duplicate async requests, rejects concurrent edits and preserves one delivery after readback', async () => {
+    const folderName = '异步幂等投递测试';
+    await createProduct(config.stages[0]!.candidateRoot!, folderName, ['image.png']);
+    await app.services.mediaIndex.refreshStage(config.stages[0]!.id);
+    const task = (await app.inject({ method: 'GET', url: '/api/v1/stages/E006/tasks' })).json().items.find((row: any) => row.sourceFolderName === folderName);
+    const approvePayload = { selectedRelativePaths: ['image.png'], targetStageIds: ['E001'], expectedVersion: 0 };
+    const headers = { prefer: 'respond-async', 'idempotency-key': 'async-approve-test' };
+    const approvals = await Promise.all([1, 2].map(() => app.inject({ method: 'POST', url: '/api/v1/tasks/' + task.taskId + '/approve', headers, payload: approvePayload })));
+    expect(approvals.map((response) => response.statusCode)).toEqual([202, 202]);
+    expect(approvals[0]!.json().operation.operationId).toBe(approvals[1]!.json().operation.operationId);
+    const changed = await app.inject({ method: 'POST', url: '/api/v1/tasks/' + task.taskId + '/approve', headers, payload: { ...approvePayload, selectedRelativePaths: [] } });
+    expect(changed.statusCode).toBe(409);
+    await app.services.reviewOperations.wait(approvals[0]!.json().operation.operationId);
+    const pending = app.services.store.section('pendingSubmissions').find((row) => row.taskId === task.taskId)!;
+    const submissionService = app.services.submissions as any;
+    const original = submissionService.packageAndSubmit;
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    submissionService.packageAndSubmit = async (...args: any[]) => { entered(); await gate; return original.apply(submissionService, args); };
+    try {
+      const payload = { batchId: 'BATCH-ASYNC-TEST', pendingSubmissionIds: [pending.id], conflictPolicy: 'new-revision', expectedVersions: { [pending.id]: pending.version || 0 } };
+      const response = await app.inject({ method: 'POST', url: '/api/v1/submissions/batch', headers: { prefer: 'respond-async', 'idempotency-key': 'async-batch-test' }, payload });
+      expect(response.statusCode).toBe(202);
+      await started;
+      const edits = await app.inject({ method: 'PATCH', url: '/api/v1/pending-submissions/' + pending.id, payload: { conflictPolicy: 'skip' } });
+      expect(edits.statusCode).toBe(409);
+      const duplicate = await app.inject({ method: 'POST', url: '/api/v1/submissions/batch', headers: { prefer: 'respond-async', 'idempotency-key': 'async-batch-test' }, payload });
+      expect(duplicate.json().operation.operationId).toBe(response.json().operation.operationId);
+      release();
+      const result: any = await app.services.reviewOperations.wait(response.json().operation.operationId);
+      expect(result.results).toHaveLength(1);
+      expect(result.results[0].status).toBe('SUCCESS');
+      const persisted = JSON.parse(await readFile(path.join(appData, 'db.json'), 'utf8'));
+      expect(persisted.submissionHistory.filter((row: any) => row.pendingSubmissionId === pending.id)).toHaveLength(1);
+      const stale = await app.inject({ method: 'POST', url: '/api/v1/tasks/' + task.taskId + '/approve', headers: { ...headers, 'idempotency-key': 'stale-version-test' }, payload: approvePayload });
+      expect(stale.statusCode).toBe(409);
+      expect(stale.json().error.code).toBe('STALE_REVIEW_VERSION');
+    } finally { release(); submissionService.packageAndSubmit = original; }
+  });
+
   it('backfills legacy pending records from the target workflow template on startup', async () => {
     const legacyRoot = await mkdtemp(path.join(os.tmpdir(), 'n8n-review-legacy-'));
     const legacyAppData = path.join(legacyRoot, 'app-data');

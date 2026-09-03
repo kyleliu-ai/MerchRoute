@@ -2,6 +2,17 @@ import { expect, test, type Page } from '@playwright/test';
 import { readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
+async function completedOperation(page: Page, response: any): Promise<any> {
+  if (!response.operation) return response;
+  let row: any;
+  await expect.poll(async () => {
+    row = await (await page.request.get('/api/v1/review-operations/' + response.operation.operationId)).json();
+    return ['SUCCEEDED', 'PARTIAL_SUCCESS', 'FAILED', 'NEEDS_ATTENTION'].includes(row.status);
+  }).toBe(true);
+  expect(row.status).toBe('SUCCEEDED');
+  return row.result;
+}
+
 async function openReviewTaskFromTable(page: Page, sourceFolderName: string): Promise<void> {
   const row = page.locator('.task-table .ant-table-tbody tr').filter({ hasText: sourceFolderName });
   await expect(row).toBeVisible();
@@ -481,7 +492,9 @@ test.describe.serial('v002 review and delivery', () => {
     await expect(page.getByText('批量投递完成')).toHaveCount(0);
     await expect(submitButton).toBeDisabled();
     releaseBatchRequest();
-    const batchBody = await (await batchResponsePromise).json();
+    const accepted = await batchResponsePromise;
+    expect(accepted.status()).toBe(202);
+    const batchBody = await completedOperation(page, await accepted.json());
     await page.unroute('**/api/v1/submissions/batch');
     const batchResults = batchBody.results as Array<{ status: string; submissionId: string }>;
     expect(batchResults.map((item) => item.status)).toEqual(['SUCCESS']);
@@ -567,7 +580,9 @@ test.describe.serial('v002 review and delivery', () => {
     const batchResponsePromise = page.waitForResponse((response) => response.url().endsWith('/api/v1/submissions/batch') && response.request().method() === 'POST');
     await page.getByRole('button', { name: '批量投递' }).click();
     await expect(page.locator('.ant-drawer').filter({ hasText: '投递进度' })).toHaveCount(0);
-    const batchBody = await (await batchResponsePromise).json();
+    const accepted = await batchResponsePromise;
+    expect(accepted.status()).toBe(202);
+    const batchBody = await completedOperation(page, await accepted.json());
     expect(batchBody.results.map((item: { status: string; errorCode?: string }) => ({ status: item.status, errorCode: item.errorCode }))).toEqual([
       { status: 'SUCCESS' },
       { status: 'SUCCESS' }
@@ -714,7 +729,9 @@ test.describe.serial('v002 review and delivery', () => {
     const batchResponsePromise = page.waitForResponse((response) => response.url().endsWith('/api/v1/submissions/batch') && response.request().method() === 'POST');
     await page.getByRole('button', { name: '批量投递' }).click();
     await expect(page.locator('.ant-drawer').filter({ hasText: '投递进度' })).toHaveCount(0);
-    const batchBody = await (await batchResponsePromise).json();
+    const accepted = await batchResponsePromise;
+    expect(accepted.status()).toBe(202);
+    const batchBody = await completedOperation(page, await accepted.json());
     expect(batchBody.results.map((item: { status: string }) => item.status)).toEqual(['SUCCESS']);
     await expect(page.getByText('批量投递完成')).toHaveCount(0);
     await expect(page.locator('.ant-drawer').filter({ hasText: '投递进度' })).toHaveCount(0);
@@ -795,7 +812,9 @@ test.describe.serial('v002 review and delivery', () => {
     const batchResponsePromise = page.waitForResponse((response) => response.url().endsWith('/api/v1/submissions/batch') && response.request().method() === 'POST');
     await page.getByRole('button', { name: '批量投递' }).click();
     await expect(page.locator('.ant-drawer').filter({ hasText: '投递进度' })).toHaveCount(0);
-    const batchBody = await (await batchResponsePromise).json();
+    const accepted = await batchResponsePromise;
+    expect(accepted.status()).toBe(202);
+    const batchBody = await completedOperation(page, await accepted.json());
     expect(batchBody.results.map((item: { status: string }) => item.status)).toEqual(['SUCCESS', 'SUCCESS']);
     await expect(page.getByText('批量投递完成')).toHaveCount(0);
     await expect(page.locator('.ant-drawer').filter({ hasText: '投递进度' })).toHaveCount(0);

@@ -308,6 +308,25 @@ describe.runIf(Boolean(connectionString))('WB auto publish PostgreSQL repository
     await expect(first).resolves.toEqual({ acquired: true, value: 'done' });
   });
 
+  it('keeps database connections available when many SKU locks query the same pool', async () => {
+    const pool = (repository as unknown as { pool: Pool }).pool;
+    const previousTimeout = pool.options.connectionTimeoutMillis;
+    pool.options.connectionTimeoutMillis = 1000;
+    try {
+      const results = await Promise.all(Array.from({ length: 8 }, (_, index) => {
+        const sku = String(999000 + index).padStart(7, '0');
+        return repository.withSkuLock(sku, async () => {
+          await new Promise((resolve) => setTimeout(resolve, 80));
+          return repository.find(sku);
+        });
+      }));
+      expect(results).toEqual(Array.from({ length: 8 }, () => ({ acquired: true, value: undefined })));
+      await expect(repository.withSkuLock('0999000', async () => 'released')).resolves.toEqual({ acquired: true, value: 'released' });
+    } finally {
+      pool.options.connectionTimeoutMillis = previousTimeout;
+    }
+  });
+
   it('creates a new immutable compatible run after the previous run succeeds without replaying old delivery ids', async () => {
     const firstAt = new Date(Date.now() - 120_000).toISOString();
     const first = await repository.enqueueDelivery({ ...autoInput('0000091', 'compatible-run-1', firstAt), operationMode: 'COMPATIBLE_UPSERT' });

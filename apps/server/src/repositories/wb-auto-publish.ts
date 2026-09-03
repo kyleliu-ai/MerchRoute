@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import pLimit from 'p-limit';
 import { Pool, type PoolClient, type QueryResultRow } from 'pg';
 import {
   AppError,
@@ -138,6 +139,9 @@ const RECHECKABLE = new Set<WbAutoPublishState>(['WAITING_MEDIA', 'WAITING_STABL
 
 export class WbAutoPublishRepository {
   private pool?: Pool;
+  // A SKU lock holds one client while its callback uses this same four-client
+  // pool. Reserve two clients for callback queries, even during store fan-out.
+  private readonly skuLockSlots = pLimit(2);
 
   constructor(private readonly connectionString?: string) {}
   get configured(): boolean { return Boolean(this.pool); }
@@ -511,16 +515,18 @@ export class WbAutoPublishRepository {
   }
 
   async withSkuLock<T>(sku: string, operation: () => Promise<T>, storeId: string = WB_DEFAULT_STORE_ID): Promise<{ acquired: boolean; value?: T }> {
-    const client = await this.requirePool().connect();
-    let acquired = false;
-    try {
-      acquired = Boolean((await client.query<{ acquired: boolean }>("SELECT pg_try_advisory_lock(hashtextextended('merchroute_wb_auto:'||$1||':'||$2,0)) acquired", [storeId, sku])).rows[0]?.acquired);
-      if (!acquired) return { acquired: false };
-      return { acquired: true, value: await operation() };
-    } finally {
-      if (acquired) await client.query("SELECT pg_advisory_unlock(hashtextextended('merchroute_wb_auto:'||$1||':'||$2,0))", [storeId, sku]).catch(() => undefined);
-      client.release();
-    }
+    return this.skuLockSlots(async () => {
+      const client = await this.requirePool().connect();
+      let acquired = false;
+      try {
+        acquired = Boolean((await client.query<{ acquired: boolean }>("SELECT pg_try_advisory_lock(hashtextextended('merchroute_wb_auto:'||$1||':'||$2,0)) acquired", [storeId, sku])).rows[0]?.acquired);
+        if (!acquired) return { acquired: false };
+        return { acquired: true, value: await operation() };
+      } finally {
+        if (acquired) await client.query("SELECT pg_advisory_unlock(hashtextextended('merchroute_wb_auto:'||$1||':'||$2,0))", [storeId, sku]).catch(() => undefined);
+        client.release();
+      }
+    });
   }
 
   async linkPublication(sku: string, storeId: string, runId: string, publicationId: string): Promise<void> {
