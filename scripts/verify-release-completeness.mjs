@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { lstat, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { LEGACY_OZON_SKIPS, parsePlaywrightReport, parseTestLog } from './ci-evidence-contract.mjs';
 import {
   collectLocalContentSnapshot,
   readFingerprintScopeContract,
@@ -10,6 +11,15 @@ import {
 } from '../apps/server/src/services/content-fingerprint.ts';
 
 export const MANIFEST_PATH = 'config/release-features.json';
+export const REQUIRED_FEATURE_IDS = [
+  'core-deployment', 'local-import-and-name-validation', 'purchase-product-query', 'purchase-url-query',
+  'about-fingerprints', 'github-readonly-access', 'github-token-self-service', 'local-import-directory-status',
+  'review-open-product-folder', 'wb-restart-protection', 'junction-retirement', 'project-release-guardrails'
+];
+export const REQUIRED_LOCAL_CHECK_IDS = [
+  'check', 'postgres-integration', 'e2e', 'jimeng', 'deployment-verify', 'gitleaks', 'diff-check',
+  'release-verifier-tests', 'restart-safety', 'retirement-safety', 'isolated-runtime'
+];
 const scopes = ['runtime', 'documentation', 'verification'];
 const sha256 = (value) => createHash('sha256').update(value).digest('hex');
 
@@ -28,10 +38,18 @@ export function validateManifest(manifest) {
   if (errors.length) return errors;
   const features = new Set(manifest.features.map((item) => item.id));
   const checks = new Set(manifest.requiredChecks.map((item) => item.id));
+  for (const id of REQUIRED_FEATURE_IDS) if (!features.has(id)) errors.push('缺少必须保留的功能：' + id);
+  for (const id of REQUIRED_LOCAL_CHECK_IDS) if (!checks.has(id)) errors.push('缺少本机严格检查：' + id);
   if (features.size !== manifest.features.length || checks.size !== manifest.requiredChecks.length) errors.push('功能或检查 ID 重复');
   if (new Set(manifest.branches.map((item) => item.name)).size !== manifest.branches.length) errors.push('审计分支重复');
   for (const branch of manifest.branches) {
     if (!features.has(branch.featureId) || !/^[0-9a-f]{40}$/i.test(branch.head || '')) errors.push('分支未关联有效功能和提交：' + branch.name);
+  }
+  if (!manifest.sourceCandidate?.branch?.startsWith('work/')
+    || !/^[0-9a-f]{40}$/i.test(manifest.sourceCandidate?.commit || '')
+    || !/^[0-9a-f]{40}$/i.test(manifest.sourceCandidate?.headTreeHash || '')
+    || !manifest.branches.some((branch) => branch.name === manifest.sourceCandidate.branch && branch.head === manifest.sourceCandidate.commit)) {
+    errors.push('缺少已提交阶段 1 候选及其审计分支身份');
   }
   for (const feature of manifest.features) {
     if (!['PRESERVE', 'INTEGRATE'].includes(feature.action)) errors.push('功能处理方式无效：' + feature.id);
@@ -108,7 +126,38 @@ function isOutside(root, target) {
   return relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative);
 }
 
-export function inspectValidationLog(id, command, log) {
+function inspectPlaywrightList(text, summary) {
+  const problems = [];
+  const entries = [];
+  const skippedTitles = new Set();
+  for (const line of text.split(/\r?\n/)) {
+    const row = line.match(/^\s*(ok|✓|√|-)\s+(\d+)\s+\[[^\]]+\]\s+›\s+(.+?\.spec\.[cm]?[jt]sx?):\d+:\d+\s+›\s+(.+?)\s*$/);
+    if (!row) continue;
+    const [, marker, number, rawFile, fullTitle] = row;
+    const file = rawFile.replaceAll('\\', '/');
+    const skipped = marker === '-';
+    const title = fullTitle.split(' › ').at(-1);
+    entries.push({ number, skipped });
+    if (skipped) {
+      if (file !== 'tests/e2e/ozon-listing.spec.ts' || !LEGACY_OZON_SKIPS.includes(title) || skippedTitles.has(title)) {
+        problems.push('E2E 含未批准或重复的跳过用例');
+      }
+      skippedTitles.add(title);
+    } else if (!/\s+\([\d.]+(?:ms|s|m|h)\)$/.test(fullTitle)) {
+      problems.push('E2E 用例缺少实际完成记录');
+    }
+  }
+  const announced = [...text.matchAll(/^\s*Running\s+(\d+)\s+tests?\s+using\s+\d+\s+workers?\s*$/gm)];
+  if (announced.length !== 1 || Number(announced[0]?.[1]) !== entries.length
+    || new Set(entries.map((entry) => entry.number)).size !== entries.length
+    || entries.filter((entry) => !entry.skipped).length !== summary.passed
+    || entries.filter((entry) => entry.skipped).length !== summary.skipped || summary.failed !== 0) {
+    problems.push('E2E 缺少完整逐用例记录，或逐项结果与汇总不一致');
+  }
+  return problems;
+}
+
+export function inspectValidationLog(id, command, log, { playwrightReport, platform = process.platform } = {}) {
   const patterns = {
     check: /npm(?:-cli\.js|\.cmd)?["']?\s+run\s+check(?:\s|$)/i,
     'postgres-integration': /vitest\.mjs["']?\s+run\s+\.integration\.test\.ts(?:\s|$)/i,
@@ -128,6 +177,9 @@ export function inspectValidationLog(id, command, log) {
   const summary = { passed: 0, failed: 0, skipped: 0 };
   let recognized = false;
   for (const line of text.split(/\r?\n/)) {
+    if (/^\s*#\s+(?:todo|cancelled)\s+[1-9]\d*\s*$/i.test(line) || /^\s*(?:not )?ok\b.*#\s+TODO\b/i.test(line)
+      || (/^\s*Tests\s+/.test(line) && /[1-9]\d*\s+(?:todo|pending|cancelled)/i.test(line))
+      || /^\s*[1-9]\d*\s+(?:interrupted|flaky|did not run)\b/i.test(line)) problems.push('存在 TODO、取消或未完整执行的测试');
     const tap = line.match(/^\s*#\s+(pass|fail|skipped)\s+(\d+)\s*$/);
     if (tap) {
       summary[tap[1] === 'pass' ? 'passed' : tap[1] === 'fail' ? 'failed' : 'skipped'] += Number(tap[2]);
@@ -142,6 +194,21 @@ export function inspectValidationLog(id, command, log) {
   }
   if (['check', 'postgres-integration', 'e2e', 'jimeng', 'release-verifier-tests'].includes(id)) {
     if (!recognized || summary.passed < 1 || summary.failed > 0) problems.push('日志没有实际通过用例，存在失败，或整套测试被跳过');
+  }
+  if (['check', 'postgres-integration', 'jimeng', 'release-verifier-tests'].includes(id)) {
+    const parsed = parseTestLog(text, { id, platform });
+    problems.push(...parsed.problems);
+    const skips = parsed.summary.allowedSkips.map(({ file = '', title }) => file + ':' + title);
+    if (new Set(skips).size !== skips.length) problems.push('同一已批准跳过用例重复出现');
+  }
+  if (id === 'e2e') {
+    if (playwrightReport !== undefined) {
+      const parsed = parsePlaywrightReport(playwrightReport, text);
+      problems.push(...parsed.problems);
+      if (['passed', 'failed', 'skipped'].some((key) => summary[key] !== parsed.summary[key])) {
+        problems.push('E2E JSON 逐用例结果与日志汇总不一致');
+      }
+    } else problems.push(...inspectPlaywrightList(text, summary));
   }
   if (id === 'e2e' && /^\[WebServer\]\s+(?:Node\.js v\d|npm (?:error|ERR!)\b|(?:Unhandled|uncaught)\b)/im.test(text)) {
     problems.push('E2E 测试服务异常退出；即使用例汇总通过也不能作为验收证据');
@@ -178,7 +245,16 @@ export async function verifyEvidence(manifest, identity, evidence, root, now = D
       if (!file.isFile() || file.size === 0) throw new Error('日志为空或不是普通文件');
       const content = await readFile(check.logPath);
       if (!/^[0-9a-f]{64}$/i.test(check.logSha256 || '') || sha256(content) !== check.logSha256.toLowerCase()) throw new Error('日志哈希不匹配');
-      const validation = inspectValidationLog(check.id, check.command, content.toString('utf8'));
+      let playwrightReport;
+      if (check.id === 'e2e' && (check.playwrightReportPath !== undefined || check.playwrightReportSha256 !== undefined)) {
+        if (!path.isAbsolute(check.playwrightReportPath || '') || !isOutside(root, path.resolve(check.playwrightReportPath))) throw new Error('E2E JSON 报告必须位于仓库外');
+        const reportInfo = await lstat(check.playwrightReportPath);
+        if (!reportInfo.isFile() || reportInfo.size === 0) throw new Error('E2E JSON 报告为空或不是普通文件');
+        const reportBytes = await readFile(check.playwrightReportPath);
+        if (!/^[0-9a-f]{64}$/i.test(check.playwrightReportSha256 || '') || sha256(reportBytes) !== check.playwrightReportSha256.toLowerCase()) throw new Error('E2E JSON 报告哈希不匹配');
+        playwrightReport = JSON.parse(reportBytes.toString('utf8'));
+      }
+      const validation = inspectValidationLog(check.id, check.command, content.toString('utf8'), { playwrightReport });
       problems.push(...validation.problems);
       summary = validation.summary;
     } catch (error) {
@@ -218,7 +294,38 @@ export function evaluateGate({ staticErrors, evidence, strict, dirty, buildError
   };
 }
 
-export async function runVerification({ root = process.cwd(), evidencePath, strict = false } = {}) {
+export function verifyExpectedCommit(expectedCommit, actualCommit, required = false) {
+  if (expectedCommit === undefined && !required) return [];
+  if (!/^[0-9a-f]{40}$/i.test(expectedCommit || '')) return ['CI 检查必须显式提供有效的 --expected-commit，其他模式提供时也必须是完整 SHA'];
+  return expectedCommit.toLowerCase() === actualCommit ? [] : ['真实 Git HEAD 与 --expected-commit 不匹配，拒绝环境覆盖或旧提交身份'];
+}
+
+export function inspectModeConstraints({ mode = 'local', manifest, branches = [], currentBranch, expectedCommit, commit, dirty }) {
+  if (!['local', 'ci'].includes(mode)) throw new Error('mode 只能为 local 或 ci');
+  const errors = verifyExpectedCommit(expectedCommit, commit, mode === 'ci');
+  if (mode === 'local') errors.push(...compareBranchInventory(manifest, branches, currentBranch));
+  else if (dirty) errors.push('CI 静态检查要求干净且已提交的源码');
+  return errors;
+}
+
+export function evaluateCiGate({ staticErrors, buildErrors = [] }) {
+  const errors = [...staticErrors, ...buildErrors];
+  return {
+    ok: errors.length === 0,
+    errors,
+    staticAudit: errors.length ? 'FAIL' : 'PASS',
+    ciStaticAudit: errors.length ? 'FAIL' : 'PASS',
+    localAudit: 'NOT_APPLICABLE',
+    behaviorEvidence: 'NOT_RUN_BY_THIS_SCRIPT',
+    candidateValidated: false,
+    releaseReady: false,
+    published: false
+  };
+}
+
+export async function runVerification({ root = process.cwd(), evidencePath, strict = false, mode = 'local', expectedCommit } = {}) {
+  if (!['local', 'ci'].includes(mode)) throw new Error('mode 只能为 local 或 ci');
+  if (mode === 'ci' && (strict || evidencePath)) throw new Error('CI 静态模式不接受 --strict 或本机 --evidence；不能冒充本机完整验收');
   root = path.resolve(root);
   const manifest = JSON.parse(await readFile(path.join(root, MANIFEST_PATH), 'utf8'));
   const manifestErrors = validateManifest(manifest);
@@ -227,13 +334,19 @@ export async function runVerification({ root = process.cwd(), evidencePath, stri
   const headTreeHash = git(root, ['rev-parse', 'HEAD^{tree}']);
   const currentBranch = git(root, ['branch', '--show-current']);
   const dirty = Boolean(git(root, ['status', '--porcelain=v1', '--untracked-files=all']));
-  const branches = git(root, ['for-each-ref', '--format=%(refname:short)|%(objectname)', 'refs/heads'])
-    .split(/\r?\n/).filter(Boolean).map((line) => { const [name, head] = line.split('|'); return { name, head }; });
-  const staticErrors = compareBranchInventory(manifest, branches, currentBranch);
-  try {
-    git(root, ['merge-base', '--is-ancestor', manifest.baseline.commit, commit]);
-  } catch {
-    staticErrors.push('候选没有继承用户授权的本机重建基线');
+  const branches = mode === 'local' ? git(root, ['for-each-ref', '--format=%(refname:short)|%(objectname)', 'refs/heads'])
+    .split(/\r?\n/).filter(Boolean).map((line) => { const [name, head] = line.split('|'); return { name, head }; }) : [];
+  const staticErrors = inspectModeConstraints({ mode, manifest, branches, currentBranch, expectedCommit, commit, dirty });
+  if (mode === 'local') {
+    for (const [source, label] of [[manifest.baseline.commit, '用户授权的本机重建基线'], [manifest.sourceCandidate.commit, '已提交阶段 1 完整候选']]) {
+      try { git(root, ['merge-base', '--is-ancestor', source, commit]); }
+      catch { staticErrors.push('候选没有继承' + label); }
+    }
+    try {
+      if (git(root, ['rev-parse', `${manifest.sourceCandidate.commit}^{tree}`]) !== manifest.sourceCandidate.headTreeHash) {
+        staticErrors.push('已提交阶段 1 候选 tree 与台账不一致');
+      }
+    } catch { staticErrors.push('已提交阶段 1 候选 tree 无法读取'); }
   }
   const identity = { commit, headTreeHash, ...await collectContentIdentity(root) };
   const features = await inspectFeatureSources(root, manifest);
@@ -242,11 +355,21 @@ export async function runVerification({ root = process.cwd(), evidencePath, stri
     throw new Error('测试证据 JSON 必须使用仓库外的绝对路径');
   }
   const suppliedEvidence = evidencePath ? JSON.parse(await readFile(evidencePath, 'utf8')) : undefined;
-  const evidence = await verifyEvidence(manifest, identity, suppliedEvidence, root);
+  const evidence = mode === 'local' ? await verifyEvidence(manifest, identity, suppliedEvidence, root) : { status: 'NOT_RUN_BY_THIS_SCRIPT', errors: [], checks: [] };
   let buildInfo;
-  if (strict) {
-    try { buildInfo = JSON.parse(await readFile(path.join(root, 'apps/server/dist/build-info.json'), 'utf8')); }
-    catch { /* evaluateGate reports the missing build without starting anything. */ }
+  let buildPresent = false;
+  const buildErrors = [];
+  if (strict || mode === 'ci') {
+    try {
+      const buildPath = path.join(root, 'apps/server/dist/build-info.json');
+      const info = await lstat(buildPath).catch((error) => { if (error.code === 'ENOENT') return undefined; throw error; });
+      if (info) {
+        buildPresent = true;
+        if (!info.isFile()) throw new Error('构建信息不是普通文件');
+        buildInfo = JSON.parse(await readFile(buildPath, 'utf8'));
+      }
+    } catch { buildErrors.push('构建信息存在但不可读取或格式无效'); }
+    if (strict || buildPresent) buildErrors.push(...verifyBuildIdentity(identity, buildInfo));
   }
   const finalIdentity = {
     commit: git(root, ['rev-parse', 'HEAD']),
@@ -258,20 +381,29 @@ export async function runVerification({ root = process.cwd(), evidencePath, stri
     || dirty !== Boolean(git(root, ['status', '--porcelain=v1', '--untracked-files=all']))) {
     staticErrors.push('候选内容或工作树在检查期间变化；冻结并发修改后重新验证');
   }
-  const gate = evaluateGate({ staticErrors, evidence, strict, dirty, buildErrors: strict ? verifyBuildIdentity(identity, buildInfo) : [] });
+  const localGate = mode === 'local' ? evaluateGate({ staticErrors, evidence, strict, dirty, buildErrors }) : undefined;
+  const gate = mode === 'ci' ? evaluateCiGate({ staticErrors, buildErrors }) : { ...localGate, localAudit: localGate.ok ? 'PASS' : 'FAIL' };
   return {
     schemaVersion: 1,
     candidateId: manifest.candidateId,
-    mode: strict ? 'STRICT_PRE_RELEASE_CHECK' : 'DRAFT_CANDIDATE_CHECK',
+    mode,
+    auditKind: mode === 'ci' ? 'PORTABLE_CI_STATIC_CHECK' : strict ? 'STRICT_PRE_RELEASE_CHECK' : 'DRAFT_CANDIDATE_CHECK',
     checkedAt: new Date().toISOString(),
     currentBranch,
     dirty,
-    auditedBranchCount: manifest.branches.length,
+    auditedBranchCount: mode === 'local' ? manifest.branches.length : 0,
+    declaredBranchCount: manifest.branches.length,
+    expectedCommit: expectedCommit?.toLowerCase(),
+    buildAudit: buildErrors.length ? 'FAIL' : strict || buildPresent ? 'PASS' : mode === 'ci' ? 'NOT_PROVIDED' : 'NOT_CHECKED',
     identity,
     ...gate,
     features,
     checks: evidence.checks,
     notices: [
+      ...(mode === 'ci' ? [
+        '本次只执行可移植 CI 静态检查；本机分支/旧祖先/外部行为证据审计未执行（localAudit=NOT_APPLICABLE）。',
+        'CI 静态通过不等于真实 CI 作业全部通过；真实作业证据由独立 CI gate 汇总，本机候选验收仍须 local --strict。'
+      ] : []),
       '源码锚点只是静态完整性检查，不代表功能行为通过；本脚本不执行测试。',
       '外部测试日志须来自本次真实执行，哈希绑定不能代替人工确认测试隔离和检查内容。',
       '本脚本不提交、不拉取、不推送、不集成、不重启服务、不修改启动入口。',
@@ -280,16 +412,28 @@ export async function runVerification({ root = process.cwd(), evidencePath, stri
   };
 }
 
-async function main() {
-  const args = process.argv.slice(2);
+export function parseVerificationArguments(args) {
   let strict = false;
   let evidencePath;
+  let mode = 'local';
+  let expectedCommit;
   for (let index = 0; index < args.length; index += 1) {
     if (args[index] === '--strict') strict = true;
     else if (args[index] === '--evidence' && args[index + 1]) evidencePath = path.resolve(args[++index]);
-    else throw new Error('用法：node --import tsx scripts/verify-release-completeness.mjs [--evidence <仓库外文件>] [--strict]');
+    else if (args[index] === '--mode' && args[index + 1]) mode = args[++index];
+    else if (args[index] === '--expected-commit' && args[index + 1]) expectedCommit = args[++index];
+    else throw new Error('用法：node --import tsx scripts/verify-release-completeness.mjs [--mode local|ci] [--expected-commit <SHA>] [--evidence <仓库外文件>] [--strict]');
   }
-  const report = await runVerification({ strict, evidencePath });
+  if (!['local', 'ci'].includes(mode)) throw new Error('mode 只能为 local 或 ci');
+  if (mode === 'ci' && (strict || evidencePath)) throw new Error('CI 静态模式不接受 --strict 或本机 --evidence');
+  if ((mode === 'ci' || expectedCommit !== undefined) && !/^[0-9a-f]{40}$/i.test(expectedCommit || '')) {
+    throw new Error('必须显式提供有效的完整 --expected-commit SHA');
+  }
+  return { strict, evidencePath, mode, expectedCommit };
+}
+
+async function main() {
+  const report = await runVerification(parseVerificationArguments(process.argv.slice(2)));
   console.log(JSON.stringify(report, null, 2));
   if (!report.ok) process.exitCode = 1;
 }

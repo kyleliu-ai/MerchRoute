@@ -2,11 +2,13 @@
 
 ## 当前阶段与边界
 
-本次只形成阶段 1 的本机集成候选，不是已验收发布基线，不提交、不推送 GitHub、不创建或合并 PR、不切换正式 4173 服务、不改手动或开机启动入口。
+阶段 1 已形成并提交本机完整候选；当前进行阶段 2 的 GitHub 发布治理、可移植 CI 与候选打包准备。阶段 2 不切换正式 4173 服务、不修改手动或开机启动入口；提交、GitHub 同步及 Draft PR 的实际完成状态须另行报告，CI 检查本身不执行这些操作。
 
 用户授权重建基线为本机提交 `8a52c7760032167d86b26f36b045a849a6b0569f`；独立候选为 `work/merchroute-complete-release-20260903-0951`。该授权允许重建完整候选，但不能反向宣称原基线已包含全部功能。
 
-[功能台账](../config/release-features.json)记录重建前全部 25 个本机分支的确切 HEAD、功能归组、补丁或 tree 等价证据，以及每组应保留的行为检查。原工作区全部保持只读。目录状态、WB 活跃上品重启保护和新项目规则是三组缺口；其他历史功能按当前较新的实现保留，不能把旧分支整树重新合入。
+阶段 1 候选已提交为 `26235db67baa4b99d15952571f152af8c6c65c9d`（C1），对应 tree 为 `188f6431b2587ec3a4ad9a34f315c6a2c5cdb4ec`。阶段 2 当前分支绑定 `work/merchroute-github-publish-20260903-1108`，从 C1 创建。C1 是明确的本机来源身份，不代表阶段 2 后续提交可以复用旧测试身份，也不代表正式服务已经切换。
+
+[功能台账](../config/release-features.json)保留重建前全部 25 个本机分支的原始条目，并追加 C1 分支来源，共 26 项已记录来源；12 项功能条目继续保留。当前发布分支单独由 policy 绑定，不伪造历史 refs。原工作区保持只读。目录状态、WB 活跃上品重启保护和新项目规则原为三组缺口，已随 C1 提交；台账原有 INTEGRATE 分类保留其重建审计含义，不表示要重新整树移植旧分支。
 
 | 功能组 | 对当前基线的处理 |
 | --- | --- |
@@ -27,21 +29,31 @@
 在候选根目录使用固定 Node.js 22.23.1；该脚本复用 TypeScript 源码中的指纹实现，不依赖提前构建出的旧 `dist`：
 
 ```sh
-node --import tsx scripts/verify-release-completeness.mjs
+node --import tsx scripts/verify-release-completeness.mjs --mode local
 node --import tsx --test scripts/verify-release-completeness.test.mjs
-node --import tsx scripts/verify-release-completeness.mjs --evidence <仓库外测试证据JSON绝对路径>
+node --import tsx scripts/verify-release-completeness.mjs --mode local --strict --expected-commit <当前完整SHA> --evidence <仓库外测试证据JSON绝对路径>
+node --import tsx scripts/verify-release-completeness.mjs --mode ci --expected-commit <CI实际检出的完整SHA>
 ```
 
-第一个命令只读核对基线祖先关系、全部审计分支是否漂移、必要源码锚点及候选内容身份。正常阶段 1 输出允许 `dirty: true`，但必须明确：
+默认模式仍为 `local`。第一个命令只读核对原基线及 C1 祖先关系、全部审计分支是否漂移、必要源码锚点及候选内容身份。非 strict 的本机草稿静态审计仍允许 `dirty: true`，但必须明确：
 
 台账中的 `equivalenceEvidence` 是本次已完成的人工只读 Git 审计记录，不代表该脚本重新执行了每个 patch-id 比较。分支 HEAD 核对也不能检测其他 Worktree 的未提交变化；实施任务仍须按仓库外恢复清单回读原工作区状态及受保护文件哈希，不能用此脚本替代并发保护。
 
 - `staticAudit: PASS` 只证明台账和源码锚点检查通过，不等于业务验收。
 - 未提供实际测试证据时，`behaviorEvidence: NOT_PROVIDED`、`candidateValidated: false`。
 - 证据完整且与候选身份完全吻合时，`candidateValidated: true` 表示本机候选验证完成。
-- 阶段 1 无论如何均为 `releaseReady: false`、`published: false`。
+- 非 strict 的本机草稿检查始终为 `releaseReady: false`、`published: false`。
 
-后续只有获得提交与发布阶段授权，才能使用 `--strict`。严格模式额外要求干净已提交候选、全部真实测试证据，以及 `apps/server/dist/build-info.json` 的提交、范围版本和三类指纹一致。严格通过也只是预发布门禁，不会授权或执行提交、同步、PR、服务重启，更不代表已经上线。
+本机 `local --strict` 保留原严格门禁：干净已提交候选、全部 11 类真实外部测试证据，以及 `apps/server/dist/build-info.json` 的提交、范围版本和三类指纹一致。提供 `--expected-commit` 时还须与真实 Git HEAD 一致。严格通过只是预发布门禁，不会授权或执行提交、同步、PR、服务重启，更不代表已经上线。
+
+CI 模式必须显式提供 `--mode ci --expected-commit <完整SHA>`，不能从构建覆盖变量推断预期提交。CI 检查干净源码、完整台账、必要源码锚点、真实 HEAD、tree、三类指纹及独立规则/范围/台账哈希；不要求 GitHub runner 存在本机 26 项来源 refs，也不在浅检出中验证本机旧祖先。缺少本机 refs 不代表这些 refs 已在 CI 审计，更不能为通过 CI 去删除或伪造台账条目。
+
+CI 中若存在 build-info，必须匹配当前真实提交、干净构建、范围和三类指纹；格式错误或旧产物均失败。尚未构建时输出 `buildAudit: NOT_PROVIDED`，不能据此宣称有可发布产物；候选打包及真实 CI 作业汇总由独立 job/gate 验证。CI 不接受本机 `--evidence` 或 `--strict`，不复用旧本机日志。
+
+- `ciStaticAudit: PASS` 只表示可移植静态检查通过，不代表其他 CI 作业已执行或通过。
+- `localAudit: NOT_APPLICABLE` 明确表示本次未执行本机分支和外部行为证据审计。
+- CI 无论静态结果如何，`candidateValidated`、`releaseReady`、`published` 均为 `false`。
+- 本机正式候选验收仍必须回到 `local --strict`，CI 不能替代本机 API、DOM、运行身份及隔离行为验证。
 
 只运行检查命令不会写报告文件；输出为脱敏 JSON。通过任务执行器将输出和测试日志保存到仓库外受限验证目录，不将证据日志、环境文件、凭据或运行数据加入 Git。
 
@@ -108,4 +120,4 @@ E2E 收尾也属于验收：必须先通过测试专属实例握手确认应用�
 - Gitleaks 必须覆盖候选的新增与未提交受控内容，不能只扫描旧提交历史；详细敏感命中不得直接输出到公开报告。
 - 最终交付单独报告开发、静态完整性、行为验证、提交、集成、GitHub 同步和正式上线状态。
 
-本文件和台账都属于阶段 1 候选说明，不初始化已验收发布记录。以后本机审计分支变更或出现新分支，门禁会停止，必须先补充审计并更新台账；不能简单删除未纳入功能条目使门禁变绿。
+本文件和台账记录阶段 1 来源及阶段 2 发布治理，不初始化已验收本机发布记录。以后本机审计分支变更或出现新分支，local 门禁会停止，必须先补充审计并更新台账；不能删除功能或历史条目使门禁变绿。源码提交、CI 作业、候选打包、GitHub Draft PR 与正式 4173 上线始终分别报告。

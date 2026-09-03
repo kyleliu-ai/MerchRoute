@@ -1,16 +1,22 @@
 {
   "schemaVersion": 1,
-  "candidateId": "merchroute-complete-release-20260903-0951",
+  "candidateId": "merchroute-github-publish-20260903-1108",
   "baseline": {
     "commit": "8a52c7760032167d86b26f36b045a849a6b0569f",
     "status": "USER_AUTHORIZED_RECONSTRUCTION_NOT_ACCEPTED_RELEASE"
   },
   "auditedAt": "2026-09-03",
+  "sourceCandidate": {
+    "branch": "work/merchroute-complete-release-20260903-0951",
+    "commit": "26235db67baa4b99d15952571f152af8c6c65c9d",
+    "headTreeHash": "188f6431b2587ec3a4ad9a34f315c6a2c5cdb4ec",
+    "status": "COMMITTED_LOCAL_CANDIDATE_NOT_PUBLISHED"
+  },
   "policy": {
     "sourceAuthority": "LOCAL",
-    "defaultMode": "DRAFT_STATIC_AUDIT",
-    "publication": "NOT_AUTHORIZED",
-    "currentBranch": "work/merchroute-complete-release-20260903-0951",
+    "defaultMode": "local",
+    "publication": "GITHUB_DRAFT_PR_ONLY_NOT_LOCAL_PUBLICATION",
+    "currentBranch": "work/merchroute-github-publish-20260903-1108",
     "remoteReadRequired": false
   },
   "branches": [
@@ -163,6 +169,12 @@
       "head": "0f36cc24d08da174f5a0337606629b099cd1f466",
       "featureId": "wb-restart-protection",
       "relation": "PATCH_EQUIVALENT_OF_MISSING"
+    },
+    {
+      "name": "work/merchroute-complete-release-20260903-0951",
+      "head": "26235db67baa4b99d15952571f152af8c6c65c9d",
+      "featureId": "core-deployment",
+      "relation": "COMMITTED_COMPLETE_CANDIDATE"
     }
   ],
   "equivalenceEvidence": [
