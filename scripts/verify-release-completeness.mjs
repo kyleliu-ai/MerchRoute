@@ -14,7 +14,8 @@ export const MANIFEST_PATH = 'config/release-features.json';
 export const REQUIRED_FEATURE_IDS = [
   'core-deployment', 'local-import-and-name-validation', 'purchase-product-query', 'purchase-url-query',
   'about-fingerprints', 'github-readonly-access', 'github-token-self-service', 'local-import-directory-status',
-  'review-open-product-folder', 'wb-restart-protection', 'junction-retirement', 'project-release-guardrails'
+  'review-open-product-folder', 'wb-restart-protection', 'junction-retirement', 'project-release-guardrails',
+  'review-delivery-reliability'
 ];
 export const REQUIRED_LOCAL_CHECK_IDS = [
   'check', 'postgres-integration', 'e2e', 'jimeng', 'deployment-verify', 'gitleaks', 'diff-check',
