@@ -49,6 +49,7 @@ export type LocalImportDirectoryEntry = {
   childDirectoryCount: number;
   createdAt: string;
   modifiedAt: string;
+  importStatus?: 'IMPORTED' | 'NEW';
 };
 type LocalImportDirectorySortMode = 'platform-root' | 'product-media' | 'name';
 type PreviewSnapshot = {
@@ -111,6 +112,21 @@ export class LocalImportService {
     }
     const depth = normalized.split('/').filter(Boolean).length;
     const sortMode: LocalImportDirectorySortMode = depth === 0 ? 'platform-root' : depth === 1 ? 'product-media' : 'name';
+    if (sortMode === 'product-media' && directories.length) {
+      const registrations = await this.purchases.listLocalImportSourceRegistrations(
+        directories.map((entry) => normalizePathKey(entry.relativePath))
+      );
+      const importedPathKeys = new Set(registrations
+        // Historical snapshots keep their original root. Apply only the same
+        // controlled alias mapping used by sourceConfiguration and retries;
+        // never resolve arbitrary filesystem links to establish identity.
+        .filter((registration) => typeof registration.sourceRoot === 'string'
+          && isSameLocalImportSourceRoot(root, this.canonicalizePath(registration.sourceRoot), process.platform))
+        .map((registration) => registration.normalizedPathKey));
+      for (const entry of directories) {
+        entry.importStatus = importedPathKeys.has(normalizePathKey(entry.relativePath)) ? 'IMPORTED' : 'NEW';
+      }
+    }
     return { path: normalized, configHash, directories: sortLocalImportDirectories(directories, sortMode) };
   }
 
@@ -316,6 +332,23 @@ export function sortLocalImportDirectories(directories: LocalImportDirectoryEntr
 
 export function isAbsolutePathForPlatform(value: string, platform: NodeJS.Platform): boolean {
   return platform === 'win32' ? path.win32.isAbsolute(value) : path.posix.isAbsolute(value);
+}
+
+export function localImportSourceRootKey(value: unknown, platform: NodeJS.Platform): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  if (!trimmed || !isAbsolutePathForPlatform(trimmed, platform)) return undefined;
+  const pathImplementation = platform === 'win32' ? path.win32 : path.posix;
+  let normalized = pathImplementation.normalize(trimmed);
+  const parsedRoot = pathImplementation.parse(normalized).root;
+  while (normalized.length > parsedRoot.length && normalized.endsWith(pathImplementation.sep)) normalized = normalized.slice(0, -1);
+  return platform === 'win32' ? normalized.toLocaleLowerCase('en-US') : normalized;
+}
+
+export function isSameLocalImportSourceRoot(currentRoot: unknown, recordedRoot: unknown, platform: NodeJS.Platform): boolean {
+  const currentKey = localImportSourceRootKey(currentRoot, platform);
+  const recordedKey = localImportSourceRootKey(recordedRoot, platform);
+  return Boolean(currentKey && recordedKey && currentKey === recordedKey);
 }
 
 export async function assertStrictDirectory(root: string, writable: boolean, label: string): Promise<void> {

@@ -10,9 +10,11 @@ import { ShippingRepository } from '../../apps/server/src/repositories/shipping.
 import { PricingRepository } from '../../apps/server/src/repositories/pricing.js';
 import { WbRepository } from '../../apps/server/src/repositories/wb.js';
 import { OzonRepository } from '../../apps/server/src/repositories/ozon.js';
+import { assertE2eSetupMayReplaceRoot } from '../../scripts/e2e-lifecycle.mjs';
 
 export default async function globalSetup(): Promise<void> {
   const root = path.resolve('.e2e-data');
+  await assertE2eSetupMayReplaceRoot({ root });
   await rm(root, { recursive: true, force: true });
   dotenv.config({ path: path.resolve('.env') });
   if (!process.env.DATABASE_URL) throw new Error('完整 E2E 需要 PostgreSQL DATABASE_URL，以验证产品身份严格模式');
@@ -110,6 +112,7 @@ export default async function globalSetup(): Promise<void> {
   await writeFile(path.join(root, 'database-schema.txt'), databaseSchema, 'utf8');
   const appData = path.join(root, 'app');
   const roots = path.join(root, 'roots');
+  const ozonMediaRoot = path.join(roots, 'ozon-shared-media');
   const config = createDefaultConfig('other');
   config.stages.unshift({
     id: 'E000', alias: '本地导入', groupId: 'downloads', displayName: '本地导入产品媒体信息', workflowName: 'E000-本地导入',
@@ -124,9 +127,11 @@ export default async function globalSetup(): Promise<void> {
     if (stage.candidateRoot) stage.candidateRoot = path.join(base, 'candidate');
     if (stage.approvedArchiveRoot) stage.approvedArchiveRoot = path.join(base, 'archive');
     if (stage.outputRoot) stage.outputRoot = path.join(base, 'output');
+    if (stage.ozonOutputRoot) stage.ozonOutputRoot = path.join(ozonMediaRoot, 'inbox', '<SKU>', 'variants');
     stage.targets.forEach((target) => { target.targetQueueRoot = path.join(roots, target.targetStageId, 'input'); });
   }
   await mkdir(appData, { recursive: true });
+  await mkdir(ozonMediaRoot, { recursive: true });
   const directories = config.stages.flatMap((stage) => [stage.inputQueueRoot, stage.candidateRoot, stage.approvedArchiveRoot, stage.outputRoot, ...stage.targets.map((target) => target.targetQueueRoot)]).filter((item): item is string => Boolean(item));
   await Promise.all([...new Set(directories)].map((directory) => mkdir(directory, { recursive: true })));
   const localSource = config.stages.find((stage) => stage.id === 'E000')!.inputQueueRoot!;

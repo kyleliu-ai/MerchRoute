@@ -81,6 +81,10 @@ describe.runIf(Boolean(connectionString))('local import PostgreSQL integration',
     expect(first.import).toMatchObject({ status: 'COPYING', sku: '0000001', sourcePlatform: 'PDD', importWorkflowLabel: '本地导入-PDD' });
     expect(first.import.sources).toHaveLength(2);
     expect(replay).toMatchObject({ created: false, import: { id: first.import.id, sku: '0000001' } });
+    expect(await purchases.listLocalImportSourceRegistrations(['pdd/color-1', 'pdd/color-2', 'pdd/missing'])).toEqual([
+      { normalizedPathKey: 'pdd/color-1', sourceRoot: '/tmp/source', status: 'COPYING' },
+      { normalizedPathKey: 'pdd/color-2', sourceRoot: '/tmp/source', status: 'COPYING' }
+    ]);
     const procurement = await isolated.query('SELECT download_workflow_code,provider_url FROM procurement_versions WHERE sku=$1', ['0000001']);
     expect(procurement.rows[0]).toEqual({ download_workflow_code: null, provider_url: 'https://example.com/local/red' });
     const urls = await isolated.query('SELECT provider_url_key,sku FROM purchase_provider_urls ORDER BY provider_url_key');
@@ -96,19 +100,31 @@ describe.runIf(Boolean(connectionString))('local import PostgreSQL integration',
 
   it('skips an entire conflicting import without creating a product or media source', async () => {
     const before = await isolated.query<{ count: string }>('SELECT COUNT(*)::text AS count FROM products');
-    const conflict = await purchases.reserveLocalImport(input('local-conflict', ['https://example.com/local/red', 'https://example.com/local/green']));
+    const conflictingInput = input('local-conflict', ['https://example.com/local/red', 'https://example.com/local/green']);
+    conflictingInput.sources = conflictingInput.sources.map((source, index) => ({
+      ...source, relativePath: `PDD/skipped-${index + 1}`, normalizedPathKey: `pdd/skipped-${index + 1}`
+    }));
+    const conflict = await purchases.reserveLocalImport(conflictingInput);
     const after = await isolated.query<{ count: string }>('SELECT COUNT(*)::text AS count FROM products');
     expect(conflict.import).toMatchObject({ status: 'SKIPPED_DUPLICATE', duplicateSku: '0000001', sku: undefined, sources: [] });
     expect(after.rows[0]!.count).toBe(before.rows[0]!.count);
+    expect(await purchases.listLocalImportSourceRegistrations(['pdd/skipped-1', 'pdd/skipped-2'])).toEqual([]);
+    expect(await purchases.listLocalImportSourceRegistrations([])).toEqual([]);
   });
 
   it('keeps the SKU when copy fails and retries only the media state', async () => {
     const failed = await purchases.failLocalImport((await purchases.reserveLocalImport(input('local-retry', ['https://example.com/local/retry']))).import.id, 'COPY_FAILED', 'disk busy');
     expect(failed).toMatchObject({ status: 'COPY_FAILED_RETRYABLE', sku: '0000002', retryCount: 1 });
+    expect(await purchases.listLocalImportSourceRegistrations(['pdd/color-1'])).toEqual(expect.arrayContaining([
+      expect.objectContaining({ normalizedPathKey: 'pdd/color-1', sourceRoot: '/tmp/source', status: 'COPY_FAILED_RETRYABLE' })
+    ]));
     const copying = await purchases.markLocalImportCopying(failed.id);
     const completed = await purchases.completeLocalImport(failed.id, '/tmp/candidate/0000002-local');
     expect(copying).toMatchObject({ status: 'COPYING', sku: '0000002' });
     expect(completed).toMatchObject({ status: 'IMPORTED', sku: '0000002', retryCount: 1 });
+    expect(await purchases.listLocalImportSourceRegistrations(['pdd/color-1'])).toEqual(expect.arrayContaining([
+      expect.objectContaining({ normalizedPathKey: 'pdd/color-1', sourceRoot: '/tmp/source', status: 'IMPORTED' })
+    ]));
     const products = await isolated.query<{ count: string }>('SELECT COUNT(*)::text AS count FROM products');
     expect(products.rows[0]!.count).toBe('2');
   });
