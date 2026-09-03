@@ -67,7 +67,7 @@ jobs:
         run: node --import tsx scripts/run-ci-check.mjs --id deployment-${{ matrix.label }}-verify --record-dir "$RUNNER_TEMP/ci-records" --expected-commit "$MERCHROUTE_CI_EXPECTED_COMMIT" -- npm run deployment:verify
       - name: Upload sanitized check records only
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ci-evidence-deployment-${{ matrix.label }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/ci-records/*.json
@@ -100,7 +100,7 @@ jobs:
         run: node --import tsx scripts/run-ci-check.mjs --id jimeng-ping --record-dir "$RUNNER_TEMP/ci-records" --expected-commit "$MERCHROUTE_CI_EXPECTED_COMMIT" -- node scripts/ci-jimeng-ping.mjs
       - name: Upload sanitized check records only
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ci-evidence-jimeng-${{ github.run_attempt }}
           path: ${{ runner.temp }}/ci-records/*.json
@@ -153,7 +153,7 @@ jobs:
         run: node --import tsx scripts/run-ci-check.mjs --id dependency-audit --record-dir "$RUNNER_TEMP/ci-records" --expected-commit "$MERCHROUTE_CI_EXPECTED_COMMIT" -- npm audit --omit=dev --audit-level=moderate
       - name: Upload sanitized check records only
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ci-evidence-check-${{ github.run_attempt }}
           path: ${{ runner.temp }}/ci-records/*.json
@@ -204,7 +204,7 @@ jobs:
         run: node --import tsx scripts/run-ci-check.mjs --id postgres-integration --record-dir "$RUNNER_TEMP/ci-records" --expected-commit "$MERCHROUTE_CI_EXPECTED_COMMIT" -- node node_modules/vitest/vitest.mjs run .integration.test.ts --root apps/server --maxWorkers=2 --reporter=verbose
       - name: Upload sanitized check records only
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ci-evidence-postgres-${{ github.run_attempt }}
           path: ${{ runner.temp }}/ci-records/*.json
@@ -257,7 +257,7 @@ jobs:
         run: node --import tsx scripts/run-ci-check.mjs --id e2e --record-dir "$RUNNER_TEMP/ci-records" --expected-commit "$MERCHROUTE_CI_EXPECTED_COMMIT" -- npm run test:e2e -- --reporter=list,json
       - name: Upload sanitized check records only
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ci-evidence-e2e-${{ github.run_attempt }}
           path: ${{ runner.temp }}/ci-records/*.json
@@ -304,7 +304,7 @@ jobs:
         run: node --import tsx scripts/run-ci-check.mjs --id gitleaks-history --record-dir "$RUNNER_TEMP/ci-records" --expected-commit "$MERCHROUTE_CI_EXPECTED_COMMIT" -- gitleaks git . --log-opts=--all --redact=100 --no-banner --no-color
       - name: Upload sanitized check records only
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ci-evidence-source-${{ github.run_attempt }}
           path: ${{ runner.temp }}/ci-records/*.json
@@ -335,7 +335,7 @@ jobs:
         run: node --import tsx scripts/run-ci-check.mjs --id retirement-safety --record-dir "$RUNNER_TEMP/ci-records" --expected-commit "$MERCHROUTE_CI_EXPECTED_COMMIT" -- pwsh -NoProfile -File scripts/test-retire-n8n-global-junction-safety.ps1
       - name: Upload sanitized check records only
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ci-evidence-windows-safety-${{ github.run_attempt }}
           path: ${{ runner.temp }}/ci-records/*.json
@@ -368,7 +368,7 @@ jobs:
       - name: Create verified candidate packages (not a Release)
         run: node --import tsx scripts/run-ci-check.mjs --id candidate-package --record-dir "$RUNNER_TEMP/ci-records" --expected-commit "$MERCHROUTE_CI_EXPECTED_COMMIT" -- node --import tsx scripts/package-release-candidate.mjs --output "$RUNNER_TEMP/candidate-package"
       - name: Upload source and prebuilt candidate packages only
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: merchroute-candidate-${{ env.MERCHROUTE_CI_EXPECTED_COMMIT }}-${{ github.run_attempt }}
           path: |
@@ -379,7 +379,7 @@ jobs:
           retention-days: 14
       - name: Upload sanitized check records only
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ci-evidence-package-${{ github.run_attempt }}
           path: ${{ runner.temp }}/ci-records/*.json
@@ -424,7 +424,7 @@ jobs:
         run: node --import tsx scripts/verify-ci-gate.mjs --expected-commit "$MERCHROUTE_CI_EXPECTED_COMMIT" --records "$RUNNER_TEMP/downloaded-ci-records" --package-manifest "$RUNNER_TEMP/downloaded-candidate-package/candidate-package-manifest.json" --output "$RUNNER_TEMP/merchroute-ci-gate.json"
       - name: Upload sanitized final gate report
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: merchroute-release-gate-${{ github.run_attempt }}
           path: ${{ runner.temp }}/merchroute-ci-gate.json
