@@ -38,7 +38,7 @@ async function fixture(fault?: (next: any, root: string) => Promise<void>) {
   });
   return { root, source, queue, archive, store, scanner, service: make(store), restart: async () => { const next = new StateStore(appData); await next.initialize(); return { store: next, service: make(next) }; } };
 }
-describe.skipIf(process.env.MERCHROUTE_REVIEW_BENCHMARK !== '1')('review delivery performance envelope', () => {
+describe('review delivery performance envelope', () => {
   it.each([1, 10])('measures acceptance and 22-file completion at %sx history scale', async (scale) => {
     const f = await fixture();
     const task = await f.scanner.getTask();
@@ -80,8 +80,13 @@ describe.skipIf(process.env.MERCHROUTE_REVIEW_BENCHMARK !== '1')('review deliver
     await operations.stop();
     const p95 = (values: number[]) => [...values].sort((a, b) => a - b)[Math.ceil(values.length * 0.95) - 1]!;
     console.log('DELIVERY_BENCHMARK ' + JSON.stringify({ scale, samples, databaseBytes, files: 22, mediaBytes: 22 * 302180, acceptedP95Ms: Math.round(p95(acceptance)), totalP95Ms: Math.round(p95(completion)), maxDurableWrites: Math.max(...writes) }));
-    expect(p95(acceptance)).toBeLessThan(scale === 1 ? 1000 : 2000);
-    expect(p95(completion)).toBeLessThan(scale === 1 ? 5000 : 8000);
+    // Shared CI hardware has no stable latency budget. Always execute both
+    // real-history copy/write-count regressions; enforce latency only in the
+    // explicitly requested, isolated performance run.
+    if (process.env.MERCHROUTE_REVIEW_BENCHMARK === '1') {
+      expect(p95(acceptance)).toBeLessThan(scale === 1 ? 1000 : 2000);
+      expect(p95(completion)).toBeLessThan(scale === 1 ? 5000 : 8000);
+    }
     expect(Math.max(...writes)).toBeLessThanOrEqual(14);
 
   }, 300_000);
