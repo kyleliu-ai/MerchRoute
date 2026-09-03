@@ -272,7 +272,11 @@ test('coalesces media index event bursts and refreshes once after open, reconnec
       onerror = null;
       constructor(public readonly url: string) {
         super();
-        (window as unknown as { __mediaIndexSource: FakeEventSource }).__mediaIndexSource = this;
+        // Review-operation progress has its own SSE connection. Dispatch this
+        // fixture's media events only to the media-index stream.
+        if (new URL(url, window.location.href).pathname === '/api/v1/media-index/events') {
+          (window as unknown as { __mediaIndexSource: FakeEventSource }).__mediaIndexSource = this;
+        }
       }
       close() { this.readyState = FakeEventSource.CLOSED; }
     }

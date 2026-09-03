@@ -434,6 +434,7 @@ export type ReviewStatus =
   | 'FAILED';
 
 export type ReviewRecord = {
+  version?: number;
   taskId: string;
   stageId: string;
   sourceFolder: string;
@@ -453,6 +454,7 @@ export type ReviewRecord = {
 };
 
 export type PendingSubmission = {
+  version?: number;
   id: string;
   taskId: string;
   sourceStageId: string;
@@ -546,12 +548,73 @@ export type AppEvent = {
 };
 
 export type AppDatabase = {
-  schemaVersion: '1.0';
+  schemaVersion: '1.0' | '1.1';
   reviews: ReviewRecord[];
   pendingSubmissions: PendingSubmission[];
   submissionHistory: SubmissionRecord[];
   submissionBatches: SubmissionBatchRecord[];
   appEvents: AppEvent[];
+  reviewOperations?: ReviewOperation[];
+  deliveryCheckpoints?: DeliveryCheckpoint[];
+  deliveryOutbox?: DeliveryOutboxEntry[];
+  reviewReplay?: Record<string, { cursor?: string; scanAfter?: string; resolved: string[]; unresolved?: Record<string, { attempts: number; nextAttemptAt: string }> }>;
+};
+
+export type ReviewOperationStatus = 'QUEUED' | 'RUNNING' | 'RETRY_WAIT' | 'NEEDS_ATTENTION' | 'SUCCEEDED' | 'PARTIAL_SUCCESS' | 'FAILED';
+export type ReviewOperation = {
+  operationId: string;
+  kind: 'APPROVE' | 'BATCH' | 'RETRY';
+  requestKey: string; requestAliases?: string[];
+  requestHash: string;
+  subjectKeys: string[];
+  input: Record<string, unknown>;
+  status: ReviewOperationStatus;
+  createdAt: string;
+  updatedAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  attempt: number;
+  nextAttemptAt?: string;
+  result?: unknown;
+  error?: { code: string; message: string; statusCode?: number; details?: unknown };
+};
+
+export type ReviewOperationProgress = {
+  operationId: string;
+  step: string;
+  completedFiles?: number;
+  totalFiles?: number;
+  copiedBytes?: number;
+  totalBytes?: number;
+  updatedAt: string;
+};
+
+export type DeliveryCheckpoint = {
+  submissionId: string;
+  operationId?: string;
+  pendingSubmissionId: string;
+  taskId: string;
+  phase: 'PREPARING' | 'VERIFIED' | 'COMMIT_INTENT' | 'TARGET_COMMITTED' | 'COMPLETE' | 'NEEDS_ATTENTION';
+  manifestPath?: string; manifestAssets?: Array<Record<string, unknown>>;
+  targetTemp: string;
+  targetFinal: string;
+  archiveTemp?: string;
+  archiveFinal?: string;
+  revision: number;
+  record: SubmissionRecord;
+  files: Array<{ relativePath: string; sizeBytes: number; sha256: string }>;
+  updatedAt: string;
+};
+
+export type DeliveryOutboxEntry = {
+  id: string;
+  platform: 'WB' | 'OZON';
+  submissionId: string;
+  status: 'PENDING' | 'SENT';
+  attempts: number;
+  nextAttemptAt?: string;
+  createdAt: string;
+  lastError?: string;
 };
 
 export type ImageItem = {
@@ -601,6 +664,7 @@ export type ProductIdentity = {
 };
 
 export type TaskDetail = ProductTask & {
+  reviewVersion?: number;
   tree: FolderTreeNode[];
   images: ImageItem[];
   selectedRelativePaths: string[];

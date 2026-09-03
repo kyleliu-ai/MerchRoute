@@ -46,9 +46,9 @@ async function tempDirectory(t, label) {
   return root;
 }
 
-test('原 25 个分支和 12 项功能完整保留，另追加 C1、发布及 CI 修复来源', () => {
+test('原 29 个来源及 12 项功能完整保留，追加优化基线与审核投递可靠性', () => {
   assert.deepEqual(validateManifest(manifest), []);
-  assert.equal(manifest.branches.length, 29);
+  assert.equal(manifest.branches.length, 30);
   assert.equal(digest(JSON.stringify(manifest.branches.slice(0, 25))), '7fa2eea22e55675c5cdf373683a07ebe15b7eb2c110987708574f7c74cf835bf');
   assert.deepEqual(manifest.branches[25], {
     name: 'work/merchroute-complete-release-20260903-0951', head: '26235db67baa4b99d15952571f152af8c6c65c9d',
@@ -58,7 +58,7 @@ test('原 25 个分支和 12 项功能完整保留，另追加 C1、发布及 CI
   assert.equal(manifest.sourceCandidate.headTreeHash, '188f6431b2587ec3a4ad9a34f315c6a2c5cdb4ec');
   assert.equal(manifest.policy.currentBranch, undefined);
   assert.equal(manifest.policy.candidateBinding, 'EXPLICIT_EXPECTED_COMMIT');
-  assert.deepEqual(manifest.branches.slice(26).map(({ name, head }) => [name, head]), [
+  assert.deepEqual(manifest.branches.slice(26, 29).map(({ name, head }) => [name, head]), [
     ['work/merchroute-github-publish-20260903-1108', 'cbcec116aa57e13c3c212c45e112f12bb0649ba1'],
     ['work/pr23-ci-fix-20260903-1336', '4315999b0c23f4651412b597bfbdc1455d85c212'],
     ['work/pr23-ci-publish-20260903-1336', 'e8c357247173a912fb588d92ce3d30e11ed09e91']
@@ -66,8 +66,10 @@ test('原 25 个分支和 12 项功能完整保留，另追加 C1、发布及 CI
   assert.equal(manifest.integrationParent.commit, manifest.branches[27].head);
   assert.equal(manifest.integrationParent.headTreeHash, '22ecc597f1230bcc280d63b032e06b4c72bfee23');
   assert.deepEqual(manifest.features.filter((feature) => feature.action === 'INTEGRATE').map((feature) => feature.id).sort(),
-    ['local-import-directory-status', 'project-release-guardrails', 'wb-restart-protection']);
-  assert.equal(manifest.features.length, 12);
+    ['local-import-directory-status', 'project-release-guardrails', 'review-delivery-reliability', 'wb-restart-protection']);
+  assert.equal(manifest.features.length, 13);
+  assert.equal(digest(JSON.stringify(manifest.branches.slice(0, 29))), "b85410e26bdba57eb6adc9760f42c64e84ddee52b0e5d2f308fb9bbd8df70870");
+  assert.deepEqual(manifest.branches[29], { name: 'work/release-acceptance-gates-20260903-1432', head: '8568914f30a9d639f7df92590808d887f4f0809e', featureId: 'core-deployment', relation: 'USER_CONFIRMED_LOCAL_BASELINE' });
   const changed = structuredClone(manifest);
   changed.branches[0].featureId = 'unknown';
   assert.match(validateManifest(changed).join(' '), /未关联有效功能/);
@@ -75,7 +77,7 @@ test('原 25 个分支和 12 项功能完整保留，另追加 C1、发布及 CI
   assert.match(validateManifest(changed).join(' '), /仓库内相对路径/);
 });
 
-test('两种模式共用不可删减的 12 项关键功能与本机 11 类检查契约', () => {
+test('两种模式共用不可删减的 13 项关键功能与本机 11 类检查契约', () => {
   assert.deepEqual(manifest.features.map((feature) => feature.id), REQUIRED_FEATURE_IDS);
   assert.deepEqual(manifest.requiredChecks.map((check) => check.id), REQUIRED_LOCAL_CHECK_IDS);
   for (const id of REQUIRED_FEATURE_IDS) {

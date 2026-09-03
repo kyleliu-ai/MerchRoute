@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { copyFile, cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { copyFile, cp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import pLimit from 'p-limit';
 import type { FastifyBaseLogger } from 'fastify';
 import {
@@ -11,6 +11,7 @@ import {
   type PendingSubmission,
   type SubmissionBatchRecord,
   type SubmissionRecord,
+  type DeliveryCheckpoint,
   type StageConfig,
   type TaskDetail,
   type TargetConfig
@@ -19,6 +20,9 @@ import type { ConfigService } from '../../config/service.js';
 import type { StateStore } from '../../repositories/store.js';
 import type { ScannerService } from '../scanner/index.js';
 import type { ProductIdentityService } from '../product-identity/index.js';
+import { reviewOperationContext } from '../../utils/review-operation-context.js';
+import { deliveryIoLimit, copyVerified, treeReceipts, verifyTree, syncDirectory, syncFile, withDeliveryNamespace } from '../../utils/delivery-files.js';
+import { stableHash, type ReviewOperationService } from '../review-operations.js';
 import { atomicRenameWithRetry } from '../../utils/atomic-rename.js';
 
 type SubmissionResult = {
@@ -33,20 +37,24 @@ const excludedMetadata = new Set(['_READY.json', 'selection-manifest.json', 'han
 
 export class SubmissionService {
   private locks = new Set<string>();
+  private progress = new Map<string, Partial<BatchItemProgress>>();
+  private namespaceTails = new Map<string, Promise<unknown>>();
   constructor(
     private readonly config: ConfigService,
     private readonly store: StateStore,
     private readonly scanner: ScannerService,
     private readonly productIdentity: ProductIdentityService,
-    private readonly logger: FastifyBaseLogger
+    private readonly logger: FastifyBaseLogger,
+    private readonly operations?: ReviewOperationService
   ) {}
 
   async runBatch(batchId: string, pendingIds: string[], conflictPolicy: 'skip' | 'new-revision'): Promise<{ batchId: string; results: SubmissionResult[] }> {
     const uniqueIds = [...new Set(pendingIds)];
     if (!uniqueIds.length) throw new AppError('CONFIG_INVALID', '至少选择一个待投递任务');
-    const snapshot = this.store.read();
+    const snapshot = { pendingSubmissions: this.store.section('pendingSubmissions') };
     for (const id of uniqueIds) {
       const pending = snapshot.pendingSubmissions.find((item) => item.id === id);
+      if (!pending && this.store.select('deliveryCheckpoints', (rows) => rows?.some((row) => row.pendingSubmissionId === id && row.phase === 'COMPLETE'))) continue;
       if (!pending) throw new AppError('CONFIG_INVALID', '待投递任务不存在', { id }, 404);
       this.requirePendingStagesEnabled(pending);
     }
@@ -59,93 +67,95 @@ export class SubmissionService {
       createdAt: now,
       items: uniqueIds.map((id) => ({ pendingSubmissionId: id, status: 'WAITING' }))
     };
-    await this.store.update((db) => {
-      if (db.submissionBatches.some((item) => item.batchId === batchId)) throw new AppError('TASK_LOCKED', '批次编号已存在', { batchId }, 409);
-      db.submissionBatches.unshift(batch);
-      db.submissionBatches = db.submissionBatches.slice(0, 100);
+    await this.store.updateSections(['submissionBatches', 'pendingSubmissions'], (db) => {
+      if (!db.submissionBatches.some((item) => item.batchId === batchId)) db.submissionBatches.unshift(batch);
+      const active = db.submissionBatches.filter((item) => item.status === 'RUNNING');
+      db.submissionBatches = [...active, ...db.submissionBatches.filter((item) => item.status !== 'RUNNING').slice(0, 100)];
       for (const pending of db.pendingSubmissions.filter((item) => uniqueIds.includes(item.id))) pending.conflictPolicy = conflictPolicy;
     });
 
     const workGroups = new Map<string, string[]>();
     for (const id of uniqueIds) {
       const pending = snapshot.pendingSubmissions.find((item) => item.id === id)!;
-      const key = `${pending.taskId}:${pending.targetStageId}`;
+      const key = pending ? `${pending.taskId}:${pending.targetStageId}` : id;
       workGroups.set(key, [...(workGroups.get(key) || []), id]);
     }
     const limit = pLimit(this.config.get().submissionConcurrency);
-    const groupedResults = await Promise.all([...workGroups.values()].map((ids) => limit(async () => {
+    const groupOutcomes = await Promise.allSettled([...workGroups.values()].map((ids) => limit(async () => {
       const groupResults: SubmissionResult[] = [];
       // Variants from one review share the destination-name namespace. Queue them
       // so the existing revision policy can allocate the next folder safely.
-      for (const id of ids) groupResults.push(await this.submitOne(batchId, id));
+      for (const id of ids) {
+        const pending = this.store.getPending(id);
+        const stage = this.config.get().stages.find((item) => item.id === pending?.sourceStageId);
+        const target = stage?.targets.find((item) => item.targetStageId === pending?.targetStageId);
+        const sourceName = pending ? this.store.getReview(pending.taskId)?.sourceFolderName : undefined;
+        const namespace = target && sourceName ? path.join(path.resolve(target.targetQueueRoot), target.folderNameTemplate.replaceAll('{sourceName}', sourceName)).toLocaleLowerCase('en-US') : target ? path.resolve(target.targetQueueRoot).toLocaleLowerCase('en-US') : id;
+        const previous = this.namespaceTails.get(namespace) || Promise.resolve();
+        const run = previous.catch(() => undefined).then(() => deliveryIoLimit(() => this.submitOne(batchId, id)));
+        this.namespaceTails.set(namespace, run);
+        try { groupResults.push(await run); } finally { if (this.namespaceTails.get(namespace) === run) this.namespaceTails.delete(namespace); }
+      }
       return groupResults;
     })));
+    const failedGroup = groupOutcomes.find((outcome) => outcome.status === 'rejected');
+    if (failedGroup?.status === 'rejected') throw failedGroup.reason;
+    const groupedResults = groupOutcomes.flatMap((outcome) => outcome.status === 'fulfilled' ? outcome.value : []);
     const resultsByPendingId = new Map(groupedResults.flat().map((result) => [result.pendingSubmissionId, result]));
     const results = uniqueIds.map((id) => resultsByPendingId.get(id)!);
-    await this.store.update((db) => {
+    await this.store.updateSections(['submissionBatches'], (db) => {
       const current = db.submissionBatches.find((item) => item.batchId === batchId);
       if (current) {
         current.status = 'COMPLETED';
         current.completed = current.total;
         current.completedAt = new Date().toISOString();
+        current.items = results.map((result) => ({ ...result }));
       }
     });
     return { batchId, results };
   }
 
   async retrySubmission(submissionId: string): Promise<unknown> {
-    const snapshot = this.store.read();
-    const history = snapshot.submissionHistory.find((item) => item.submissionId === submissionId);
+    const history = this.store.getSubmission(submissionId);
     if (!history) throw new AppError('CONFIG_INVALID', '投递记录不存在', { submissionId }, 404);
-    const pending = snapshot.pendingSubmissions.find((item) => item.id === history.pendingSubmissionId);
+    if (history.status === 'SUCCESS') return history;
+    const checkpoint = this.store.select('deliveryCheckpoints', (rows) => rows?.find((row) => row.submissionId === submissionId));
+    if (!checkpoint && history.targetFolder) throw new AppError('DELIVERY_OUTCOME_UNKNOWN', '旧记录缺少交付检查点，请核对目标及归档；不会重新入队', { submissionId }, 409);
+    if (checkpoint && ['TARGET_COMMITTED', 'COMPLETE'].includes(checkpoint.phase)) {
+      const result = await this.reconcile(checkpoint);
+      return { ...result, archiveFolder: this.store.getSubmission(submissionId)?.archiveFolder, retriedPart: 'archive' };
+    }
+    const pending = this.store.getPending(history.pendingSubmissionId);
     if (!pending) throw new AppError('CONFIG_INVALID', '该记录没有可重试的待投递项');
-    this.requirePendingStagesEnabled(pending);
-    if (history.status !== 'PARTIAL_SUCCESS' || !history.targetFolder || history.archiveFolder) {
-      return this.runBatch(`BATCH-RETRY-${randomUUID()}`, [pending.id], pending.conflictPolicy);
-    }
-    const task = await this.scanner.getTask(pending.taskId);
-    const compatibleTaskIds = [task.taskId, pending.taskId];
-    const stage = this.config.get().stages.find((item) => item.id === pending.sourceStageId);
-    if (!stage?.approvedArchiveRoot) throw new AppError('ARCHIVE_ROOT_UNAVAILABLE', '审核归档目录未配置');
-    await this.ensureWritableDirectory(stage.approvedArchiveRoot, 'ARCHIVE_ROOT_UNAVAILABLE');
-    const archiveFinal = path.join(stage.approvedArchiveRoot, path.basename(history.targetFolder));
-    const archiveStaging = path.join(stage.approvedArchiveRoot, '.staging');
-    const archiveTemp = path.join(archiveStaging, `${path.basename(history.targetFolder)}.__tmp__RETRY-${randomUUID()}`);
-    try {
-      if (!(await this.isCompatibleArchive(archiveFinal, compatibleTaskIds, pending.selectedRelativePaths))) {
-        if (await stat(archiveFinal).catch(() => null)) throw new AppError('TARGET_FOLDER_EXISTS', '审核归档目录仍被不兼容内容占用', { path: archiveFinal });
-        await mkdir(archiveStaging, { recursive: true });
-        await cp(history.targetFolder, archiveTemp, { recursive: true, errorOnExist: true, force: false });
-        await rename(archiveTemp, archiveFinal);
-      }
-      await this.store.update((db) => {
-        const record = db.submissionHistory.find((item) => item.submissionId === submissionId);
-        if (record) { record.archiveFolder = archiveFinal; record.status = 'SUCCESS'; record.errorCode = undefined; record.errorMessage = undefined; record.completedAt = new Date().toISOString(); }
-        db.pendingSubmissions = db.pendingSubmissions.filter((item) => item.id !== pending.id);
-        const review = db.reviews.find((item) => item.taskId === pending.taskId);
-        if (review) review.status = db.pendingSubmissions.some((item) => item.taskId === pending.taskId) ? 'PARTIALLY_SUBMITTED' : 'SUBMITTED';
-      });
-      return { submissionId, status: 'SUCCESS', archiveFolder: archiveFinal, retriedPart: 'archive' };
-    } catch (error) {
-      await rm(archiveTemp, { recursive: true, force: true }).catch(() => undefined);
-      throw error;
-    }
+    return this.runBatch('BATCH-RETRY-' + (this.operations?.currentId || randomUUID()), [pending.id], pending.conflictPolicy);
   }
 
+  getBatch(batchId: string): SubmissionBatchRecord | undefined {
+    const batch = this.store.getBatch(batchId);
+    if (batch) for (const item of batch.items) Object.assign(item, this.progress.get(batchId + ':' + item.pendingSubmissionId));
+    return batch;
+  }
   private async setProgress(batchId: string, pendingId: string, patch: Partial<BatchItemProgress>): Promise<void> {
-    await this.store.update((db) => {
-      const item = db.submissionBatches.find((batch) => batch.batchId === batchId)?.items.find((candidate) => candidate.pendingSubmissionId === pendingId);
-      if (item) Object.assign(item, patch);
-    });
+    const key = batchId + ':' + pendingId;
+    this.progress.set(key, { ...this.progress.get(key), ...patch });
+    this.operations?.report({ step: patch.step || patch.status || '处理中' });
   }
 
   private async submitOne(batchId: string, pendingId: string): Promise<SubmissionResult> {
-    const pending = this.store.read().pendingSubmissions.find((item) => item.id === pendingId);
+    const checkpoint = this.store.select('deliveryCheckpoints', (rows) => rows?.find((row) => row.pendingSubmissionId === pendingId));
+    if (checkpoint && ['COMPLETE', 'TARGET_COMMITTED', 'COMMIT_INTENT', 'NEEDS_ATTENTION'].includes(checkpoint.phase)) {
+      const recovered = await this.reconcile(checkpoint);
+      if (recovered) return recovered;
+    }
+    const pending = this.store.getPending(pendingId);
     if (!pending) return this.failProgress(batchId, pendingId, 'CONFIG_INVALID', '待投递任务不存在');
     let task: TaskDetail;
     try {
       this.requirePendingStagesEnabled(pending);
-      task = await this.scanner.getTask(pending.taskId);
+      const snapshotError = this.operations?.currentId ? (this.store.getOperation(this.operations.currentId)?.input.taskSnapshotErrors as Record<string, { code: string; message: string; statusCode: number }> | undefined)?.[pending.taskId] : undefined;
+      if (snapshotError) throw new AppError(snapshotError.code, snapshotError.message, undefined, snapshotError.statusCode);
+      const snapshots = this.operations?.currentId ? this.store.getOperation(this.operations.currentId)?.input.taskSnapshots as Record<string, TaskDetail> | undefined : undefined;
+      task = snapshots?.[pending.taskId] || await this.scanner.getTask(pending.taskId);
     } catch (error) {
       const appError = error instanceof AppError ? error : new AppError('STAGE_DISABLED', '流程已停用', undefined, 409);
       return this.failProgress(batchId, pendingId, appError.code, appError.message);
@@ -154,7 +164,7 @@ export class SubmissionService {
     if (this.locks.has(lockKey)) return this.failProgress(batchId, pendingId, 'TASK_LOCKED', '同一产品和目标正在投递');
     this.locks.add(lockKey);
     await this.setProgress(batchId, pendingId, { status: 'PROCESSING', step: SUBMISSION_STEPS[0] });
-    await this.store.update((db) => {
+    await this.store.updateSections(['pendingSubmissions', 'reviews'], (db) => {
       const item = db.pendingSubmissions.find((candidate) => candidate.id === pendingId);
       if (item) { item.status = 'PACKAGING'; item.updatedAt = new Date().toISOString(); }
       const review = db.reviews.find((candidate) => candidate.taskId === pending.taskId);
@@ -164,22 +174,24 @@ export class SubmissionService {
     try {
       const result = await this.packageAndSubmit(batchId, pending, task);
       await this.setProgress(batchId, pendingId, { status: result.status, submissionId: result.submissionId, step: SUBMISSION_STEPS[8] });
-      await this.store.update((db) => {
-        const batch = db.submissionBatches.find((item) => item.batchId === batchId);
-        if (batch) batch.completed += 1;
-      });
       return result;
     } catch (error: any) {
+      this.store.assertWritable();
+      const uncertain = this.store.select('deliveryCheckpoints', (rows) => rows?.find((row) => row.pendingSubmissionId === pendingId && ['COMMIT_INTENT', 'NEEDS_ATTENTION'].includes(row.phase)));
+      if (uncertain || error?.code === 'DELIVERY_OUTCOME_UNKNOWN') throw error;
+      const attempt = this.operations?.currentId ? this.store.getOperation(this.operations.currentId)?.attempt || 0 : 4;
+      if (['EBUSY', 'EPERM', 'EAGAIN'].includes(error?.code) && attempt <= 3) throw error;
       const appError = error instanceof AppError ? error : new AppError('COPY_FAILED', error?.message || '投递失败');
-      const failureId = this.submissionId();
+      const failureId = this.store.select('deliveryCheckpoints', (rows) => rows?.find((row) => row.pendingSubmissionId === pendingId))?.submissionId || this.submissionId();
       const failureStatus = appError.code === 'TARGET_FOLDER_EXISTS' ? 'SKIPPED_CONFLICT' : 'FAILED';
       const result: SubmissionResult = { pendingSubmissionId: pendingId, status: failureStatus, submissionId: failureId, errorCode: appError.code, errorMessage: appError.message };
       await this.setProgress(batchId, pendingId, { status: failureStatus, submissionId: failureId, errorCode: appError.code, errorMessage: appError.message });
-      await this.store.update((db) => {
+      await this.store.updateSections(['pendingSubmissions', 'reviews', 'submissionHistory'], (db) => {
         const item = db.pendingSubmissions.find((candidate) => candidate.id === pendingId);
         if (item) { item.status = 'FAILED'; item.lastError = `${appError.code}: ${appError.message}`; item.updatedAt = new Date().toISOString(); }
         const review = db.reviews.find((candidate) => candidate.taskId === pending.taskId);
         if (review) review.status = 'FAILED';
+        db.submissionHistory = db.submissionHistory.filter((row) => row.submissionId !== failureId);
         db.submissionHistory.unshift({
           submissionId: failureId,
           pendingSubmissionId: pending.id,
@@ -199,8 +211,7 @@ export class SubmissionService {
           startedAt: new Date().toISOString(),
           completedAt: new Date().toISOString()
         });
-        const batch = db.submissionBatches.find((item) => item.batchId === batchId);
-        if (batch) batch.completed += 1;
+
       });
       return result;
     } finally {
@@ -226,7 +237,8 @@ export class SubmissionService {
   }
 
   private async packageAndSubmit(batchId: string, pending: PendingSubmission, task: TaskDetail): Promise<SubmissionResult> {
-    const stage = this.config.get().stages.find((item) => item.id === pending.sourceStageId);
+    const frozen = this.operations?.currentId ? this.store.getOperation(this.operations.currentId)?.input.stages as StageConfig[] | undefined : undefined;
+    const stage = (frozen || this.config.get().stages).find((item) => item.id === pending.sourceStageId);
     const target = stage?.targets.find((item) => item.targetStageId === pending.targetStageId);
     if (!stage || !target || !stage.approvedArchiveRoot) throw new AppError('CONFIG_INVALID', '来源阶段或目标阶段配置不完整');
     if (new Set(pending.selectedRelativePaths).size !== pending.selectedRelativePaths.length) throw new AppError('CONFIG_INVALID', '选中的图片路径不能重复');
@@ -236,27 +248,30 @@ export class SubmissionService {
     const sourceImages = pending.selectedRelativePaths.map((relativePath) => imageByRelativePath.get(relativePath)!);
     for (const image of sourceImages) {
       const { absolutePath: source } = await this.scanner.resolveIndexedMedia(task.taskId, image.relativePath, { allowDisabledStage: true });
-      if ((await stat(source)).size <= 0) throw new AppError('SOURCE_FILE_EMPTY', '选中的图片为空文件', { relativePath: image.relativePath });
+      const current = await stat(source);
+      if (current.size !== image.sizeBytes || current.mtime.toISOString() !== image.lastModifiedAt) throw new AppError('FILE_CHANGED', '接收任务后图片发生变化，请核对选图', { relativePath: image.relativePath }, 409);
+      if (current.size <= 0) throw new AppError('SOURCE_FILE_EMPTY', '选中的图片为空文件', { relativePath: image.relativePath });
     }
     await this.ensureWritableDirectory(target.targetQueueRoot, 'TARGET_QUEUE_UNAVAILABLE');
     await this.ensureWritableDirectory(stage.approvedArchiveRoot, 'ARCHIVE_ROOT_UNAVAILABLE');
 
-    const currentProduct = await this.productIdentity.requirePendingIdentity(pending);
-    pending.productSku = currentProduct.sku;
-    pending.productNameSnapshot = currentProduct.productName;
-    pending.n8nTaskParameters = pending.variantName
-      ? this.productIdentity.injectVariant(pending.n8nTaskParameters, currentProduct, pending.variantName)
-      : this.productIdentity.inject(pending.n8nTaskParameters, currentProduct);
-    await this.store.update((db) => {
-      const current = db.pendingSubmissions.find((item) => item.id === pending.id);
-      if (current) Object.assign(current, { productSku: currentProduct.sku, productNameSnapshot: currentProduct.productName, n8nTaskParameters: structuredClone(pending.n8nTaskParameters), updatedAt: new Date().toISOString() });
-    });
+    const verifiedProduct = await this.productIdentity.requirePendingIdentity(pending);
+    if (verifiedProduct.sku !== pending.productSku) throw new AppError('PRODUCT_IDENTITY_CHANGED', '产品身份已变化，请重新核对待投递任务', undefined, 409);
+    const currentProduct = { ...verifiedProduct, productName: pending.productNameSnapshot || verifiedProduct.productName };
+    // Parameters and product name were frozen at approval/admission; verification
+    // must never replace those snapshots with later workflow or catalog changes.
 
-    const recovered = await this.recoverInterruptedSubmission(batchId, pending, task, stage, target);
-    if (recovered) return recovered;
-
-    const nameInfo = await this.resolveDestinationName(task.sourceFolderName, target, pending.conflictPolicy);
-    const submissionId = this.submissionId();
+    const existingCheckpoint = this.store.select('deliveryCheckpoints', (rows) => rows?.find((row) => row.pendingSubmissionId === pending.id));
+    if (existingCheckpoint) {
+      const frozen = existingCheckpoint.record;
+      if (stableHash([frozen.selectedRelativePaths, frozen.n8nTaskParameters, frozen.n8nTaskParameterOptions || {}, frozen.productSku, frozen.variantId]) !== stableHash([pending.selectedRelativePaths, pending.n8nTaskParameters, pending.n8nTaskParameterOptions || {}, pending.productSku, pending.variantId])
+        || path.dirname(existingCheckpoint.targetFinal) !== path.resolve(target.targetQueueRoot)
+        || path.dirname(existingCheckpoint.archiveFinal!) !== path.resolve(stage.approvedArchiveRoot)) {
+        throw new AppError('DELIVERY_INPUT_CHANGED', '原投递已有冻结检查点，当前选图、参数或目录已改变；请重新打开审核生成新的待投递项', { submissionId: existingCheckpoint.submissionId }, 409);
+      }
+    }
+    const nameInfo = existingCheckpoint ? { name: path.basename(existingCheckpoint.targetFinal), revision: existingCheckpoint.revision } : await this.resolveDestinationName(task.sourceFolderName, target, pending.conflictPolicy);
+    const submissionId = existingCheckpoint?.submissionId || this.submissionId();
     const n8nTaskParameters = pending.n8nTaskParameters || await this.config.getWorkflowParameters(pending.targetStageId);
     const n8nParameterFileName = this.n8nParameterFileName(pending.targetStageId, submissionId);
     const startedAt = new Date().toISOString();
@@ -266,9 +281,6 @@ export class SubmissionService {
     const archiveFinal = path.join(stage.approvedArchiveRoot, nameInfo.name);
     const archiveStagingRoot = path.join(stage.approvedArchiveRoot, '.staging');
     const archiveTemp = path.join(archiveStagingRoot, `${nameInfo.name}.__tmp__${submissionId}`);
-    await mkdir(targetStagingRoot, { recursive: true });
-    await mkdir(targetTemp, { recursive: false });
-
     const record: SubmissionRecord = {
       submissionId, pendingSubmissionId: pending.id, taskId: pending.taskId, sourceStageId: stage.id,
       targetStageId: target.targetStageId, sourceFolder: task.sourceFolder, selectedImageCount: sourceImages.length,
@@ -279,15 +291,34 @@ export class SubmissionService {
       status: 'FAILED', startedAt
     };
 
-    try {
+    const checkpoint: DeliveryCheckpoint = existingCheckpoint || {
+      submissionId, operationId: reviewOperationContext.getStore()?.operationId, pendingSubmissionId: pending.id, taskId: pending.taskId,
+      phase: 'PREPARING', targetTemp, targetFinal, archiveTemp, archiveFinal, revision: nameInfo.revision, record, files: [], updatedAt: startedAt
+    };
+    await this.saveCheckpoint(checkpoint);
+    // Only pre-commit staging owned by this exact checkpoint may be rebuilt.
+    await this.removeOwnedStaging(targetTemp, targetStagingRoot);
+    await this.removeOwnedStaging(archiveTemp, archiveStagingRoot);
+    await mkdir(targetTemp, { recursive: true });
+    // Keep owned staging after errors: a failed write/rename may follow a visible commit.
+    {
       await this.setProgress(batchId, pending.id, { step: SUBMISSION_STEPS[1], submissionId });
       const selectedFiles: Array<Record<string, unknown>> = [];
+      const destinationNames = new Set<string>();
+      let copiedBytes = 0;
+      const totalBytes = sourceImages.reduce((sum, item) => sum + item.sizeBytes, 0);
       for (const [sortOrder, image] of sourceImages.entries()) {
         const { absolutePath: source } = await this.scanner.resolveIndexedMedia(task.taskId, image.relativePath, { allowDisabledStage: true });
         const targetRelativePath = target.packageMode === 'flatten' ? this.flattenName(image.relativePath) : image.relativePath;
+        const destinationKey = targetRelativePath.toLocaleLowerCase('en-US');
+        if (destinationNames.has(destinationKey)) throw new AppError('CONFIG_INVALID', '打包文件名冲突，请调整所选文件');
+        destinationNames.add(destinationKey);
         const destination = path.join(targetTemp, ...targetRelativePath.split('/'));
         await mkdir(path.dirname(destination), { recursive: true });
-        await copyFile(source, destination);
+        await copyVerified(source, destination, (bytes) => {
+          copiedBytes += bytes;
+          this.operations?.report({ step: '复制及校验图片', copiedBytes, totalBytes, completedFiles: sortOrder, totalFiles: sourceImages.length });
+        });
         await this.scanner.resolveIndexedMedia(task.taskId, image.relativePath, { allowDisabledStage: true });
         selectedFiles.push({
           sortOrder,
@@ -343,92 +374,124 @@ export class SubmissionService {
         schemaVersion: '1.0', ready: true, submissionId, taskId: pending.taskId, sourceStageId: stage.id,
         targetStageId: target.targetStageId, imageCount: sourceImages.length, n8nParameterFileName, createdAt: new Date().toISOString()
       });
+      // Prepare the complete archive before publishing a directory watched by n8n.
+      await mkdir(archiveStagingRoot, { recursive: true });
+      await cp(targetTemp, archiveTemp, { recursive: true, errorOnExist: true, force: false });
+      checkpoint.files = await treeReceipts(targetTemp, true);
+      const archiveFiles = await treeReceipts(archiveTemp, true);
+      if (JSON.stringify(archiveFiles) !== JSON.stringify(checkpoint.files)) throw new AppError('VERIFY_FAILED', '归档暂存包校验失败');
+      checkpoint.phase = 'VERIFIED';
+      await this.saveCheckpoint(checkpoint);
       await this.setProgress(batchId, pending.id, { step: SUBMISSION_STEPS[6] });
-      const atomicRenameLogContext = {
-        batchId,
-        pendingSubmissionId: pending.id,
-        submissionId,
-        taskId: task.taskId,
-        sourceStageId: stage.id,
-        targetStageId: target.targetStageId,
-        sourcePath: targetTemp,
-        targetPath: targetFinal
-      };
+      checkpoint.phase = 'COMMIT_INTENT';
+      await this.saveCheckpoint(checkpoint);
+      this.store.assertWritable();
       await atomicRenameWithRetry(targetTemp, targetFinal, {
-        onRetry: (event) => this.logger.warn({
-          ...atomicRenameLogContext,
-          errorCode: event.errorCode,
-          attemptNumber: event.attemptNumber,
-          retryNumber: event.retryNumber,
-          totalAttempts: event.totalAttempts,
-          totalRetries: event.totalRetries,
-          delayMs: event.delayMs,
-          elapsedMs: event.elapsedMs
-        }, '投递原子入队遇到瞬时占用，准备重试'),
-        onRecovered: (event) => this.logger.info({
-          ...atomicRenameLogContext,
-          errorCode: event.errorCode,
-          attemptNumber: event.attemptNumber,
-          retryNumber: event.retryNumber,
-          totalAttempts: event.totalAttempts,
-          totalRetries: event.totalRetries,
-          delayMs: event.delayMs,
-          elapsedMs: event.elapsedMs
-        }, '投递原子入队重试后成功'),
-        onExhausted: (event) => this.logger.error({
-          ...atomicRenameLogContext,
-          errorCode: event.errorCode,
-          attemptNumber: event.attemptNumber,
-          retryNumber: event.retryNumber,
-          totalAttempts: event.totalAttempts,
-          totalRetries: event.totalRetries,
-          delayMs: event.delayMs,
-          elapsedMs: event.elapsedMs
-        }, '投递原子入队重试耗尽')
-      }).catch((error: any) => { throw new AppError('ATOMIC_RENAME_FAILED', error?.message || '监听目录原子入队失败'); });
-      record.targetFolder = targetFinal;
-
-      await this.setProgress(batchId, pending.id, { step: SUBMISSION_STEPS[7] });
-      try {
-        const canReuseArchive = await this.isCompatibleArchive(archiveFinal, task.taskId, sourceImages.map((item) => item.relativePath));
-        if (!canReuseArchive) {
-          if (await stat(archiveFinal).catch(() => null)) throw new AppError('TARGET_FOLDER_EXISTS', '审核归档目录已存在且内容与本次选图不同', { path: archiveFinal });
-          await mkdir(archiveStagingRoot, { recursive: true });
-          await cp(targetFinal, archiveTemp, { recursive: true, errorOnExist: true, force: false });
-          await rename(archiveTemp, archiveFinal).catch(async (error) => {
-            if (!(await this.isCompatibleArchive(archiveFinal, task.taskId, sourceImages.map((item) => item.relativePath)))) throw error;
-            await rm(archiveTemp, { recursive: true, force: true });
-          });
-        }
-        // A single source review can be delivered to multiple target stages in parallel.
-        // Keep every target's frozen n8n parameter snapshot in the shared archive,
-        // regardless of which target won the initial archive-directory rename race.
-        await copyFile(path.join(targetFinal, n8nParameterFileName), path.join(archiveFinal, n8nParameterFileName));
-        record.archiveFolder = archiveFinal;
-        record.status = 'SUCCESS';
-      } catch (error: any) {
-        record.status = 'PARTIAL_SUCCESS';
-        record.errorCode = 'ARCHIVE_ROOT_UNAVAILABLE';
-        record.errorMessage = error?.message || '监听目录投递成功，但审核归档失败';
-      }
-      record.completedAt = new Date().toISOString();
-      await this.store.update((db) => {
-        db.submissionHistory.unshift(record);
-        if (record.status === 'SUCCESS') db.pendingSubmissions = db.pendingSubmissions.filter((item) => item.id !== pending.id);
-        else {
-          const item = db.pendingSubmissions.find((candidate) => candidate.id === pending.id);
-          if (item) { item.status = 'FAILED'; item.lastError = `${record.errorCode}: ${record.errorMessage}`; }
-        }
-        const remainingForTask = db.pendingSubmissions.filter((item) => item.taskId === pending.taskId);
-        const review = db.reviews.find((item) => item.taskId === pending.taskId);
-        if (review) review.status = record.status === 'SUCCESS' ? (remainingForTask.length ? 'PARTIALLY_SUBMITTED' : 'SUBMITTED') : 'PARTIALLY_SUBMITTED';
+        onRetry: (event) => this.logger.warn({ submissionId, ...event }, '投递原子入队遇到瞬时占用，准备重试')
       });
-      return { pendingSubmissionId: pending.id, status: record.status, submissionId, errorCode: record.errorCode, errorMessage: record.errorMessage };
-    } catch (error) {
-      await rm(targetTemp, { recursive: true, force: true }).catch(() => undefined);
-      await rm(archiveTemp, { recursive: true, force: true }).catch(() => undefined);
-      throw error;
+      await syncDirectory(path.dirname(targetFinal));
+      checkpoint.phase = 'TARGET_COMMITTED';
+      checkpoint.record.targetFolder = targetFinal;
+      await this.saveCheckpoint(checkpoint);
+      return await this.finishArchive(checkpoint);
     }
+  }
+
+  private async saveCheckpoint(checkpoint: DeliveryCheckpoint): Promise<void> {
+    checkpoint.updatedAt = new Date().toISOString();
+    await this.store.updateSections(['deliveryCheckpoints'], (db) => {
+      const rows = db.deliveryCheckpoints ||= [];
+      const index = rows.findIndex((row) => row.submissionId === checkpoint.submissionId);
+      if (index < 0) rows.push(structuredClone(checkpoint)); else rows[index] = structuredClone(checkpoint);
+    });
+  }
+
+  private async reconcile(checkpoint: DeliveryCheckpoint): Promise<SubmissionResult | null> {
+    if (checkpoint.phase === 'COMPLETE') return this.result(checkpoint.record);
+    if (checkpoint.phase === 'TARGET_COMMITTED') return this.finishArchive(checkpoint);
+    if (await verifyTree(checkpoint.targetFinal, checkpoint.files)) {
+      checkpoint.phase = 'TARGET_COMMITTED';
+      checkpoint.record.targetFolder = checkpoint.targetFinal;
+      await this.saveCheckpoint(checkpoint);
+      return this.finishArchive(checkpoint);
+    }
+    if (!(await stat(checkpoint.targetFinal).catch(() => null)) && await verifyTree(checkpoint.targetTemp, checkpoint.files)) {
+      // Atomic rename did not happen: the exact verified staging package remains.
+      this.store.assertWritable();
+      await atomicRenameWithRetry(checkpoint.targetTemp, checkpoint.targetFinal);
+      await syncDirectory(path.dirname(checkpoint.targetFinal));
+      checkpoint.phase = 'TARGET_COMMITTED'; checkpoint.record.targetFolder = checkpoint.targetFinal;
+      await this.saveCheckpoint(checkpoint);
+      return this.finishArchive(checkpoint);
+    }
+    checkpoint.phase = 'NEEDS_ATTENTION';
+    await this.saveCheckpoint(checkpoint);
+    throw new AppError('DELIVERY_OUTCOME_UNKNOWN', '无法确认文件是否已被下游取走；已保留原投递编号，请核对后处理，禁止重复投递', { submissionId: checkpoint.submissionId }, 409);
+  }
+
+  private async finishArchive(checkpoint: DeliveryCheckpoint): Promise<SubmissionResult> {
+    return withDeliveryNamespace('archive:' + path.resolve(checkpoint.archiveFinal!), () => this.finishArchiveLocked(checkpoint));
+  }
+  private async finishArchiveLocked(checkpoint: DeliveryCheckpoint): Promise<SubmissionResult> {
+    const record = structuredClone(checkpoint.record);
+    record.targetFolder = checkpoint.targetFinal;
+    try {
+      const archiveFinal = checkpoint.archiveFinal!;
+      const archiveTemp = checkpoint.archiveTemp!;
+      if (!(await verifyTree(archiveFinal, checkpoint.files))) {
+        if (!await verifyTree(archiveTemp, checkpoint.files)) throw new AppError('VERIFY_FAILED', '归档暂存包不存在或校验失败，目标已投递，不能重投');
+        if (await stat(archiveFinal).catch(() => null)) {
+          if (!await this.isCompatibleArchive(archiveFinal, [record.taskId, this.store.resolveRuntimeTaskId(record.taskId)], record.selectedRelativePaths || [])) throw new AppError('TARGET_FOLDER_EXISTS', '归档目录存在不兼容内容');
+          // Existing contract shares one archive across target stages. Compare media
+          // bytes before adding this target's unique frozen parameter file.
+          const manifest = JSON.parse(await readFile(path.join(archiveTemp, 'selection-manifest.json'), 'utf8'));
+          const existingFiles = await treeReceipts(archiveFinal);
+          for (const item of manifest.selectedFiles) {
+            const expected = checkpoint.files.find((file) => file.relativePath === item.targetRelativePath);
+            const actual = existingFiles.find((file) => file.relativePath === item.targetRelativePath);
+            if (!expected || !actual || expected.sha256 !== actual.sha256) throw new AppError('VERIFY_FAILED', '共享归档图片内容不一致');
+          }
+          if (record.n8nParameterFileName) {
+            await copyFile(path.join(archiveTemp, record.n8nParameterFileName), path.join(archiveFinal, record.n8nParameterFileName));
+            await syncFile(path.join(archiveFinal, record.n8nParameterFileName));
+          }
+        } else {
+          await atomicRenameWithRetry(archiveTemp, archiveFinal);
+          await syncDirectory(path.dirname(archiveFinal));
+        }
+      }
+      record.archiveFolder = archiveFinal; record.status = 'SUCCESS';
+      record.errorCode = undefined; record.errorMessage = undefined;
+      checkpoint.phase = 'COMPLETE';
+    } catch (error: any) {
+      record.status = 'PARTIAL_SUCCESS'; record.errorCode = 'ARCHIVE_ROOT_UNAVAILABLE'; record.errorMessage = error?.message || '投递成功但归档未完成';
+      checkpoint.phase = 'TARGET_COMMITTED';
+    }
+    record.completedAt = new Date().toISOString();
+    checkpoint.record = record;
+    await this.store.updateSections(['deliveryCheckpoints', 'submissionHistory', 'pendingSubmissions', 'reviews'], (db) => {
+      const index = db.deliveryCheckpoints!.findIndex((row) => row.submissionId === checkpoint.submissionId);
+      db.deliveryCheckpoints![index] = structuredClone(checkpoint);
+      const historyIndex = db.submissionHistory.findIndex((row) => row.submissionId === record.submissionId);
+      if (historyIndex < 0) db.submissionHistory.unshift(record); else db.submissionHistory[historyIndex] = record;
+      if (record.status === 'SUCCESS') db.pendingSubmissions = db.pendingSubmissions.filter((row) => row.id !== record.pendingSubmissionId);
+      else {
+        const pending = db.pendingSubmissions.find((row) => row.id === record.pendingSubmissionId);
+        if (pending) { pending.status = 'FAILED'; pending.lastError = record.errorMessage; }
+      }
+      const review = db.reviews.find((row) => row.taskId === record.taskId);
+      if (review) review.status = record.status === 'SUCCESS' && !db.pendingSubmissions.some((row) => row.taskId === record.taskId) ? 'SUBMITTED' : 'PARTIALLY_SUBMITTED';
+    });
+    return this.result(record);
+  }
+
+  private result(record: SubmissionRecord): SubmissionResult {
+    return { pendingSubmissionId: record.pendingSubmissionId, submissionId: record.submissionId, status: record.status, errorCode: record.errorCode, errorMessage: record.errorMessage };
+  }
+  private async removeOwnedStaging(directory: string, stagingRoot: string): Promise<void> {
+    const root = path.resolve(stagingRoot), resolved = path.resolve(directory);
+    if (path.dirname(resolved) !== root || !path.basename(resolved).includes('.__tmp__')) throw new AppError('CONFIG_INVALID', '拒绝清理不属于本次投递的暂存目录');
+    await rm(resolved, { recursive: true, force: true });
   }
 
   private async ensureWritableDirectory(directory: string, code: string): Promise<void> {
@@ -441,44 +504,6 @@ export class SubmissionService {
 
   private n8nParameterFileName(targetStageId: string, submissionId: string): string {
     return `n8n_setParameter_${targetStageId}_${submissionId}.json`;
-  }
-
-  private async recoverInterruptedSubmission(batchId: string, pending: PendingSubmission, task: TaskDetail, stage: StageConfig, target: TargetConfig): Promise<SubmissionResult | null> {
-    if (pending.status === 'PENDING' || !stage.approvedArchiveRoot) return null;
-    const folderName = target.folderNameTemplate.replaceAll('{sourceName}', task.sourceFolderName);
-    const existingTarget = path.join(target.targetQueueRoot, folderName);
-    const compatibleTaskIds = [task.taskId, pending.taskId];
-    if (!(await this.isCompatibleArchive(existingTarget, compatibleTaskIds, pending.selectedRelativePaths))) return null;
-    const archiveFinal = path.join(stage.approvedArchiveRoot, folderName);
-    const archiveStaging = path.join(stage.approvedArchiveRoot, '.staging');
-    const archiveTemp = path.join(archiveStaging, `${folderName}.__tmp__RECOVER-${randomUUID()}`);
-    await this.setProgress(batchId, pending.id, { step: SUBMISSION_STEPS[7] });
-    try {
-      if (!(await this.isCompatibleArchive(archiveFinal, compatibleTaskIds, pending.selectedRelativePaths))) {
-        if (await stat(archiveFinal).catch(() => null)) throw new AppError('TARGET_FOLDER_EXISTS', '审核归档目录已存在且内容与恢复任务不同', { path: archiveFinal });
-        await mkdir(archiveStaging, { recursive: true });
-        await cp(existingTarget, archiveTemp, { recursive: true, errorOnExist: true, force: false });
-        await rename(archiveTemp, archiveFinal);
-      }
-      const ready = JSON.parse(await readFile(path.join(existingTarget, '_READY.json'), 'utf8'));
-      const recoveredId = String(ready.submissionId || this.submissionId());
-      const completedAt = new Date().toISOString();
-      await this.store.update((db) => {
-        const previous = db.submissionHistory.find((item) => item.pendingSubmissionId === pending.id && item.targetFolder === existingTarget);
-        if (previous) {
-          previous.status = 'SUCCESS'; previous.archiveFolder = archiveFinal; previous.errorCode = undefined; previous.errorMessage = undefined; previous.completedAt = completedAt;
-        } else {
-          db.submissionHistory.unshift({ submissionId: recoveredId, pendingSubmissionId: pending.id, taskId: pending.taskId, sourceStageId: stage.id, targetStageId: target.targetStageId, sourceFolder: task.sourceFolder, targetFolder: existingTarget, archiveFolder: archiveFinal, selectedImageCount: pending.selectedRelativePaths.length, selectedRelativePaths: [...pending.selectedRelativePaths], productSku: pending.productSku, productNameSnapshot: pending.productNameSnapshot, status: 'SUCCESS', startedAt: completedAt, completedAt });
-        }
-        db.pendingSubmissions = db.pendingSubmissions.filter((item) => item.id !== pending.id);
-        const review = db.reviews.find((item) => item.taskId === pending.taskId);
-        if (review) review.status = db.pendingSubmissions.some((item) => item.taskId === pending.taskId) ? 'PARTIALLY_SUBMITTED' : 'SUBMITTED';
-      });
-      return { pendingSubmissionId: pending.id, status: 'SUCCESS', submissionId: recoveredId };
-    } catch (error) {
-      await rm(archiveTemp, { recursive: true, force: true }).catch(() => undefined);
-      throw error;
-    }
   }
 
   private async resolveDestinationName(sourceName: string, target: TargetConfig, policy: PendingSubmission['conflictPolicy']): Promise<{ name: string; revision: number }> {

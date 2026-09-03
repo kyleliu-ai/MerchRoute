@@ -359,6 +359,19 @@ export class PurchaseRepository {
     return result.rows[0] ? { sku: result.rows[0].sku, productName: result.rows[0].product_name, variants: await this.listProductVariants(result.rows[0].sku) } : undefined;
   }
 
+  async legacyNonterminalDownloadJobCount(legacyRoot?: string): Promise<number> {
+    if (!this.configured || !legacyRoot) return 0;
+    // Only active jobs participate in the write gate. Historical audit stays in
+    // legacyRootReferenceCounts and is never loaded per media/request.
+    const result = await this.query<SqlRow>(`SELECT workflow_snapshot,request_body,result_json,output_dir FROM download_jobs
+      WHERE status IN ('QUEUED','WAITING_RESOURCE','RUNNING')`);
+    return result.rows.filter((row) => {
+      const value = { workflowSnapshot: row.workflow_snapshot, requestBody: row.request_body, result: row.result_json, outputDir: row.output_dir };
+      const stats = this.inspectLegacyReferences?.(value);
+      return stats ? stats.changedStrings + stats.changedKeys > 0 : countExactLegacyPathReferences(value, legacyRoot) > 0;
+    }).length;
+  }
+
   async legacyRootReferenceCounts(legacyRoot?: string): Promise<LegacyPurchaseReferenceCounts> {
     if (!this.configured || !legacyRoot) {
       return { databaseConfigured: this.configured, downloadJobs: 0, nonterminalDownloadJobs: 0, notifications: 0, unresolvedNotifications: 0 };

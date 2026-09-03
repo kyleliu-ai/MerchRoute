@@ -12,6 +12,8 @@ import {
   type WbStore,
   type WbStorePublication
 } from '@n8n-media-review/shared';
+import type { DeliveryReplayService } from '../delivery-replay.js';
+import { stableHash } from '../review-operations.js';
 import type { StateStore } from '../../repositories/store.js';
 import type {
   WbAutoGenerationLeaseClaim,
@@ -48,7 +50,7 @@ type ManifestAsset = {
   relativePath?: string; sizeBytes?: number; sha256?: string; deliveredAt?: string; kind?: string; sortOrder?: unknown;
 };
 
-type CoordinatorOptions = { workerIntervalMs?: number; reconciliationIntervalMs?: number; debounceMs?: number; stableWindowMs?: number; stableProbeMs?: number; concurrency?: number };
+type CoordinatorOptions = { historyReplay?: DeliveryReplayService; workerIntervalMs?: number; reconciliationIntervalMs?: number; debounceMs?: number; stableWindowMs?: number; stableProbeMs?: number; concurrency?: number };
 
 const NON_NETWORK_RETRY_DELAYS_MS = [60_000, 5 * 60_000, 15 * 60_000];
 const SUBMITTED_STATES = new Set(['QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED', 'BLOCKED']);
@@ -74,7 +76,7 @@ export class WbAutoPublishingCoordinator {
     private readonly publishing: WbPublishingService,
     private readonly store: StateStore,
     private readonly logger: FastifyBaseLogger,
-    options: CoordinatorOptions = {},
+    private readonly options: CoordinatorOptions = {},
     private readonly wbStores?: WbStoreRepository,
     private readonly sourceMediaCleanup?: WbSourceMediaCleanupService
   ) {
@@ -371,22 +373,24 @@ export class WbAutoPublishingCoordinator {
       }
       const cutoffs = cutoffInputs.filter((value): value is string => Boolean(value)).map(Date.parse).filter(Number.isFinite);
       const cutoff = cutoffs.length ? Math.min(...cutoffs) : Number.POSITIVE_INFINITY;
-      const deliveries = this.store.read().submissionHistory
+      const deliveries = (this.options.historyReplay ? this.store.section('submissionHistory') : this.store.read().submissionHistory)
         .filter(isSuccessfulWbDelivery)
         .filter((record) => Date.parse(record.completedAt || record.startedAt) >= cutoff)
         .sort((left, right) => Date.parse(left.completedAt || left.startedAt) - Date.parse(right.completedAt || right.startedAt));
-      for (const record of deliveries) {
+      const replayRecord = async (record: SubmissionRecord): Promise<boolean> => {
         try {
-          await this.onMediaDelivered({
-            sku: record.productSku!, stageId: record.sourceStageId as 'E004' | 'E005', submissionId: record.submissionId,
-            ...(record.variantId ? { variantId: record.variantId } : {}), deliveredAt: record.completedAt || record.startedAt,
-            replay: true
-          });
+          const input = { sku: record.productSku!, stageId: record.sourceStageId as 'E004' | 'E005', submissionId: record.submissionId,
+            ...(record.variantId ? { variantId: record.variantId } : {}), deliveredAt: record.completedAt || record.startedAt, replay: true };
+          if (this.sourceMediaCleanup?.confirmsCleanedDelivery && await this.sourceMediaCleanup.confirmsCleanedDelivery(input)) return true;
+          await this.onMediaDelivered(input);
+          return true;
         } catch (error) {
-          this.logger.warn({ err: error, sku: record.productSku, submissionId: record.submissionId },
-            'WB 自动上品历史媒体投递补偿失败，已跳过该记录并继续终态同步');
+          this.logger.warn({ err: error, sku: record.productSku, submissionId: record.submissionId }, 'WB 自动上品历史媒体投递补偿失败，保留原记录等待重试');
+          return false;
         }
-      }
+      };
+      if (this.options.historyReplay) await this.options.historyReplay.run('WB', deliveries, stableHash(cutoffInputs), replayRecord);
+      else for (const record of deliveries) await replayRecord(record);
       this.lastReconciledAt = new Date().toISOString();
     } catch (error) {
       this.logger.warn({ err: error }, 'WB 自动上品补偿检查失败');

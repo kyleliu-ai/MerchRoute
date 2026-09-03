@@ -126,6 +126,16 @@ export class WbSourceMediaCleanupService {
     await this.repository.linkManualPublication(batch.id, target.storeId, target.publicationId);
   }
 
+  async confirmsCleanedDelivery(input: { sku: string; submissionId: string; deliveredAt: string }): Promise<boolean> {
+    const batch = await this.repository.latestForSku(input.sku);
+    if (!batch || batch.status !== 'CLEANED' || batch.source !== 'AUTOMATION' || batch.deliveredAt !== input.deliveredAt) return false;
+    if (automaticMediaBatchId({ ...input, mediaSignature: batch.mediaSignature, expectedStoreIds: batch.expectedStoreIds }) !== batch.mediaBatchId) return false;
+    const targets = await this.repository.targets(batch.id);
+    return targets.length === batch.expectedStoreIds.length && targets.every((target) => batch.expectedStoreIds.includes(target.storeId)
+      && Boolean(target.automationJobId && target.automationRunId)
+      && target.automationState === 'SUCCEEDED' && target.runtimeState === 'SUCCEEDED');
+  }
+
   async sourceState(sku: string): Promise<{ state: 'AVAILABLE' | 'CLEANUP_PENDING' | 'CLEANED'; cleanedAt?: string }> {
     return this.repository.sourceState(sku);
   }
