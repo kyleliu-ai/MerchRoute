@@ -1,6 +1,6 @@
 {
-  "schemaVersion": 1,
-  "candidateId": "merchroute-github-publish-20260903-1108",
+  "schemaVersion": 2,
+  "candidateId": "merchroute-release-acceptance-gates-20260903-1432",
   "baseline": {
     "commit": "8a52c7760032167d86b26f36b045a849a6b0569f",
     "status": "USER_AUTHORIZED_RECONSTRUCTION_NOT_ACCEPTED_RELEASE"
@@ -12,11 +12,17 @@
     "headTreeHash": "188f6431b2587ec3a4ad9a34f315c6a2c5cdb4ec",
     "status": "COMMITTED_LOCAL_CANDIDATE_NOT_PUBLISHED"
   },
+  "integrationParent": {
+    "branch": "work/pr23-ci-fix-20260903-1336",
+    "commit": "4315999b0c23f4651412b597bfbdc1455d85c212",
+    "headTreeHash": "22ecc597f1230bcc280d63b032e06b4c72bfee23",
+    "status": "USER_AUTHORIZED_GATE_REPAIR_NOT_ACCEPTED_RELEASE"
+  },
   "policy": {
     "sourceAuthority": "LOCAL",
     "defaultMode": "local",
     "publication": "GITHUB_DRAFT_PR_ONLY_NOT_LOCAL_PUBLICATION",
-    "currentBranch": "work/merchroute-github-publish-20260903-1108",
+    "candidateBinding": "EXPLICIT_EXPECTED_COMMIT",
     "remoteReadRequired": false
   },
   "branches": [
@@ -175,9 +181,36 @@
       "head": "26235db67baa4b99d15952571f152af8c6c65c9d",
       "featureId": "core-deployment",
       "relation": "COMMITTED_COMPLETE_CANDIDATE"
+    },
+    {
+      "name": "work/merchroute-github-publish-20260903-1108",
+      "head": "cbcec116aa57e13c3c212c45e112f12bb0649ba1",
+      "featureId": "core-deployment",
+      "relation": "COMMITTED_PUBLICATION_GATES"
+    },
+    {
+      "name": "work/pr23-ci-fix-20260903-1336",
+      "head": "4315999b0c23f4651412b597bfbdc1455d85c212",
+      "featureId": "core-deployment",
+      "relation": "COMMITTED_LOCAL_CI_REPAIR"
+    },
+    {
+      "name": "work/pr23-ci-publish-20260903-1336",
+      "head": "e8c357247173a912fb588d92ce3d30e11ed09e91",
+      "featureId": "core-deployment",
+      "relation": "TREE_EQUIVALENT_LOCAL_CI_REPAIR"
     }
   ],
   "equivalenceEvidence": [
+    {
+      "kind": "tree",
+      "refs": [
+        "4315999b0c23f4651412b597bfbdc1455d85c212",
+        "e8c357247173a912fb588d92ce3d30e11ed09e91"
+      ],
+      "hash": "22ecc597f1230bcc280d63b032e06b4c72bfee23",
+      "meaning": "本机 CI 修复与 PR #23 发布副本源码完全相同；提交身份和验收证据仍分别绑定"
+    },
     {
       "kind": "tree",
       "refs": [

@@ -29,9 +29,12 @@ function git(root, args) {
 
 export function validateManifest(manifest) {
   const errors = [];
-  if (manifest?.schemaVersion !== 1) errors.push('功能台账版本必须为 1');
+  if (manifest?.schemaVersion !== 2) errors.push('功能台账版本必须为 2');
   if (!/^[0-9a-f]{40}$/i.test(manifest?.baseline?.commit || '')) errors.push('台账缺少明确本机基线');
-  if (!manifest?.policy?.currentBranch?.startsWith('work/')) errors.push('台账缺少独立候选分支');
+  if (manifest?.policy?.candidateBinding !== 'EXPLICIT_EXPECTED_COMMIT'
+    || manifest?.policy?.sourceAuthority !== 'LOCAL' || manifest?.policy?.currentBranch !== undefined) {
+    errors.push('台账必须以显式预期提交绑定本机候选，不能硬编码当前分支');
+  }
   for (const name of ['branches', 'features', 'requiredChecks']) {
     if (!Array.isArray(manifest?.[name]) || !manifest[name].length) errors.push('台账集合为空：' + name);
   }
@@ -51,6 +54,12 @@ export function validateManifest(manifest) {
     || !manifest.branches.some((branch) => branch.name === manifest.sourceCandidate.branch && branch.head === manifest.sourceCandidate.commit)) {
     errors.push('缺少已提交阶段 1 候选及其审计分支身份');
   }
+  if (!manifest.integrationParent?.branch?.startsWith('work/')
+    || !/^[0-9a-f]{40}$/i.test(manifest.integrationParent?.commit || '')
+    || !/^[0-9a-f]{40}$/i.test(manifest.integrationParent?.headTreeHash || '')
+    || !manifest.branches.some((branch) => branch.name === manifest.integrationParent.branch && branch.head === manifest.integrationParent.commit)) {
+    errors.push('缺少本次修复的已审计本机来源提交和 tree');
+  }
   for (const feature of manifest.features) {
     if (!['PRESERVE', 'INTEGRATE'].includes(feature.action)) errors.push('功能处理方式无效：' + feature.id);
     if (!feature.sourceChecks?.length || !feature.checkIds?.length || feature.checkIds.some((id) => !checks.has(id))) errors.push('功能缺少源码锚点或行为检查：' + feature.id);
@@ -61,18 +70,90 @@ export function validateManifest(manifest) {
   return errors;
 }
 
-export function compareBranchInventory(manifest, liveBranches, currentBranch) {
+export function compareBranchInventory(manifest, liveBranches, currentBranch, expectedCommit, candidateAliases = []) {
   const errors = [];
-  if (currentBranch !== manifest.policy.currentBranch || currentBranch === 'main') errors.push('当前分支不是台账绑定的独立候选');
+  if (!currentBranch?.startsWith('work/')) errors.push('当前分支不是独立候选 work/ 分支');
   const expected = new Map(manifest.branches.map((item) => [item.name, item.head]));
   const actual = new Map(liveBranches.map((item) => [item.name, item.head]));
+  if (!/^[0-9a-f]{40}$/i.test(expectedCommit || '') || actual.get(currentBranch) !== expectedCommit?.toLowerCase()) {
+    errors.push('当前候选分支 HEAD 必须匹配显式 --expected-commit');
+  }
+  if (new Set(candidateAliases).size !== candidateAliases.length) errors.push('候选别名重复');
+  for (const name of candidateAliases) {
+    if (!name.startsWith('work/') || name === currentBranch || expected.has(name)
+      || actual.get(name) !== expectedCommit?.toLowerCase()) {
+      errors.push('候选别名必须是明确指定、非历史条目且指向完全相同提交的独立分支：' + name);
+    }
+  }
   for (const [name, head] of expected) {
     if (actual.get(name) !== head) errors.push('已审计分支发生变化或缺失，需重新审计：' + name);
   }
   for (const name of actual.keys()) {
-    if (name !== currentBranch && !expected.has(name)) errors.push('发现未纳入台账的本机分支：' + name);
+    if (name !== currentBranch && !expected.has(name) && !candidateAliases.includes(name)) errors.push('发现未纳入台账的本机分支：' + name);
   }
   return errors;
+}
+
+function readLocalBranches(root) {
+  return git(root, ['for-each-ref', '--format=%(refname:short)|%(objectname)', 'refs/heads'])
+    .split(/\r?\n/).filter(Boolean).map((line) => { const [name, head] = line.split('|'); return { name, head }; });
+}
+
+export function compareInventorySnapshots(before, after) {
+  const ordered = (items) => items.map(({ name, head }) => name + '|' + head).sort();
+  return JSON.stringify(ordered(before)) === JSON.stringify(ordered(after))
+    ? [] : ['本机分支集合在检查期间变化；重新审计后再验收'];
+}
+
+export function githubRepositoryFromPackage(packageJson) {
+  const match = /^git\+https:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\.git$/.exec(packageJson.repository?.url || '');
+  if (!match) throw new Error('只接受 package.json 明确声明的 GitHub 仓库，不接受凭据或任意主机');
+  return match[1];
+}
+
+export function parseLocalTree(output) {
+  return output.split('\0').filter(Boolean).map((row) => {
+    const match = /^(\d{6}) (blob|tree|commit) ([0-9a-f]{40})\t([\s\S]+)$/.exec(row);
+    if (!match) throw new Error('本机 Git tree 无法解析');
+    return { mode: match[1], type: match[2], sha: match[3], path: match[4] };
+  });
+}
+
+// An optional read-only mapping supplements local acceptance, never substitutes
+// remote source for it. Squash commits may differ; every tree entry must match.
+export async function verifyGithubMainMapping({ repository, expectedGithubCommit, identity, localEntries, readJson }) {
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository || '')
+    || !/^[0-9a-f]{40}$/i.test(expectedGithubCommit || '')) throw new Error('GitHub 映射缺少明确仓库或完整提交');
+  const expected = expectedGithubCommit.toLowerCase();
+  const prefix = 'repos/' + repository;
+  const before = await readJson(prefix + '/git/ref/heads/main');
+  if (before.object?.type !== 'commit' || before.object.sha !== expected) throw new Error('GitHub main 与显式预期提交不一致');
+  const commit = await readJson(prefix + '/git/commits/' + expected);
+  if (commit.sha !== expected || commit.tree?.sha !== identity.headTreeHash) throw new Error('GitHub main tree 与本机已验收源码不一致');
+  const tree = await readJson(prefix + '/git/trees/' + identity.headTreeHash + '?recursive=1');
+  if (tree.sha !== identity.headTreeHash || tree.truncated !== false || !Array.isArray(tree.tree)) throw new Error('GitHub tree 缺失、被截断或身份不符');
+  const canonical = (entries) => entries.map(({ path: file, mode, type, sha }) => JSON.stringify([file, mode, type, sha])).sort();
+  if (localEntries.length === 0 || JSON.stringify(canonical(localEntries)) !== JSON.stringify(canonical(tree.tree))) {
+    throw new Error('GitHub 与本机逐项源码路径、文件模式或 blob 哈希不一致');
+  }
+  const after = await readJson(prefix + '/git/ref/heads/main');
+  if (after.object?.type !== 'commit' || after.object.sha !== expected) throw new Error('GitHub main 在只读映射期间变化');
+  return {
+    status: 'PASS', repository, localCommit: identity.commit, githubMainCommit: expected,
+    headTreeHash: identity.headTreeHash, comparedEntries: localEntries.length,
+    sourceAuthority: 'LOCAL', published: false
+  };
+}
+
+function readGithubJson(endpoint) {
+  try {
+    return JSON.parse(execFileSync('gh', ['api', '--hostname', 'github.com', '--method', 'GET', endpoint], {
+      encoding: 'utf8', windowsHide: true, timeout: 60_000, maxBuffer: 32 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe']
+    }));
+  } catch {
+    // Do not echo authentication or network response bodies into public reports.
+    throw new Error('GitHub 只读身份查询失败；未更改本机源码或远端');
+  }
 }
 
 export async function collectContentIdentity(root) {
@@ -279,7 +360,7 @@ export function verifyBuildIdentity(identity, buildInfo) {
 export function evaluateGate({ staticErrors, evidence, strict, dirty, buildErrors = [] }) {
   const errors = [...staticErrors, ...evidence.errors];
   if (strict) {
-    if (dirty) errors.push('严格检查要求干净且已提交的候选；阶段 1 不自动提交');
+    if (dirty) errors.push('严格检查要求干净且已提交的候选');
     if (evidence.status !== 'PASS') errors.push('严格检查要求完整、同身份的实际测试证据');
     errors.push(...buildErrors);
   }
@@ -296,14 +377,14 @@ export function evaluateGate({ staticErrors, evidence, strict, dirty, buildError
 
 export function verifyExpectedCommit(expectedCommit, actualCommit, required = false) {
   if (expectedCommit === undefined && !required) return [];
-  if (!/^[0-9a-f]{40}$/i.test(expectedCommit || '')) return ['CI 检查必须显式提供有效的 --expected-commit，其他模式提供时也必须是完整 SHA'];
+  if (!/^[0-9a-f]{40}$/i.test(expectedCommit || '')) return ['检查必须显式提供有效的完整 --expected-commit SHA'];
   return expectedCommit.toLowerCase() === actualCommit ? [] : ['真实 Git HEAD 与 --expected-commit 不匹配，拒绝环境覆盖或旧提交身份'];
 }
 
-export function inspectModeConstraints({ mode = 'local', manifest, branches = [], currentBranch, expectedCommit, commit, dirty }) {
+export function inspectModeConstraints({ mode = 'local', manifest, branches = [], currentBranch, expectedCommit, commit, dirty, candidateAliases = [] }) {
   if (!['local', 'ci'].includes(mode)) throw new Error('mode 只能为 local 或 ci');
-  const errors = verifyExpectedCommit(expectedCommit, commit, mode === 'ci');
-  if (mode === 'local') errors.push(...compareBranchInventory(manifest, branches, currentBranch));
+  const errors = verifyExpectedCommit(expectedCommit, commit, true);
+  if (mode === 'local') errors.push(...compareBranchInventory(manifest, branches, currentBranch, expectedCommit, candidateAliases));
   else if (dirty) errors.push('CI 静态检查要求干净且已提交的源码');
   return errors;
 }
@@ -323,9 +404,13 @@ export function evaluateCiGate({ staticErrors, buildErrors = [] }) {
   };
 }
 
-export async function runVerification({ root = process.cwd(), evidencePath, strict = false, mode = 'local', expectedCommit } = {}) {
+export async function runVerification({ root = process.cwd(), evidencePath, strict = false, mode = 'local', expectedCommit, candidateAliases = [], githubCommit } = {}) {
   if (!['local', 'ci'].includes(mode)) throw new Error('mode 只能为 local 或 ci');
   if (mode === 'ci' && (strict || evidencePath)) throw new Error('CI 静态模式不接受 --strict 或本机 --evidence；不能冒充本机完整验收');
+  if (mode === 'ci' && candidateAliases.length) throw new Error('CI 模式不接受本机候选别名');
+  if (githubCommit !== undefined && (mode !== 'local' || !strict || !evidencePath || !/^[0-9a-f]{40}$/i.test(githubCommit))) {
+    throw new Error('GitHub 只读映射要求 local --strict、实际证据及完整 --github-commit');
+  }
   root = path.resolve(root);
   const manifest = JSON.parse(await readFile(path.join(root, MANIFEST_PATH), 'utf8'));
   const manifestErrors = validateManifest(manifest);
@@ -334,19 +419,18 @@ export async function runVerification({ root = process.cwd(), evidencePath, stri
   const headTreeHash = git(root, ['rev-parse', 'HEAD^{tree}']);
   const currentBranch = git(root, ['branch', '--show-current']);
   const dirty = Boolean(git(root, ['status', '--porcelain=v1', '--untracked-files=all']));
-  const branches = mode === 'local' ? git(root, ['for-each-ref', '--format=%(refname:short)|%(objectname)', 'refs/heads'])
-    .split(/\r?\n/).filter(Boolean).map((line) => { const [name, head] = line.split('|'); return { name, head }; }) : [];
-  const staticErrors = inspectModeConstraints({ mode, manifest, branches, currentBranch, expectedCommit, commit, dirty });
+  const branches = mode === 'local' ? readLocalBranches(root) : [];
+  const staticErrors = inspectModeConstraints({ mode, manifest, branches, currentBranch, expectedCommit, commit, dirty, candidateAliases });
   if (mode === 'local') {
-    for (const [source, label] of [[manifest.baseline.commit, '用户授权的本机重建基线'], [manifest.sourceCandidate.commit, '已提交阶段 1 完整候选']]) {
+    for (const [source, label] of [[manifest.baseline.commit, '用户授权的本机重建基线'], [manifest.sourceCandidate.commit, '已提交阶段 1 完整候选'], [manifest.integrationParent.commit, '已审计本机门禁修复来源']]) {
       try { git(root, ['merge-base', '--is-ancestor', source, commit]); }
       catch { staticErrors.push('候选没有继承' + label); }
     }
-    try {
-      if (git(root, ['rev-parse', `${manifest.sourceCandidate.commit}^{tree}`]) !== manifest.sourceCandidate.headTreeHash) {
-        staticErrors.push('已提交阶段 1 候选 tree 与台账不一致');
-      }
-    } catch { staticErrors.push('已提交阶段 1 候选 tree 无法读取'); }
+    for (const source of [manifest.sourceCandidate, manifest.integrationParent]) {
+      try {
+        if (git(root, ['rev-parse', `${source.commit}^{tree}`]) !== source.headTreeHash) staticErrors.push('已审计来源 tree 与台账不一致：' + source.branch);
+      } catch { staticErrors.push('已审计来源 tree 无法读取：' + source.branch); }
+    }
   }
   const identity = { commit, headTreeHash, ...await collectContentIdentity(root) };
   const features = await inspectFeatureSources(root, manifest);
@@ -371,6 +455,25 @@ export async function runVerification({ root = process.cwd(), evidencePath, stri
     } catch { buildErrors.push('构建信息存在但不可读取或格式无效'); }
     if (strict || buildPresent) buildErrors.push(...verifyBuildIdentity(identity, buildInfo));
   }
+  let githubMapping = { status: 'NOT_REQUESTED' };
+  if (githubCommit !== undefined) {
+    const localPrerequisite = evaluateGate({ staticErrors, evidence, strict, dirty, buildErrors });
+    if (!localPrerequisite.ok) {
+      githubMapping = { status: 'NOT_RUN_LOCAL_GATE_FAILED' };
+    } else {
+      try {
+        githubMapping = await verifyGithubMainMapping({
+          repository: githubRepositoryFromPackage(JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))),
+          expectedGithubCommit: githubCommit, identity,
+          localEntries: parseLocalTree(git(root, ['ls-tree', '-r', '-t', '-z', '--full-tree', commit])),
+          readJson: readGithubJson
+        });
+      } catch (error) {
+        githubMapping = { status: 'FAIL' };
+        staticErrors.push(error.message);
+      }
+    }
+  }
   const finalIdentity = {
     commit: git(root, ['rev-parse', 'HEAD']),
     headTreeHash: git(root, ['rev-parse', 'HEAD^{tree}']),
@@ -380,6 +483,11 @@ export async function runVerification({ root = process.cwd(), evidencePath, stri
     || currentBranch !== git(root, ['branch', '--show-current'])
     || dirty !== Boolean(git(root, ['status', '--porcelain=v1', '--untracked-files=all']))) {
     staticErrors.push('候选内容或工作树在检查期间变化；冻结并发修改后重新验证');
+  }
+  if (mode === 'local') {
+    const finalBranches = readLocalBranches(root);
+    staticErrors.push(...compareInventorySnapshots(branches, finalBranches));
+    staticErrors.push(...compareBranchInventory(manifest, finalBranches, currentBranch, expectedCommit, candidateAliases));
   }
   const localGate = mode === 'local' ? evaluateGate({ staticErrors, evidence, strict, dirty, buildErrors }) : undefined;
   const gate = mode === 'ci' ? evaluateCiGate({ staticErrors, buildErrors }) : { ...localGate, localAudit: localGate.ok ? 'PASS' : 'FAIL' };
@@ -394,6 +502,8 @@ export async function runVerification({ root = process.cwd(), evidencePath, stri
     auditedBranchCount: mode === 'local' ? manifest.branches.length : 0,
     declaredBranchCount: manifest.branches.length,
     expectedCommit: expectedCommit?.toLowerCase(),
+    candidateAliases,
+    githubMapping,
     buildAudit: buildErrors.length ? 'FAIL' : strict || buildPresent ? 'PASS' : mode === 'ci' ? 'NOT_PROVIDED' : 'NOT_CHECKED',
     identity,
     ...gate,
@@ -417,19 +527,27 @@ export function parseVerificationArguments(args) {
   let evidencePath;
   let mode = 'local';
   let expectedCommit;
+  const candidateAliases = [];
+  let githubCommit;
   for (let index = 0; index < args.length; index += 1) {
     if (args[index] === '--strict') strict = true;
     else if (args[index] === '--evidence' && args[index + 1]) evidencePath = path.resolve(args[++index]);
     else if (args[index] === '--mode' && args[index + 1]) mode = args[++index];
     else if (args[index] === '--expected-commit' && args[index + 1]) expectedCommit = args[++index];
-    else throw new Error('用法：node --import tsx scripts/verify-release-completeness.mjs [--mode local|ci] [--expected-commit <SHA>] [--evidence <仓库外文件>] [--strict]');
+    else if (args[index] === '--candidate-alias' && args[index + 1]) candidateAliases.push(args[++index]);
+    else if (args[index] === '--github-commit' && args[index + 1]) githubCommit = args[++index];
+    else throw new Error('用法：node --import tsx scripts/verify-release-completeness.mjs --expected-commit <SHA> [--mode local|ci] [--evidence <仓库外文件>] [--strict] [--candidate-alias work/<名称>] [--github-commit <main SHA>]');
   }
   if (!['local', 'ci'].includes(mode)) throw new Error('mode 只能为 local 或 ci');
   if (mode === 'ci' && (strict || evidencePath)) throw new Error('CI 静态模式不接受 --strict 或本机 --evidence');
-  if ((mode === 'ci' || expectedCommit !== undefined) && !/^[0-9a-f]{40}$/i.test(expectedCommit || '')) {
+  if (!/^[0-9a-f]{40}$/i.test(expectedCommit || '')) {
     throw new Error('必须显式提供有效的完整 --expected-commit SHA');
   }
-  return { strict, evidencePath, mode, expectedCommit };
+  if (mode === 'ci' && candidateAliases.length) throw new Error('CI 模式不接受本机候选别名');
+  if (githubCommit !== undefined && (mode !== 'local' || !strict || !evidencePath || !/^[0-9a-f]{40}$/i.test(githubCommit))) {
+    throw new Error('GitHub 只读映射要求 local --strict、实际证据及完整 --github-commit');
+  }
+  return { strict, evidencePath, mode, expectedCommit, candidateAliases, githubCommit };
 }
 
 async function main() {
