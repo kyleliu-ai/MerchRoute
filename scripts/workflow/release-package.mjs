@@ -39,10 +39,12 @@ export async function prepareInstalledRelease(root,home,config) {
   const env=Object.fromEntries(Object.entries(process.env).filter(([key])=>/^(PATH|PATHEXT|SYSTEMROOT|WINDIR|COMSPEC|TEMP|TMP|HOME|USERPROFILE|LOCALAPPDATA|APPDATA)$/i.test(key)));
   env.PATH=path.dirname(config.nodePath)+path.delimiter+(env.PATH||env.Path||'');
   execFileSync(config.nodePath,[npmCli,'ci','--omit=dev','--no-audit','--no-fund'],{cwd:target,env,windowsHide:true,stdio:'pipe',maxBuffer:16*1024*1024});
+  const files=await inventoryRelease(target),programNames=new Set([...source.files,...prebuilt].map(x=>x.path));
+  if(files.some(x=>!programNames.has(x.path)&&!x.path.split('/').includes('node_modules')))throw new Error('Dependency installation created an undeclared program file');
   const manifest={schemaVersion:1,kind:'MERCHROUTE_INSTALLED_RELEASE',productVersion:version,
     sourceCommit:source.identity.commit,sourceTree:source.identity.headTreeHash,builtAt:build.builtAt,
     platform:process.platform,arch:process.arch,nodeVersion:process.versions.node,
-    sourceFiles:source.files.map(x=>({path:x.path,mode:x.mode,sha:gitBlob(x.data)})),files:await inventoryRelease(target)};
+    sourceFiles:source.files.map(x=>({path:x.path,mode:x.mode,sha:gitBlob(x.data)})),files};
   await atomicJson(path.join(target,INSTALLED_MANIFEST),manifest);
   const manifestSha256=digest(await readFile(path.join(target,INSTALLED_MANIFEST)));
   await verifyInstalledRelease(target,manifestSha256);

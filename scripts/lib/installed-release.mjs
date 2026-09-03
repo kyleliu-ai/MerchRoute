@@ -39,12 +39,12 @@ export async function inventoryRelease(root) {
       if (names.has(key)) throw new Error('Case-colliding release path');
       names.add(key);
       if (name === INSTALLED_MANIFEST) continue;
-      if (item.name === '.git' || (/^\.env(?:$|[._-])/.test(item.name) && name !== '.env.example')) throw new Error('Runtime package contains repository state or environment data');
+      if (item.name.toLowerCase() === '.git' || (/^\.env(?:$|[._-])/i.test(item.name) && name !== '.env.example')) throw new Error('Runtime package contains repository state or environment data');
       const absolute = path.join(root, name);
       const info = await lstat(absolute);
       if (info.isSymbolicLink()) {
         const target = await realpath(absolute);
-        if (!name.startsWith('node_modules/') || !isWithin(root, target)) throw new Error('External or non-dependency release link');
+        if (!name.split('/').includes('node_modules') || !isWithin(root, target)) throw new Error('External or non-dependency release link');
         files.push({ path:name, kind:'link', target:path.relative(root, target).split(path.sep).join('/') });
       } else if (info.isDirectory()) await visit(name);
       else if (info.isFile()) files.push({ path:name, kind:'file', bytes:info.size, sha256:digest(await readFile(absolute)) });

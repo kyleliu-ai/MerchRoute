@@ -30,13 +30,21 @@ export async function publishBatch(root,home,config,batch,options){
     requireApply(options);
     git(root,'add','--',...files);git(root,'diff','--cached','--check');
     const scanRoot=await mkdtemp(path.join(home,'precommit-scan-'));
-    for(const file of git(root,'ls-files','-z').split('\0').filter(Boolean)){
-      if(isForbiddenPackagePath(file))throw new Error('Forbidden tracked path: '+file);
-      const data=execFileSync('git',['-C',root,'show',':'+file],{maxBuffer:64*1024*1024,windowsHide:true});
-      const target=path.join(scanRoot,file);await mkdir(path.dirname(target),{recursive:true});await writeFile(target,data,{flag:'wx'});
+    const indexTree=git(root,'write-tree');
+    const entries=git(root,'ls-tree','-r','-z',indexTree).split('\0').filter(Boolean).map(line=>{const split=line.indexOf('\t');const [mode,type,sha]=line.slice(0,split).split(' ');return {path:line.slice(split+1),mode,type,sha};});
+    const objects=execFileSync('git',['-C',root,'cat-file','--batch'],{input:entries.map(x=>x.sha).join('\n')+'\n',maxBuffer:512*1024*1024,windowsHide:true});
+    let offset=0;
+    for(const entry of entries){
+      if(isForbiddenPackagePath(entry.path)||entry.type!=='blob'||!['100644','100755'].includes(entry.mode))throw new Error('Forbidden tracked path: '+entry.path);
+      const end=objects.indexOf(10,offset),[sha,type,sizeText]=objects.subarray(offset,end).toString('ascii').split(' '),size=Number(sizeText);
+      if(end<0||sha!==entry.sha||type!=='blob'||!Number.isSafeInteger(size)||size<0||objects[end+size+1]!==10)throw new Error('Incomplete index scan');
+      const data=objects.subarray(end+1,end+1+size);offset=end+size+2;
+      const target=path.join(scanRoot,entry.path);await mkdir(path.dirname(target),{recursive:true});await writeFile(target,data,{flag:'wx'});
     }
+    if(offset!==objects.length||git(root,'write-tree')!==indexTree)throw new Error('Index changed during security scan');
     const scan=execFileSync(config.gitleaksPath,['dir',scanRoot,'--redact=100','--no-banner','--no-color'],{encoding:'utf8',windowsHide:true,stdio:['ignore','pipe','pipe']});
     await writeFile(path.join(home,'precommit-scan.log'),scan,{mode:0o600});
+    if(git(root,'write-tree')!==indexTree)throw new Error('Index changed after security scan');
     git(root,'commit','-m',options.message);
     return {committed:sourceIdentity(root).commit,pushed:false,next:'Run full verification, then publish again'};
   }
