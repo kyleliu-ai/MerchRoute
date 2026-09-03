@@ -163,18 +163,20 @@ chmod +x deployment/scripts/bootstrap-macos.sh
 
 ## 开发环境快速启动
 
-已有依赖环境、只需开发 MerchRoute 主程序时：
+采用一个固定开发目录、一个活动批次、一个写入任务。不要再为每次对话创建 worktree。正式服务使用独立运行包，开发目录不是正式服务入口。
 
 ```bash
-git clone https://github.com/kyleliu-ai/MerchRoute.git
-cd MerchRoute
-npm ci
-npm run versions:check
-npm run build
-npm start
+npm run workflow -- status
+npm run workflow -- begin --name example-batch --task-id example-task --baseline <已确认的本机提交> --dry-run
+# 用户授权并完成外部目录/数据库登记后：
+npm run dev
 ```
 
-默认地址为 <http://127.0.0.1:4173>。数据库模块需要 `DATABASE_URL`；新部署应把环境文件放在仓库外，并通过 `MERCHROUTE_ENV_FILE` 指向它。仓库根目录 `.env.runtime` 只作为旧安装兼容回退。
+开发前端为 `127.0.0.1:5173`，仅代理开发后端 `127.0.0.1:4184`；E2E 使用 `4183`，正式服务仍为 `4173`。端口冲突时停止。开发使用专用空库 `merchroute_dev` / `merchroute_dev_app`、合成数据及独立媒体目录，默认阻断真实外部业务请求，不读取生产环境文件。
+
+本批源码版本为 **0.1.2 候选**，不代表 GitHub 已正式发布或本机正式服务已更新。三种状态分别报告：开发完成、GitHub 已同步、正式运行已更新。完整操作与迁移/回滚门禁见[单人串行开发说明](docs/SINGLE_DEVELOPER_WORKFLOW.zh-CN.md)。
+
+生产数据库、全局 n8n、Jimeng、媒体和 Profile 不随源码迁移。生产环境仍通过仓库外 `MERCHROUTE_ENV_FILE` 配置；`.env.runtime` 仅用于旧安装兼容。未经二次确认，不允许从 GitHub 覆盖本机权威内容。
 
 ## n8n 与 Jimeng
 

@@ -1,9 +1,9 @@
 {
   "schemaVersion": 2,
-  "candidateId": "merchroute-solo-development-migration",
+  "candidateId": "merchroute-review-delivery-reliability-20260903-1758",
   "baseline": {
-    "commit": "c20c3a2ca98520b3f46ee3830428f350b3fedf94",
-    "status": "USER_CONFIRMED_LOCAL_RELEASE_V0_1_1"
+    "commit": "8a52c7760032167d86b26f36b045a849a6b0569f",
+    "status": "USER_AUTHORIZED_RECONSTRUCTION_NOT_ACCEPTED_RELEASE"
   },
   "auditedAt": "2026-09-03",
   "sourceCandidate": {
@@ -19,18 +19,12 @@
     "status": "USER_AUTHORIZED_GATE_REPAIR_NOT_ACCEPTED_RELEASE"
   },
   "policy": {
-    "branchInventory": "ARCHIVED_WITH_ACTIVE_BATCH",
     "sourceAuthority": "LOCAL",
     "defaultMode": "local",
     "publication": "GITHUB_DRAFT_PR_ONLY_NOT_LOCAL_PUBLICATION",
     "candidateBinding": "EXPLICIT_EXPECTED_COMMIT",
     "remoteReadRequired": false
   },
-  "historicalAudit": {
-    "path": "config/release-source-audit.json",
-    "sha256": "92012880075cfcdb4f817c6085ab6b121fcfd06d59a88ea61b2388532a14a9cf"
-  },
-  "completedBatches": [],
   "branches": [
     {
       "name": "agent/docs-workflow-parameter-options",
@@ -614,15 +608,6 @@
         },
         {
           "path": "scripts/verify-release-completeness.test.mjs"
-        },
-        {
-          "path": "scripts/workflow.mjs"
-        },
-        {
-          "path": "scripts/workflow/workflow.test.mjs"
-        },
-        {
-          "path": "scripts/lib/installed-release.mjs"
         }
       ],
       "checkIds": [
@@ -630,7 +615,7 @@
         "gitleaks",
         "diff-check"
       ],
-      "sourceDocumentSha256": "72d285b11fb4acae0057daef254829f3c2c000bc50a0abd62dcb4227c4d0adeb"
+      "sourceDocumentSha256": "106d42a6e9b461d3a36e79f3c10fff5f3d5068efddada5e1a2a61f48ba931382"
     },
     {
       "id": "review-delivery-reliability",

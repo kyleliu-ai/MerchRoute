@@ -4,7 +4,7 @@ import path from 'node:path';
 import { resolveCommand } from './run-ci-check.mjs';
 
 const suite = process.argv[2] === '--suite' ? process.argv[3] : undefined;
-if (process.env.GITHUB_ACTIONS !== 'true' || !['jimeng', 'n8n-runtime'].includes(suite)) throw new Error('Fixed CI regression suite required');
+if ((process.env.GITHUB_ACTIONS !== 'true' && process.env.MERCHROUTE_LOCAL_REGRESSION !== '1') || !['jimeng', 'n8n-runtime'].includes(suite)) throw new Error('Fixed CI or explicitly requested local regression suite required');
 async function run(argv) {
   const resolved = await resolveCommand(argv);
   await new Promise((resolve, reject) => {

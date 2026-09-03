@@ -102,9 +102,10 @@ test('两种模式共用不可删减的 13 项关键功能与本机 11 类检查
 });
 
 test('当前候选以真实提交绑定；历史移动、缺失或未知新提交仍阻断', () => {
+  const legacyManifest=structuredClone(manifest);delete legacyManifest.policy.branchInventory;
   const branches = manifest.branches.map(({ name, head }) => ({ name, head }));
   branches.push({ name: candidateBranch, head: exampleIdentity.commit });
-  const inspect = (items, current = candidateBranch, expected = exampleIdentity.commit) => compareBranchInventory(manifest, items, current, expected);
+  const inspect = (items, current = candidateBranch, expected = exampleIdentity.commit) => compareBranchInventory(legacyManifest, items, current, expected);
   assert.deepEqual(inspect(branches), []);
   const moved = structuredClone(branches);
   moved[0].head = 'd'.repeat(40);
@@ -386,7 +387,9 @@ test('CI 不依赖本机 refs 或分支名，但错误真实 HEAD 与 dirty 源�
   assert.match(inspectModeConstraints({ ...input, commit: 'f'.repeat(40) }).join(' '), /真实 Git HEAD/);
   assert.match(inspectModeConstraints({ ...input, dirty: true }).join(' '), /干净且已提交/);
   assert.match(inspectModeConstraints({ ...input, expectedCommit: undefined }).join(' '), /expected-commit/);
-  assert.match(inspectModeConstraints({ ...input, mode: 'local', currentBranch: candidateBranch }).join(' '), /分支发生变化或缺失/);
+  const legacyManifest=structuredClone(manifest);delete legacyManifest.policy.branchInventory;
+  assert.match(inspectModeConstraints({ ...input, manifest:legacyManifest, mode: 'local', currentBranch: candidateBranch }).join(' '), /分支发生变化或缺失/);
+  assert.match(inspectModeConstraints({ ...input, mode: 'local', currentBranch: candidateBranch }).join(' '), /expected-commit/);
   assert.deepEqual(verifyExpectedCommit(undefined, exampleIdentity.commit), []);
   assert.notDeepEqual(verifyExpectedCommit(exampleIdentity.commit, 'f'.repeat(40)), []);
 });

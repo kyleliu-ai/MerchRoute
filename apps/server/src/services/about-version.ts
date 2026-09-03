@@ -52,6 +52,7 @@ export type AboutBuildInfo = {
   scopeVersion: number;
   fingerprints: Record<ContentScope, string>;
   fileCounts: Record<ContentScope, number>;
+  buildChannel?: 'candidate' | 'release';
 };
 
 export type AboutVersionInfo = {
@@ -63,6 +64,8 @@ export type AboutVersionInfo = {
     commitSha?: string;
     builtAt?: string;
     dirty?: boolean;
+    buildChannel?: 'candidate' | 'release';
+    releaseTag?: string;
   };
   available: AboutAvailableVersion | null;
   syncStatus: AboutSyncStatus;
@@ -180,12 +183,13 @@ export function createAboutVersionService(options: AboutVersionServiceOptions): 
     }
 
     const buildInfo = await readBuildInfo().catch(() => undefined);
-    const current = {
+    const current: AboutVersionInfo['current'] = {
       productVersion: buildInfo?.productVersion ?? productVersion,
       configVersion: buildInfo?.configVersion ?? options.configVersion,
       ...(buildInfo?.commitSha ? { commitSha: buildInfo.commitSha } : {}),
       ...(buildInfo?.builtAt ? { builtAt: buildInfo.builtAt } : {}),
-      ...(buildInfo ? { dirty: buildInfo.dirty } : {})
+      ...(buildInfo ? { dirty: buildInfo.dirty } : {}),
+      ...(buildInfo?.buildChannel ? { buildChannel: buildInfo.buildChannel } : {})
     };
 
     let localSnapshot: ContentFingerprintSnapshot | undefined;
@@ -196,6 +200,11 @@ export function createAboutVersionService(options: AboutVersionServiceOptions): 
       localError = safeReason(error, '本机源码指纹无法计算');
     }
     const runtimeStatus = resolveRuntimeStatus(buildInfo, localSnapshot, contract.schemaVersion);
+    if (process.env.MERCHROUTE_INSTALLED_MANIFEST_SHA256 && runtimeStatus === 'CURRENT'
+      && process.env.MERCHROUTE_RELEASE_TAG === `v${current.productVersion}`) {
+      current.buildChannel = 'release';
+      current.releaseTag = process.env.MERCHROUTE_RELEASE_TAG;
+    }
     let available: AboutAvailableVersion | null = null;
 
     const checkRemote = async (githubJson: GithubJson): Promise<AboutVersionInfo> => {
@@ -502,6 +511,7 @@ function isBuildInfo(value: unknown): value is AboutBuildInfo {
   if (!value || typeof value !== 'object') return false;
   const candidate = value as Partial<AboutBuildInfo>;
   return candidate.schemaVersion === BUILD_INFO_SCHEMA_VERSION
+    && (candidate.buildChannel === undefined || candidate.buildChannel === 'candidate' || candidate.buildChannel === 'release')
     && typeof candidate.productVersion === 'string'
     && typeof candidate.configVersion === 'string'
     && typeof candidate.builtAt === 'string'

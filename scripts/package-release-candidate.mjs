@@ -179,7 +179,8 @@ export async function validateOutputDirectory(root, output, additionalRepository
 }
 
 export function validateBuildInfo(identity, info) {
-  const allowedKeys = ['schemaVersion', 'productVersion', 'configVersion', 'builtAt', 'commitSha', 'dirty', 'scopeVersion', 'fingerprints', 'fileCounts'];
+  const allowedKeys = ['schemaVersion', 'productVersion', 'configVersion', 'builtAt', 'commitSha', 'dirty', 'scopeVersion', 'fingerprints', 'fileCounts', 'buildChannel'];
+  if (info?.buildChannel !== undefined && info.buildChannel !== 'candidate') throw new Error('Build must remain a candidate until an independently verified release activation');
   if (!info || info.schemaVersion !== 1 || Object.keys(info).some((key) => !allowedKeys.includes(key))) throw new Error('Build metadata is invalid or contains unreviewed fields');
   if (info.commitSha !== identity.commit || info.dirty !== false || info.scopeVersion !== identity.scopeVersion
     || !scopes.every((scope) => info.fingerprints?.[scope] === identity.fingerprints[scope] && info.fileCounts?.[scope] === identity.fileCounts[scope])) {
