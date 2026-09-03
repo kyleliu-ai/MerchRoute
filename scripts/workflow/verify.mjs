@@ -5,11 +5,12 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { captureCommand, resolveCommand } from '../run-ci-check.mjs';
 import { parsePlaywrightReport, parseTestLog } from '../ci-evidence-contract.mjs';
-import { atomicJson, sourceIdentity } from './state.mjs';
+import { atomicJson, sourceIdentity, readJson } from './state.mjs';
 import { digest } from '../lib/installed-release.mjs';
 import { collectSourceFromHead } from '../package-release-candidate.mjs';
 import { runVerification, REQUIRED_LOCAL_CHECK_IDS } from '../verify-release-completeness.mjs';
 import { verifyDevelopmentDatabase } from './development-database.mjs';
+import { candidateSnapshot, verifyAcceptedCandidate } from './candidate-acceptance.mjs';
 
 export function testEnvironment(inherited, databaseUrl, cleanupUrl) {
   const allowed=new Set(['PATH','PATHEXT','SYSTEMROOT','WINDIR','COMSPEC','TEMP','TMP','HOME','USERPROFILE','LOCALAPPDATA','APPDATA','LANG','LC_ALL']);
@@ -62,6 +63,7 @@ export async function verifyBatch(root,home,options) {
     await run('deployment-verify',['npm','run','deployment:verify'],env);
     return {ok:true,level:'quick',identity,records,publishable:false};
   }
+  let acceptedCandidate;
   await withTestPostgres(async(database,cleanup)=>{
     const env=testEnvironment(process.env,database,cleanup);
     env.PLAYWRIGHT_JSON_OUTPUT_FILE=path.join(out,'playwright.json');
@@ -72,6 +74,8 @@ export async function verifyBatch(root,home,options) {
     await run('e2e',['npm','run','test:e2e','--','--reporter=list,json'],env,'e2e');
     await run('jimeng',['node','--import','tsx','scripts/ci-regression-tests.mjs','--suite','jimeng'],{...env,MERCHROUTE_LOCAL_REGRESSION:'1'},'tests');
     await run('isolated-runtime',['node','--import','tsx','scripts/isolated-runtime-package.mjs',home],env);
+    acceptedCandidate=candidateSnapshot(await readJson(path.join(home,'candidate.json')));
+    if(acceptedCandidate.sourceCommit!==identity.commit||acceptedCandidate.sourceTree!==identity.tree)throw new Error('Runtime acceptance belongs to another source');
   });
   const env=testEnvironment(process.env,undefined,undefined);
   await run('release-verifier-tests',['node','--import','tsx','--test','scripts/verify-release-completeness.test.mjs'],env,'tests');
@@ -96,7 +100,8 @@ export async function verifyBatch(root,home,options) {
   const strict=await runVerification({root,evidencePath,strict:true,expectedCommit:identity.commit});await atomicJson(path.join(out,'strict-result.json'),strict);
   if(!strict.ok)throw new Error('Strict retained-feature release gate failed: '+strict.errors.join('; '));
   if(JSON.stringify(sourceIdentity(root))!==JSON.stringify(identity))throw new Error('Candidate changed during verification');
-  const record={schemaVersion:1,ok:true,level:'full',identity,records,strictResult:path.join(out,'strict-result.json'),strictSha256:digest(await readFile(path.join(out,'strict-result.json'))),completedAt:new Date().toISOString(),publishable:true};
+  await verifyAcceptedCandidate(await readJson(path.join(home,'candidate.json')),acceptedCandidate);
+  const record={schemaVersion:1,ok:true,level:'full',identity,candidate:acceptedCandidate,records,strictResult:path.join(out,'strict-result.json'),strictSha256:digest(await readFile(path.join(out,'strict-result.json'))),completedAt:new Date().toISOString(),publishable:true};
   await atomicJson(path.join(out,'result.json'),record);
   await atomicJson(path.join(home,'verified.json'),record);
   return record;

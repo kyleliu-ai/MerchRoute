@@ -10,6 +10,7 @@ import { switchRelease } from './release-transaction.mjs';
 import { inspectBusinessIdle } from './business-gate.mjs';
 import { verifyLegacyRelease } from './legacy-release.mjs';
 import { probeReadOnlyPages } from './read-only-pages.mjs';
+import { assertAcceptedCandidate } from './candidate-acceptance.mjs';
 
 export async function releaseCommand(command,{root,home,config,options}) {
   if(command==='prepare'){
@@ -32,7 +33,8 @@ export async function releaseCommand(command,{root,home,config,options}) {
     const saved=await readJson(path.join(home,'previous-release.json'));candidate=saved;
     if(approval.noBusinessStateRestore!==true)throw new Error('Rollback must not restore historical database or review state');
   }else{
-    await requireVerified(root,home);
+    const verified=await requireVerified(root,home);
+    assertAcceptedCandidate(candidate,verified.record.candidate);
     const publication=await readJson(path.join(home,'publication.json'));
     const pr=githubJson(config,'repos/'+config.github.repository+'/pulls/'+publication.number);
     const release=githubJson(config,'repos/'+config.github.repository+'/releases/tags/v'+candidate.productVersion);

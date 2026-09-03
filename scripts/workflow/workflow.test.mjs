@@ -12,6 +12,7 @@ import { inventoryRelease, verifyInstalledRelease, digest, gitBlob, safeRelative
 import { switchRelease } from './release-transaction.mjs';
 import { assertNoActivity } from './business-gate.mjs';
 import { validateManifest, compareBranchInventory } from '../verify-release-completeness.mjs';
+import { candidateSnapshot, verifyAcceptedCandidate } from './candidate-acceptance.mjs';
 
 async function temporary(t){const dir=await realpath(await mkdtemp(path.join(os.tmpdir(),'merchroute-workflow-test-')));t.after(()=>rm(dir,{recursive:true,force:true}));return dir;}
 async function fixture(t){
@@ -84,6 +85,14 @@ test('Git-free release verification reads actual files and rejects missing/extra
   await rm(path.join(root,'apps/server/dist/build-info.json'));await assert.rejects(verifyInstalledRelease(root,pin),/missing/);
   await writeFile(path.join(root,'installed-release.json'),'{}');await assert.rejects(verifyInstalledRelease(root,pin),/identity changed/);
 });
+test('accepted runtime artifacts are re-read and a modified archive blocks publication',async t=>{
+  const {root,manifest,pin}=await installedFixture(t),artifactRoot=await temporary(t);
+  const bytes=Buffer.from('synthetic archive');await writeFile(path.join(artifactRoot,'source.zip'),bytes);
+  const candidate={id:'fixture',productVersion:manifest.productVersion,sourceCommit:manifest.sourceCommit,sourceTree:manifest.sourceTree,root,artifactRoot,manifestSha256:pin,artifacts:[{name:'source.zip',sha256:digest(bytes)}]};
+  const accepted=candidateSnapshot(candidate);await verifyAcceptedCandidate(candidate,accepted);
+  await writeFile(path.join(artifactRoot,'source.zip'),'modified archive');
+  await assert.rejects(verifyAcceptedCandidate(candidate,accepted),/artifact changed/);
+});
 test('Git-free package forbids path escapes, old-directory dependencies and Git state',async t=>{
   for(const name of ['../outside','C:/private','a\\b','/root','a/../b','a//b'])assert.throws(()=>safeRelative(name),/Unsafe/);
   const {root}=await installedFixture(t),external=await temporary(t);await mkdir(path.join(root,'node_modules'));
@@ -97,6 +106,13 @@ test('release transaction requires both probes and never accepts a failed start'
 });
 test('active or unknown business state blocks release and rollback',()=>{
   assertNoActivity({download:0,review:0});for(const values of [{},{download:1},{unknown:null},{unknown:NaN}])assert.throws(()=>assertNoActivity(values),/blocked/);
+});
+test('automatic pre-acceptance rollback must pass both restored-runtime probes',async()=>{
+  const calls=[];
+  await assert.rejects(switchRelease({previous:{id:'old'},candidate:{id:'new'},check:async()=>{},stop:async()=>{},bind:async()=>{},
+    start:async b=>{if(b.id==='new')throw Error('new start failed');return {pid:2};},
+    probe:async(b,_running,cycle)=>calls.push(b.id+':'+cycle),accept:async()=>calls.push('accept'),rollbackCheck:async()=>{},journal:async r=>calls.push(r.state)}),/new start failed/);
+  assert.deepEqual(calls.slice(-3),['old:1','old:2','ROLLED_BACK']);assert.equal(calls.includes('accept'),false);
 });
 test('historical audit retains thirty source branches and thirteen feature groups without fake local refs',async()=>{
   const root=path.resolve(import.meta.dirname,'../..');const manifest=JSON.parse(await readFile(path.join(root,'config/release-features.json'))),historical=await readFile(path.join(root,manifest.historicalAudit.path));

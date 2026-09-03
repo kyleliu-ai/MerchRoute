@@ -11,6 +11,25 @@ import { verifyDevelopmentDatabase } from './development-database.mjs';
 import { verifyLegacyRelease } from './legacy-release.mjs';
 import { testEnvironment } from './verify.mjs';
 import { probeReadOnlyPages } from './read-only-pages.mjs';
+import { candidateSnapshot, assertAcceptedCandidate } from './candidate-acceptance.mjs';
+import { switchRelease } from './release-transaction.mjs';
+
+test('acceptance pins the exact package and artifacts, not only the source commit',()=>{
+  const candidate={id:'fixture',productVersion:'0.1.2',root:path.resolve('fixture-release'),artifactRoot:path.resolve('fixture-artifacts'),sourceCommit:'a'.repeat(40),sourceTree:'b'.repeat(40),manifestSha256:'c'.repeat(64),artifacts:[{name:'source.zip',sha256:'d'.repeat(64)}]};
+  const accepted=candidateSnapshot(candidate);assert.deepEqual(assertAcceptedCandidate(candidate,accepted),accepted);
+  assert.throws(()=>assertAcceptedCandidate({...candidate,manifestSha256:'e'.repeat(64)},accepted),/accepted build/);
+  assert.throws(()=>assertAcceptedCandidate({...candidate,artifacts:[{name:'source.zip',sha256:'e'.repeat(64)}]},accepted),/accepted build/);
+  assert.throws(()=>assertAcceptedCandidate(candidate,undefined),/missing/);
+});
+
+for(const failure of ['accept','journal'])test('acceptance '+failure+' failure cannot roll back beneath a possibly committed record',async()=>{
+  const calls=[];
+  const adapters={previous:{id:'old'},candidate:{id:'new'},check:async()=>{},stop:async b=>calls.push('stop:'+b.id),bind:async b=>calls.push('bind:'+b.id),start:async()=>({pid:1}),probe:async()=>{},
+    accept:async()=>{calls.push('accepted-write');if(failure==='accept')throw Error('accept failed');},
+    journal:async r=>{calls.push(r.state);if(failure==='journal'&&r.state==='ACCEPTED')throw Error('journal failed');},rollbackCheck:async()=>calls.push('rollback')};
+  await assert.rejects(switchRelease(adapters),/failed/);
+  assert.equal(calls.includes('rollback'),false);assert.equal(calls.includes('bind:old'),false);assert.equal(calls.at(-1),'RECOVERY_REQUIRED');
+});
 
 test('runtime page probes request the browser HTML contract and reject non-page responses',async()=>{
   const seen=[];

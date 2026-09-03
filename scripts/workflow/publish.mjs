@@ -5,6 +5,7 @@ import { git, readJson, sourceIdentity, atomicJson, requireApply, assertExternal
 import { isForbiddenPackagePath } from '../package-release-candidate.mjs';
 import { digest } from '../lib/installed-release.mjs';
 import { verifyDevelopmentDatabase } from './development-database.mjs';
+import { verifyAcceptedCandidate } from './candidate-acceptance.mjs';
 
 export function github(config,args){return execFileSync(config.githubCli||'gh',args,{encoding:'utf8',windowsHide:true,stdio:['ignore','pipe','pipe'],maxBuffer:32*1024*1024}).trim();}
 export function githubJson(config,endpoint){return JSON.parse(github(config,['api','--method','GET',endpoint]));}
@@ -17,6 +18,8 @@ export async function requireVerified(root,home){
   for(const id of required){const entry=record.records.find(x=>x.id===id);if(!entry||entry.exitCode!==0||digest(await readFile(entry.log))!==entry.sha256)throw new Error('Verification evidence missing or changed: '+id);}
   const strict=await readFile(record.strictResult);
   if(digest(strict)!==record.strictSha256||!JSON.parse(strict).releaseReady||JSON.parse(strict).identity.commit!==identity.commit)throw new Error('Strict retained-feature acceptance is missing or changed');
+  if(record.candidate?.sourceCommit!==identity.commit||record.candidate?.sourceTree!==identity.tree)throw new Error('Accepted runtime build does not match current source');
+  await verifyAcceptedCandidate(await readJson(path.join(home,'candidate.json')),record.candidate);
   return {identity,record};
 }
 export async function publishBatch(root,home,config,batch,options){
