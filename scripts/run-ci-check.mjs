@@ -4,6 +4,7 @@ import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { collectContentIdentity } from './verify-release-completeness.mjs';
+import { failureDiagnostics } from './ci-failure-diagnostics.mjs';
 import { CI_CHECKS, assertCommand, assertOutside, identityEqual, parsePlaywrightReport, parseTestLog, publicCommand, validatePackageContract } from './ci-evidence-contract.mjs';
 
 const sha256 = (value) => createHash('sha256').update(value).digest('hex');
@@ -153,12 +154,22 @@ export async function runCiCheck({ root = process.cwd(), id, expectedCommit, rec
   if (result.oversized) inspected.problems.push('Command log exceeded the bounded capture limit');
   try { if (!identityEqual(identity, await readCiIdentity(root, expectedCommit))) inspected.problems.push('Source changed during check'); }
   catch { inspected.problems.push('Source changed or became dirty during check'); }
+  let diagnostics;
+  if (inspected.problems.length) {
+    let report;
+    if (check.kind === 'e2e') {
+      try { report = JSON.parse(await readFile(path.join(rawDirectory, 'playwright-results.json'), 'utf8')); } catch { /* The gate already rejects missing evidence. */ }
+    }
+    diagnostics = failureDiagnostics(output.toString('utf8'), {
+      sourceFiles: git(root, ['ls-tree', '-r', '--name-only', '-z', 'HEAD']).split('\0'), report
+    });
+  }
   const record = {
     schemaVersion: 1, id, job: check.job, platform: process.platform,
     runId: env.GITHUB_RUN_ID, runAttempt: env.GITHUB_RUN_ATTEMPT,
     identity, command: publicCommand(id, expectedCommit), workingDirectory: id === 'gitleaks-source' ? 'CONTROLLED_HEAD_SNAPSHOT' : 'CHECKOUT', startedAt, completedAt: new Date().toISOString(),
     exitCode: result.exitCode, logSha256: sha256(output), logBytes: output.length,
-    rawLogPublished: false, summary: inspected.summary,
+    rawLogPublished: false, summary: inspected.summary, ...(diagnostics ? { diagnostics } : {}),
     status: inspected.problems.length ? 'FAIL' : 'PASS', problems: inspected.problems
   };
   await writeFile(path.join(recordDirectory, id + '.json'), JSON.stringify(record, null, 2) + '\n', { flag: 'wx', mode: 0o600 });

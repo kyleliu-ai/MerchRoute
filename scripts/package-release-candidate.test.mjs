@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -50,9 +50,14 @@ async function sourceFixture(t) {
     '.github/workflows/check.yml': 'name: fixture\n'
   };
   for (const [name, data] of Object.entries(entries)) await put(root, name, data);
+  // Git's index bit alone leaves the POSIX worktree dirty. Exercise real file
+  // permissions as well; Windows still needs the explicit index bit below.
+  if (process.platform !== 'win32') await chmod(path.join(root, 'scripts/执行.sh'), 0o755);
   git(root, 'add', '--', ...Object.keys(entries));
   git(root, 'update-index', '--chmod=+x', 'scripts/执行.sh');
   git(root, '-c', 'user.name=Package Fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'Disposable packaging fixture');
+  assert.equal(git(root, 'status', '--porcelain=v1'), '', 'Fixture must start clean on every OS');
+  if (process.platform !== 'win32') assert.equal((await stat(path.join(root, 'scripts/执行.sh'))).mode & 0o111, 0o111);
   return root;
 }
 async function buildFixture(root, identity) {
