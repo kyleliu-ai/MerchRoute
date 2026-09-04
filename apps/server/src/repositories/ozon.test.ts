@@ -184,6 +184,95 @@ describe('OZON shared preparation recheck admission', () => {
   });
 });
 
+describe('OZON automatic preparation manual-success reconciliation CAS', () => {
+  const requestId = '17000000-0000-5000-8000-000000000170';
+  const planHash = `sha256:${'a'.repeat(64)}`;
+  const baseRow = {
+    id: '5f848e98-f28a-4bcc-8f1d-2fab1bae0b7a',
+    sku: '0000170',
+    state: 'CANCELLED',
+    source: 'AUTO',
+    task_kind: 'SHARED_PREPARATION',
+    store_alias: 'default',
+    offer_ids: [],
+    product_links: [],
+    stage_states: {},
+    retry_count: 0,
+    row_version: 8,
+    payload: {
+      multistorePreparation: true,
+      manualSuccessReconciliation: {
+        requestId,
+        planHash,
+        appliedAt: '2026-09-04T02:10:00.000Z',
+        targetStores: []
+      }
+    },
+    created_at: '2026-09-04T01:00:00.000Z',
+    updated_at: '2026-09-04T02:10:00.000Z'
+  };
+
+  it('returns the existing marker idempotently without touching listing or publication rows', async () => {
+    const query = vi.fn(async (sqlInput: unknown) => {
+      const sql = String(sqlInput);
+      if (sql.includes('SELECT sku FROM ozon_publish_jobs')) return { rows: [{ sku: baseRow.sku }] };
+      if (sql.includes('pg_advisory_xact_lock')) return { rows: [] };
+      if (sql.includes('SELECT * FROM ozon_publish_jobs WHERE id=$1 FOR UPDATE')) return { rows: [baseRow] };
+      throw new Error(`unexpected idempotent reconciliation query: ${sql}`);
+    });
+    const repository = new OzonRepository('postgres://not-used');
+    Object.defineProperty(repository, 'transaction', {
+      value: async (operation: (client: unknown) => Promise<unknown>) => operation({ query })
+    });
+
+    await expect(repository.reconcileAutomaticPreparationToManualSuccess({
+      jobId: baseRow.id,
+      expectedJobRowVersion: 7,
+      expectedListingRowVersion: 11,
+      expectedListingRevision: 5,
+      eligibilityAt: '2026-09-04T02:00:00.000Z',
+      requestId,
+      planHash,
+      targetStores: []
+    })).resolves.toMatchObject({
+      job: { id: baseRow.id, state: 'CANCELLED', rowVersion: 8 },
+      reconciliation: { requestId, planHash, appliedAt: '2026-09-04T02:10:00.000Z' }
+    });
+    expect(query.mock.calls.some(([sql]) => /ozon_listing_drafts|ozon_store_publications|^\s*UPDATE\b/i.test(String(sql)))).toBe(false);
+  });
+
+  it('rejects a stale job rowVersion before reading manual listing evidence', async () => {
+    const staleRow = {
+      ...baseRow,
+      state: 'NEEDS_ATTENTION',
+      payload: { multistorePreparation: true }
+    };
+    const query = vi.fn(async (sqlInput: unknown) => {
+      const sql = String(sqlInput);
+      if (sql.includes('SELECT sku FROM ozon_publish_jobs')) return { rows: [{ sku: staleRow.sku }] };
+      if (sql.includes('pg_advisory_xact_lock')) return { rows: [] };
+      if (sql.includes('SELECT * FROM ozon_publish_jobs WHERE id=$1 FOR UPDATE')) return { rows: [staleRow] };
+      throw new Error(`unexpected stale reconciliation query: ${sql}`);
+    });
+    const repository = new OzonRepository('postgres://not-used');
+    Object.defineProperty(repository, 'transaction', {
+      value: async (operation: (client: unknown) => Promise<unknown>) => operation({ query })
+    });
+
+    await expect(repository.reconcileAutomaticPreparationToManualSuccess({
+      jobId: staleRow.id,
+      expectedJobRowVersion: 7,
+      expectedListingRowVersion: 11,
+      expectedListingRevision: 5,
+      eligibilityAt: '2026-09-04T02:00:00.000Z',
+      requestId,
+      planHash,
+      targetStores: []
+    })).rejects.toMatchObject({ code: 'TASK_LOCKED' });
+    expect(query.mock.calls.some(([sql]) => String(sql).includes('ozon_listing_drafts'))).toBe(false);
+  });
+});
+
 describe('OZON automatic business task projection', () => {
   it('excludes every shared preparation row and projects fully archived publications out of attention counts', async () => {
     const repository = new OzonRepository();

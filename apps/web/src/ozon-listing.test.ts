@@ -207,6 +207,21 @@ describe('OZON automatic business-job visibility', () => {
     });
   });
 
+  it('accepts the manual-success reconciliation capability without exposing ordinary recheck', () => {
+    expect(ozonJobFanoutSummary({
+      payload: {},
+      fanoutSummary: {
+        phase: 'NOT_STARTED', targetStoreCount: 0, publicationCount: 0, failureCount: 1,
+        canRecheck: false, canManualTakeover: false, canReconcileManualSuccess: true,
+        recoveryMode: 'MANUAL_SUCCESS_RECONCILE'
+      }
+    } as unknown as OzonPublishJob)).toEqual({
+      phase: 'NOT_STARTED', targetStoreCount: 0, publicationCount: 0, failureCount: 1,
+      canRecheck: false, canManualTakeover: false, canReconcileManualSuccess: true,
+      recoveryMode: 'MANUAL_SUCCESS_RECONCILE'
+    });
+  });
+
   it('fails closed when a fan-out summary drifts outside the shared enum contract', () => {
     expect(ozonJobFanoutSummary({
       payload: {},

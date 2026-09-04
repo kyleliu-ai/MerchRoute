@@ -5,6 +5,7 @@ import {
   OZON_CONTENT_POLICY_VERSION,
   OZON_CONTENT_POLICY_V2,
   OZON_CONTENT_POLICY_V3,
+  OZON_CONTENT_POLICY_V4,
   OZON_EXECUTABLE_CONTENT_POLICY_VERSIONS,
   OZON_LEGACY_UNKNOWN_CONTENT_POLICY_VERSION,
   OZON_TITLE_MAX_LENGTH,
@@ -22,6 +23,7 @@ export {
   OZON_CONTENT_POLICY_VERSION,
   OZON_CONTENT_POLICY_V2,
   OZON_CONTENT_POLICY_V3,
+  OZON_CONTENT_POLICY_V4,
   OZON_EXECUTABLE_CONTENT_POLICY_VERSIONS,
   OZON_LEGACY_UNKNOWN_CONTENT_POLICY_VERSION,
   OZON_TITLE_MAX_LENGTH,
@@ -87,6 +89,7 @@ export const OZON_PREPARATION_RECOVERY_MODES = [
   'RECHECK',
   'REPLAN_WITH_CURRENT_PRESET',
   'MANUAL_TAKEOVER',
+  'MANUAL_SUCCESS_RECONCILE',
   'READBACK_REQUIRED'
 ] as const;
 export const ozonPublishTaskKindSchema = z.enum(OZON_PUBLISH_TASK_KINDS);
@@ -97,6 +100,7 @@ export const ozonPreparationFanoutSummarySchema = z.object({
   failureCount: z.number().int().nonnegative(),
   canRecheck: z.boolean(),
   canManualTakeover: z.boolean(),
+  canReconcileManualSuccess: z.boolean().optional(),
   recoveryMode: z.enum(OZON_PREPARATION_RECOVERY_MODES),
   blockedReason: z.string().trim().min(1).max(4_000).optional()
 }).strict().superRefine((value, context) => {
@@ -673,6 +677,41 @@ export const ozonDescriptionSanitizationWarningSchema = z.object({
   afterSha256: z.string().regex(/^[a-f0-9]{64}$/)
 });
 
+export const ozonDescriptionKeywordStuffingWarningSchema = z.object({
+  code: z.literal('OZON_DESCRIPTION_KEYWORD_STUFFING'),
+  fieldPath: z.string().trim().min(1).max(512),
+  policyVersion: z.literal(OZON_CONTENT_POLICY_V4)
+}).strict();
+
+export const ozonDescriptionWarningSchema = z.discriminatedUnion('code', [
+  ozonDescriptionSanitizationWarningSchema,
+  ozonDescriptionKeywordStuffingWarningSchema
+]);
+
+export type OzonDescriptionWarning = z.infer<typeof ozonDescriptionWarningSchema>;
+
+export function deriveOzonDescriptionPolicyWarnings(
+  value: unknown,
+  fieldPath: string,
+  policyVersion: string = OZON_CONTENT_POLICY_VERSION
+): OzonDescriptionWarning[] {
+  const result = validateOzonDescription(value, policyVersion);
+  return result.warnings.includes('KEYWORD_STUFFING')
+    ? [{ code: 'OZON_DESCRIPTION_KEYWORD_STUFFING', fieldPath, policyVersion: OZON_CONTENT_POLICY_V4 }]
+    : [];
+}
+
+export function synchronizeOzonDescriptionPolicyWarnings(
+  existing: OzonDescriptionWarning[] | undefined,
+  value: unknown,
+  fieldPath: string
+): OzonDescriptionWarning[] {
+  return [
+    ...(existing || []).filter((warning) => warning.code !== 'OZON_DESCRIPTION_KEYWORD_STUFFING'),
+    ...deriveOzonDescriptionPolicyWarnings(value, fieldPath)
+  ];
+}
+
 const ozonOfferObjectSchema = z.object({
   variantId: z.string().uuid(),
   productVariantId: z.string().uuid().optional(),
@@ -695,7 +734,7 @@ const ozonOfferObjectSchema = z.object({
     if (!result.valid) context.addIssue({ code: 'custom', message: `OZON 商品详情不符合内容合同: ${result.issues.join(', ')}` });
   }).optional(),
   descriptionSource: ozonDescriptionSourceSchema.optional(),
-  descriptionWarnings: z.array(ozonDescriptionSanitizationWarningSchema).max(100).default([]),
+  descriptionWarnings: z.array(ozonDescriptionWarningSchema).max(100).default([]),
   attributes: z.array(ozonAttributeValueInputSchema).default([]),
   media: z.array(ozonMediaReferenceSchema).max(20).default([])
 });
@@ -782,7 +821,7 @@ export const ozonListingDraftInputSchema = z.object({
     if (!result.valid) context.addIssue({ code: 'custom', message: `OZON 商品详情不符合内容合同: ${result.issues.join(', ')}` });
   }).default(''),
   descriptionSource: ozonDescriptionSourceSchema.optional(),
-  descriptionWarnings: z.array(ozonDescriptionSanitizationWarningSchema).max(100).default([]),
+  descriptionWarnings: z.array(ozonDescriptionWarningSchema).max(100).default([]),
   initialization: ozonListingInitializationSchema.optional(),
   brand: z.string().trim().max(256).default(''),
   dimensions: ozonDimensionsSchema.optional(),
@@ -1022,7 +1061,7 @@ const ozonProductBaseShape = {
     const result = validateOzonDescription(value);
     if (!result.valid) context.addIssue({ code: 'custom', message: `OZON 商品详情不符合内容合同: ${result.issues.join(', ')}` });
   }),
-  descriptionWarnings: z.array(ozonDescriptionSanitizationWarningSchema).max(100).default([]),
+  descriptionWarnings: z.array(ozonDescriptionWarningSchema).max(100).default([]),
   brand: z.string().trim().max(256),
   videoUploadMode: z.enum(['ORIGINAL', 'COMPRESSED_COPY']).default('COMPRESSED_COPY'),
   runtime: z.object({
@@ -1298,6 +1337,24 @@ export type OzonListingPriceProjection = {
   reason?: string;
 };
 export type OzonListingDraftInput = z.infer<typeof ozonListingDraftInputSchema>;
+export function synchronizeOzonListingDescriptionPolicyWarnings<T extends OzonListingDraftInput>(data: T): T {
+  return {
+    ...data,
+    descriptionWarnings: synchronizeOzonDescriptionPolicyWarnings(
+      data.descriptionWarnings,
+      data.descriptionRu,
+      'descriptionRu'
+    ),
+    offers: data.offers.map((offer, index) => ({
+      ...offer,
+      descriptionWarnings: synchronizeOzonDescriptionPolicyWarnings(
+        offer.descriptionWarnings,
+        offer.descriptionRu || data.descriptionRu,
+        `offers.${index}.descriptionRu`
+      )
+    }))
+  };
+}
 export type OzonSharedMaterialDraftInput = z.input<typeof ozonSharedMaterialDraftInputSchema>;
 export type OzonSharedMaterialProjection = z.infer<typeof ozonSharedMaterialProjectionSchema>;
 export type OzonSharedMaterialRevisionMetadata = z.infer<typeof ozonSharedMaterialRevisionMetadataSchema>;

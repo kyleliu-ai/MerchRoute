@@ -566,7 +566,11 @@ function cloneOffer(offer: OzonOffer): OzonOffer {
     ...offer,
     attributes: offer.attributes.map(cloneAttribute),
     media: offer.media.map((media) => ({ ...media })),
-    ...(offer.descriptionWarnings ? { descriptionWarnings: offer.descriptionWarnings.map((warning) => ({ ...warning, removedFragments: [...warning.removedFragments] })) } : {})
+    ...(offer.descriptionWarnings ? {
+      descriptionWarnings: offer.descriptionWarnings.map((warning) => warning.code === 'OZON_DESCRIPTION_CJK_REMOVED'
+        ? { ...warning, removedFragments: [...warning.removedFragments] }
+        : { ...warning })
+    } : {})
   };
 }
 

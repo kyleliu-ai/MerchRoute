@@ -7,11 +7,12 @@ import writeFileAtomic from 'write-file-atomic';
 import {
   AppError,
   OZON_CONTENT_POLICY_V2,
-  OZON_CONTENT_POLICY_V3,
   assertOzonTitle,
   OZON_CONTENT_POLICY_VERSION,
   OZON_TITLE_MAX_LENGTH,
+  deriveOzonDescriptionPolicyWarnings,
   findMissingOzonRequiredAttributes,
+  isExecutableOzonContentPolicyVersion,
   projectOzonPresetRequiredAttributeCoverage,
   hasOzonCjk,
   hasOzonInvalidPlatformCharacters,
@@ -2277,7 +2278,7 @@ export class OzonPublishingService {
         }, 409);
       }
       const contentPolicyVersion = listing.contentPolicyVersion;
-      if (contentPolicyVersion !== OZON_CONTENT_POLICY_V2 && contentPolicyVersion !== OZON_CONTENT_POLICY_V3) {
+      if (!isExecutableOzonContentPolicyVersion(contentPolicyVersion)) {
         throw new AppError('VERSION_CONFLICT', 'OZON 公共素材缺少可执行的冻结内容策略版本', {
           sku,
           contentPolicyVersion: contentPolicyVersion || 'MISSING'
@@ -2344,7 +2345,7 @@ export class OzonPublishingService {
         }, 409);
       }
       const contentPolicyVersion = listing.contentPolicyVersion;
-      if (contentPolicyVersion !== OZON_CONTENT_POLICY_V2 && contentPolicyVersion !== OZON_CONTENT_POLICY_V3) {
+      if (!isExecutableOzonContentPolicyVersion(contentPolicyVersion)) {
         throw new AppError('VERSION_CONFLICT', 'OZON 公共素材缺少可执行的冻结内容策略版本', {
           sku,
           contentPolicyVersion: contentPolicyVersion || 'MISSING'
@@ -2707,8 +2708,10 @@ export class OzonPublishingService {
     const mergeDescriptionWarnings = (...groups: Array<NonNullable<OzonListingDraft['data']['descriptionWarnings']> | undefined>) => {
       const byIdentity = new Map<string, NonNullable<OzonListingDraft['data']['descriptionWarnings']>[number]>();
       for (const warning of groups.flatMap((group) => group || [])) {
-        if (!warning.removedFragments.length) continue;
-        byIdentity.set(`${warning.fieldPath}:${warning.beforeSha256}:${warning.afterSha256}`, warning);
+        const identity = warning.code === 'OZON_DESCRIPTION_CJK_REMOVED'
+          ? `${warning.code}:${warning.fieldPath}:${warning.beforeSha256}:${warning.afterSha256}`
+          : `${warning.code}:${warning.fieldPath}:${warning.policyVersion}`;
+        byIdentity.set(identity, warning);
       }
       return [...byIdentity.values()];
     };
@@ -2731,7 +2734,10 @@ export class OzonPublishingService {
       vat: submissionListing.data.vat,
       titleRu: submissionListing.data.titleRu,
       descriptionRu: descriptionPlan.shared.value,
-      descriptionWarnings: mergeDescriptionWarnings(listing.data.descriptionWarnings, descriptionPlan.shared.warnings),
+      descriptionWarnings: mergeDescriptionWarnings(
+        (listing.data.descriptionWarnings || []).filter((warning) => warning.code !== 'OZON_DESCRIPTION_KEYWORD_STUFFING'),
+        descriptionPlan.shared.warnings
+      ),
       brand: platformBrand,
       videoUploadMode: submissionListing.data.videoUploadMode,
       runtime: {
@@ -2754,7 +2760,10 @@ export class OzonPublishingService {
           titleRu: submissionListing.data.titleRu,
           descriptionRu: planned.value,
           ...(offer.descriptionSource ? { descriptionSource: offer.descriptionSource } : {}),
-          descriptionWarnings: mergeDescriptionWarnings(offer.descriptionWarnings, planned.warnings),
+          descriptionWarnings: mergeDescriptionWarnings(
+            (offer.descriptionWarnings || []).filter((warning) => warning.code !== 'OZON_DESCRIPTION_KEYWORD_STUFFING'),
+            planned.warnings
+          ),
           attributes: platformOfferAttributes[index]!.map((attribute) => attribute.attributeId === 4191
             ? { ...attribute, values: [{ value: planned.value }] }
             : attribute)
@@ -4639,7 +4648,7 @@ function prepareOzonDescriptionPlan(listing: OzonListingDraft): {
     }
     // Keep the original source in the draft/product.json. S001 applies the
     // shared submission normalization when it serializes attribute 4191.
-    return { value: source, warnings: [] };
+    return { value: source, warnings: deriveOzonDescriptionPolicyWarnings(source, fieldPath) };
   };
   const shared = validate(listing.data.descriptionRu, 'descriptionRu');
   const offers = listing.data.offers.map((offer, index) => validate(

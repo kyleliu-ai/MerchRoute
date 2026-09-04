@@ -1483,7 +1483,7 @@ function frozenAutomaticBuiltPlan(input: unknown): BuiltPlan {
     || !/^sha256:[a-f0-9]{64}$/.test(String(frozen.materialHash || ''))
     || (schemaVersion === 3 && !hasSourceMediaIdentity)
     || frozen.materialHashVersion !== OZON_SHARED_MATERIAL_HASH_VERSION
-    || !['merchroute-ozon-content-v2', 'merchroute-ozon-content-v3'].includes(String(frozen.contentPolicyVersion || ''))
+    || !['merchroute-ozon-content-v2', 'merchroute-ozon-content-v3', 'merchroute-ozon-content-v4'].includes(String(frozen.contentPolicyVersion || ''))
     || !Number.isInteger(Number(frozen.settingsRowVersion))
     || Number(frozen.settingsRowVersion) < 1
     || !/^sha256:[a-f0-9]{64}$/.test(String(frozen.rootDirectoryHash || ''))

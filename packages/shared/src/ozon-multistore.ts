@@ -204,6 +204,16 @@ export const ozonPreparationRecheckInputSchema = z.object({
   requestId: z.string().uuid()
 }).strict();
 
+export const ozonPreparationManualSuccessReconcilePlanInputSchema = z.object({
+  rowVersion: z.number().int().positive()
+}).strict();
+
+export const ozonPreparationManualSuccessReconcileInputSchema = z.object({
+  rowVersion: z.number().int().positive(),
+  planHash: ozonSha256Schema,
+  requestId: z.string().uuid()
+}).strict();
+
 export const ozonFrozenContentBindingSchema = z.object({
   contentPolicyVersion: ozonContentPolicyVersionSchema,
   materialHash: ozonSha256Schema,
@@ -558,6 +568,8 @@ export type OzonPublicationCreateInput = z.infer<typeof ozonPublicationCreateInp
 export type OzonPublicationRecheckInput = z.infer<typeof ozonPublicationRecheckInputSchema>;
 export type OzonPreparationRecheckPlanInput = z.infer<typeof ozonPreparationRecheckPlanInputSchema>;
 export type OzonPreparationRecheckInput = z.infer<typeof ozonPreparationRecheckInputSchema>;
+export type OzonPreparationManualSuccessReconcilePlanInput = z.infer<typeof ozonPreparationManualSuccessReconcilePlanInputSchema>;
+export type OzonPreparationManualSuccessReconcileInput = z.infer<typeof ozonPreparationManualSuccessReconcileInputSchema>;
 export type OzonFrozenContentBinding = z.infer<typeof ozonFrozenContentBindingSchema>;
 export type OzonPublicationPlanItemAttemptIdentity = z.infer<typeof ozonPublicationPlanItemAttemptIdentitySchema>;
 export type OzonGatewayRequest = z.infer<typeof ozonGatewayRequestSchema>;
@@ -885,8 +897,43 @@ export type OzonPublicationTaskDetail = {
 export type OzonPreparationRecoveryCapability = {
   canRecheck: boolean;
   canManualTakeover: boolean;
-  recoveryMode: 'NONE' | 'RECHECK' | 'REPLAN_WITH_CURRENT_PRESET' | 'MANUAL_TAKEOVER' | 'READBACK_REQUIRED';
+  canReconcileManualSuccess?: boolean;
+  recoveryMode: 'NONE' | 'RECHECK' | 'REPLAN_WITH_CURRENT_PRESET' | 'MANUAL_TAKEOVER' | 'MANUAL_SUCCESS_RECONCILE' | 'READBACK_REQUIRED';
   blockedReason?: string;
+};
+
+export type OzonPreparationManualSuccessReconcileTarget = {
+  storeId: string;
+  storeAlias: string;
+  storeDisplayName: string;
+  publicationId: string;
+  publicationRowVersion: number;
+  manualJobId: string;
+  manualJobRowVersion: number;
+  offerIds: string[];
+  productLinks: OzonProductLink[];
+  completedAt: string;
+};
+
+export type OzonPreparationManualSuccessReconcilePlan = OzonPreparationRecoveryCapability & {
+  rowVersion: number;
+  listingRowVersion: number;
+  listingRevision: number;
+  eligibilityAt: string;
+  planHash: string;
+  requestId: string;
+  targetStores: OzonPreparationManualSuccessReconcileTarget[];
+  blockers: string[];
+};
+
+export type OzonPreparationManualSuccessReconcileResult = {
+  job: OzonPublishJob;
+  reconciliation: {
+    requestId: string;
+    planHash: string;
+    appliedAt: string;
+    targetStores: OzonPreparationManualSuccessReconcileTarget[];
+  };
 };
 
 export type OzonPreparationRecheckPlan = OzonPreparationRecoveryCapability & {
@@ -902,6 +949,7 @@ export type OzonPreparationTaskDetail = {
   fanoutSummary: OzonPreparationFanoutSummary;
   frozenContract: Record<string, unknown>;
   recovery: OzonPreparationRecoveryCapability;
+  manualSuccessReconcilePlan?: OzonPreparationManualSuccessReconcilePlan;
   materialSnapshot?: OzonListingDraft & { generatedVersionId?: string };
   sourceMediaCleanup?: OzonSourceMediaCleanupSummary;
 };

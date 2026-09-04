@@ -10,11 +10,13 @@ export const OZON_DESCRIPTION_MAX_LENGTH = 6_000;
 export const OZON_DESCRIPTION_MAX_LENGTH_SOURCE = 'MERCHROUTE_SAFE_DEFAULT' as const;
 export const OZON_CONTENT_POLICY_V2 = 'merchroute-ozon-content-v2' as const;
 export const OZON_CONTENT_POLICY_V3 = 'merchroute-ozon-content-v3' as const;
+export const OZON_CONTENT_POLICY_V4 = 'merchroute-ozon-content-v4' as const;
 export const OZON_EXECUTABLE_CONTENT_POLICY_VERSIONS = [
   OZON_CONTENT_POLICY_V2,
-  OZON_CONTENT_POLICY_V3
+  OZON_CONTENT_POLICY_V3,
+  OZON_CONTENT_POLICY_V4
 ] as const;
-export const OZON_CONTENT_POLICY_VERSION = OZON_CONTENT_POLICY_V3;
+export const OZON_CONTENT_POLICY_VERSION = OZON_CONTENT_POLICY_V4;
 export const OZON_LEGACY_UNKNOWN_CONTENT_POLICY_VERSION = 'LEGACY_UNKNOWN' as const;
 
 export type OzonContentPolicyVersion = (typeof OZON_EXECUTABLE_CONTENT_POLICY_VERSIONS)[number];
@@ -65,6 +67,7 @@ export type OzonTextPolicyResult = {
   normalizedForSubmission: string;
   length: number;
   issues: OzonTextPolicyIssue[];
+  warnings: OzonTextPolicyIssue[];
 };
 
 export function isExecutableOzonContentPolicyVersion(value: unknown): value is OzonContentPolicyVersion {
@@ -80,7 +83,7 @@ export function assertExecutableOzonContentPolicyVersion(value: unknown): OzonCo
 
 function imitationPatternForPolicy(policyVersion: string): RegExp | undefined {
   if (policyVersion === OZON_CONTENT_POLICY_V2) return IMITATION_PATTERN_V2;
-  if (policyVersion === OZON_CONTENT_POLICY_V3) return IMITATION_PATTERN_V3;
+  if (policyVersion === OZON_CONTENT_POLICY_V3 || policyVersion === OZON_CONTENT_POLICY_V4) return IMITATION_PATTERN_V3;
   return undefined;
 }
 
@@ -146,7 +149,7 @@ export function validateOzonTitle(
   if (normalizedForValidation && !/^[A-ZА-ЯЁ]/u.test(normalizedForValidation)) issues.push('TITLE_INITIAL_NOT_UPPERCASE');
   if (normalizedForValidation.split(' ').some((word) => countOzonTextCharacters(word) > 27)) issues.push('TITLE_WORD_TOO_LONG');
   if (hasTitleKeywordStuffing(normalizedForValidation)) issues.push('KEYWORD_STUFFING');
-  return { valid: issues.length === 0, policyVersion, normalizedForValidation, normalizedForSubmission: normalizedForValidation, length, issues };
+  return { valid: issues.length === 0, policyVersion, normalizedForValidation, normalizedForSubmission: normalizedForValidation, length, issues, warnings: [] };
 }
 
 export function validateOzonDescription(
@@ -158,6 +161,7 @@ export function validateOzonDescription(
   const normalizedForSubmission = normalizeOzonDescriptionForSubmission(value);
   const normalizedForValidation = normalizedForSubmission;
   const issues: OzonTextPolicyIssue[] = [];
+  const warnings: OzonTextPolicyIssue[] = [];
   if (!imitationPattern) issues.push('UNSUPPORTED_CONTENT_POLICY_VERSION');
   const length = countOzonTextCharacters(normalizedForValidation);
   if (!normalizedForValidation.trim()) issues.push('EMPTY');
@@ -171,8 +175,11 @@ export function validateOzonDescription(
   if (PRICE_PATTERN.test(normalizedForValidation)) issues.push('PRICE_INFORMATION');
   if (imitationPattern?.test(normalizedForValidation)) issues.push('IMITATION_CLAIM');
   validateDescriptionHtml(normalizedForValidation, issues);
-  if (hasDescriptionKeywordStuffing(normalizedForValidation)) issues.push('KEYWORD_STUFFING');
-  return { valid: issues.length === 0, policyVersion, normalizedForValidation, normalizedForSubmission, length, issues };
+  if (hasDescriptionKeywordStuffing(normalizedForValidation)) {
+    if (policyVersion === OZON_CONTENT_POLICY_V4) warnings.push('KEYWORD_STUFFING');
+    else issues.push('KEYWORD_STUFFING');
+  }
+  return { valid: issues.length === 0, policyVersion, normalizedForValidation, normalizedForSubmission, length, issues, warnings };
 }
 
 export function assertOzonTitle(value: unknown, policyVersion: string = OZON_CONTENT_POLICY_VERSION): string {

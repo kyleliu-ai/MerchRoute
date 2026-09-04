@@ -5,6 +5,7 @@ import type { FastifyInstance } from 'fastify';
 import sharp from 'sharp';
 import {
   AppError,
+  isExecutableOzonContentPolicyVersion,
   OZON_PUBLISH_JOB_STATES,
   projectOzonPresetRequiredAttributeCoverage,
   ozonRuntimeTransitionBindingSchema,
@@ -332,6 +333,19 @@ export async function registerOzonRoutes(
     const sourceMediaCleanup = generatedVersionId ? await ozonSourceMediaCleanup.summary(generatedVersionId) : undefined;
     return { ...detail, ...(sourceMediaCleanup ? { sourceMediaCleanup } : {}) };
   });
+  app.get('/api/v1/ozon/automation/jobs/:id/manual-success-reconcile-plan', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const query = request.query as { rowVersion?: string };
+    return ozonAutoPublishing.preparationManualSuccessReconcilePlan(id, {
+      rowVersion: numberValue(query.rowVersion)
+    });
+  });
+  app.post('/api/v1/ozon/automation/jobs/:id/manual-success-reconcile', async (request) => (
+    ozonAutoPublishing.reconcilePreparationToManualSuccess(
+      (request.params as { id: string }).id,
+      request.body
+    )
+  ));
   app.get('/api/v1/ozon/automation/jobs/:id/material-snapshot', async (request) => ({
     snapshot: await ozonAutoPublishing.preparationMaterialSnapshot((request.params as { id: string }).id)
   }));
@@ -502,7 +516,7 @@ function materialPersistenceResponse(listing: Awaited<ReturnType<OzonPublishingS
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(generatedVersionId)
     || !/^sha256:[a-f0-9]{64}$/.test(materialHash)
     || materialHashVersion !== 'ozon-shared-material-v1'
-    || !['merchroute-ozon-content-v2', 'merchroute-ozon-content-v3'].includes(contentPolicyVersion)
+    || !isExecutableOzonContentPolicyVersion(contentPolicyVersion)
     || !Number.isInteger(materialRevision) || materialRevision < 1) {
     throw new AppError('VERSION_CONFLICT', 'OZON 公共素材未原子生成可证明的稳定版本', {
       sku: listing.sku,

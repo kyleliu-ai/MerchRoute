@@ -41,6 +41,8 @@ async function runtimeApp() {
   const recheckAutomaticJob = vi.fn(async (id: string, expectedRowVersion?: number) => ({
     id, storeId: OZON_DEFAULT_STORE_ID, state: 'READY', expectedRowVersion
   }));
+  const preparationManualSuccessReconcilePlan = vi.fn(async (id: string, input: unknown) => ({ plan: { id, ...input as object } }));
+  const reconcilePreparationToManualSuccess = vi.fn(async (id: string, input: unknown) => ({ job: { id }, reconciliation: input }));
   const listAutomaticJobs = vi.fn(async (input: unknown) => ({ items: [], total: 0, page: 1, pageSize: 20, input }));
   const claimRuntimeJobs = vi.fn(async (input: unknown) => {
     const body = input as { limit?: number } & Record<string, unknown>;
@@ -73,7 +75,9 @@ async function runtimeApp() {
       list: listAutomaticJobs,
       get: getAutomaticJob,
       cancel: cancelAutomaticJob,
-      recheck: recheckAutomaticJob
+      recheck: recheckAutomaticJob,
+      preparationManualSuccessReconcilePlan,
+      reconcilePreparationToManualSuccess
     } as any,
     ozonCatalog: {} as any,
     pricing: {} as any,
@@ -100,6 +104,8 @@ async function runtimeApp() {
     getAutomaticJob,
     cancelAutomaticJob,
     recheckAutomaticJob,
+    preparationManualSuccessReconcilePlan,
+    reconcilePreparationToManualSuccess,
     listAutomaticJobs,
     claimRuntimeJobs
   };
@@ -168,6 +174,34 @@ describe('OZON automatic business-list HTTP contract', () => {
     });
     expect(invalid.statusCode).toBe(400);
     expect(automaticListingSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it('forwards the read-only manual-success plan and the CAS reconciliation request', async () => {
+    const {
+      app,
+      preparationManualSuccessReconcilePlan,
+      reconcilePreparationToManualSuccess
+    } = await runtimeApp();
+    const jobId = '50000000-0000-4000-8000-000000000099';
+    const plan = await app.inject({
+      method: 'GET',
+      url: `/api/v1/ozon/automation/jobs/${jobId}/manual-success-reconcile-plan?rowVersion=34`
+    });
+    expect(plan.statusCode).toBe(200);
+    expect(preparationManualSuccessReconcilePlan).toHaveBeenCalledWith(jobId, { rowVersion: 34 });
+
+    const input = {
+      rowVersion: 34,
+      planHash: `sha256:${'a'.repeat(64)}`,
+      requestId: '00000000-0000-5000-8000-000000000099'
+    };
+    const applied = await app.inject({
+      method: 'POST',
+      url: `/api/v1/ozon/automation/jobs/${jobId}/manual-success-reconcile`,
+      payload: input
+    });
+    expect(applied.statusCode).toBe(200);
+    expect(reconcilePreparationToManualSuccess).toHaveBeenCalledWith(jobId, input);
   });
 
   it('preserves the stable no-fallback artifact error as HTTP 409', async () => {
