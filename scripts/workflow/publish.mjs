@@ -27,6 +27,22 @@ export function validateV013Rollover(previous,{main,baseTree,oldPr,oldRelease,ol
   }
   return {publication:previous,main,tree:baseTree,releaseTag:'v0.1.3',status:'PUBLISHED_NOT_ACTIVATED',reason:'RELEASE_TOOL_PRE_STOP_PAYLOAD_BUG'};
 }
+export function publicationDescriptor(batch,productVersion,now=new Date()){
+  if(!/^[a-z0-9][a-z0-9-]{1,70}$/.test(batch?.name||''))throw new Error('Invalid batch name for publication');
+  if(!/^\d+\.\d+\.\d+$/.test(productVersion||''))throw new Error('A stable semantic product version is required for publication');
+  const versionToken=productVersion.replaceAll('.','');
+  const stamp=now.toISOString().replace(/[-:TZ.]/g,'').slice(0,12);
+  return {
+    productVersion,
+    branch:`work/${batch.name}-v${versionToken}-${stamp}`,
+    ref:`refs/merchroute/publications/${batch.name}-v${versionToken}`,
+    title:`chore(release): MerchRoute v${productVersion} 候选`,
+    message:`chore(release): prepare MerchRoute v${productVersion} candidate`
+  };
+}
+export function publicationBody({batch,descriptor,identity}){
+  return `## 本机权威候选\n\nMerchRoute v${descriptor.productVersion} 候选来自本机权威批次 \`${batch.name}\`，包含该批次起点已经吸收的公开 main 功能及本批次适配。\n\n本机提交：${identity.commit}；源码树：${identity.tree}。\n\n本次只发布已完成完整验收的本机文件树，不从 GitHub 反向覆盖本机代码，不直接推送或合并 main，也不在 Draft PR 阶段创建正式 Release 或切换正式运行服务。\n\n完整检查、PostgreSQL、E2E、Jimeng、Gitleaks、禁入规则与候选运行包验收通过后才可进入合并和正式发布阶段。\n`;
+}
 export async function requireVerified(root,home,{allowDirty=false}={}){
   await verifyDevelopmentDatabase(root,home);
   const identity=sourceIdentity(root), record=await readJson(path.join(home,'verified.json'));
@@ -72,6 +88,7 @@ export async function publishBatch(root,home,config,batch,options){
     return {committed:sourceIdentity(root).commit,pushed:false,next:'Run full verification, then publish again'};
   }
   const verified=await requireVerified(root,home);identity=verified.identity;
+  const descriptor=publicationDescriptor(batch,verified.record.candidate?.productVersion);
   const repository='kyleliu-ai/MerchRoute',prefix='repos/'+repository;
   if(config.github?.repository!==repository)throw new Error('Unapproved repository');
   const main=githubJson(config,prefix+'/git/ref/heads/main').object.sha;
@@ -92,9 +109,9 @@ export async function publishBatch(root,home,config,batch,options){
   }else if([26,27].includes(previous?.number)){
     throw new Error('Merged release PR requires the explicit publication rollover contract before another publication');
   }
-  const defaultPublicBranch='work/release-tool-fix-v014-'+new Date().toISOString().replace(/[-:TZ.]/g,'').slice(0,12);
+  const defaultPublicBranch=descriptor.branch;
   const publicBranch=intent?.branch||defaultPublicBranch;
-  const resumable=intent?.sourceCommit===identity.commit&&intent?.tree===identity.tree&&intent?.branch===publicBranch&&intent?.parent===(previous?.publicCommit||main);
+  const resumable=intent?.sourceCommit===identity.commit&&intent?.tree===identity.tree&&intent?.productVersion===descriptor.productVersion&&intent?.branch===publicBranch&&intent?.parent===(previous?.publicCommit||main);
   if(previous&&previous.localBatchBranch!==batch.branch)throw new Error('Publication state belongs to another batch');
   if(previous){const pr=githubJson(config,prefix+'/pulls/'+previous.number);if(pr.state!=='open'||!pr.draft||![previous.publicCommit,...(resumable?[intent.publicCommit]:[])].includes(pr.head.sha))throw new Error('PR changed, merged or is no longer Draft; do not reuse it');}
   if(previous?.sourceCommit===identity.commit)return {unchanged:true,...previous};
@@ -110,11 +127,11 @@ export async function publishBatch(root,home,config,batch,options){
   const changed=git(root,'diff','--name-only','-z',main,identity.commit).split('\0').filter(Boolean).sort();
   if(!changed.length)throw new Error('No source changes; refusing an empty PR');
   if(changed.some(f=>isForbiddenPackagePath(f)))throw new Error('Public candidate contains a forbidden path');
-  const message='fix(release): preserve runtime endpoint during v0.1.4 cutover\n\nLocal source: '+identity.commit+'\nExact source tree: '+identity.tree+'\nLocal authority; public history only.\n';
+  const message=descriptor.message+'\n\nLocal source: '+identity.commit+'\nExact source tree: '+identity.tree+'\nLocal authority; public history only.\n';
   const publicCommit=resumable?intent.publicCommit:execFileSync('git',['-C',root,'commit-tree',identity.tree,'-p',parent],{input:message,encoding:'utf8',windowsHide:true}).trim();
   if(git(root,'show','-s','--format=%T',publicCommit)!==identity.tree||git(root,'show','-s','--format=%P',publicCommit)!==parent)throw new Error('Publication recovery identity is invalid');
-  git(root,'update-ref','refs/merchroute/publications/'+batch.name+'-v014',publicCommit);
-  await atomicJson(path.join(home,'publication-intent.json'),{branch:publicBranch,localBatchBranch:batch.branch,publicCommit,parent,sourceCommit:identity.commit,tree:identity.tree,changed});
+  git(root,'update-ref',descriptor.ref,publicCommit);
+  await atomicJson(path.join(home,'publication-intent.json'),{branch:publicBranch,localBatchBranch:batch.branch,productVersion:descriptor.productVersion,publicCommit,parent,sourceCommit:identity.commit,tree:identity.tree,changed});
   git(root,'push','origin',publicCommit+':refs/heads/'+publicBranch);
   const remote=githubJson(config,prefix+'/git/commits/'+publicCommit);
   if(remote.tree.sha!==identity.tree)throw new Error('Published source tree does not match local candidate');
@@ -122,14 +139,14 @@ export async function publishBatch(root,home,config,batch,options){
   if(!number){const existing=githubJson(config,prefix+'/pulls?state=open&head='+encodeURIComponent(user.login+':'+publicBranch));if(existing.length>1)throw new Error('Ambiguous existing PR');number=existing[0]?.number;}
   if(!number){
     const body=path.join(home,'pr-body.md');await mkdir(home,{recursive:true});
-    await writeFile(body,'## 本机权威候选\n\nMerchRoute v0.1.4 修复正式切换时停止进程遗漏 `runtimeEndpoint`，并允许旧版回滚在 About 尚未提供端点字段时完成严格身份验收。\n\n本机提交：'+identity.commit+'；源码树：'+identity.tree+'。\n\n本次不改写 v0.1.3 标签或资产，不改业务逻辑、n8n 工作流、数据库或 43173 配置；v0.1.3 记录为已发布但因发布工具预停止阶段缺陷未激活。\n\n完整检查、PostgreSQL、E2E、Jimeng、Gitleaks 和禁入扫描通过后才可合并。保持 Draft，不直接推送或合并 main；用户合并并发布 v0.1.4 后另行正式切换。\n');
-    const url=github(config,['pr','create','--repo',repository,'--head',publicBranch,'--base','main','--draft','--title','fix(release): 修复 v0.1.4 正式切换工具','--body-file',body]);
+    await writeFile(body,publicationBody({batch,descriptor,identity}));
+    const url=github(config,['pr','create','--repo',repository,'--head',publicBranch,'--base','main','--draft','--title',descriptor.title,'--body-file',body]);
     number=Number(url.match(/\/pull\/(\d+)/)?.[1]);if(!number)throw new Error('Cannot resolve created PR');
   }
   const pr=JSON.parse(github(config,['pr','view',String(number),'--repo',repository,'--json','isDraft,state,baseRefName,headRefOid,files,url']));
   if(!pr.isDraft||pr.state!=='OPEN'||pr.baseRefName!=='main'||pr.headRefOid!==publicCommit
     || JSON.stringify(pr.files.map(x=>x.path).sort())!==JSON.stringify(changed))throw new Error('PR readback failed; stop without modifying local source');
-  const publication={number,url:pr.url,branch:publicBranch,localBatchBranch:batch.branch,publicCommit,sourceCommit:identity.commit,tree:identity.tree,base:main,draft:true,files:changed,ci:'PENDING'};
+  const publication={number,url:pr.url,branch:publicBranch,localBatchBranch:batch.branch,productVersion:descriptor.productVersion,publicCommit,sourceCommit:identity.commit,tree:identity.tree,base:main,draft:true,files:changed,ci:'PENDING'};
   await atomicJson(path.join(home,'publication.json'),publication);
   return publication;
 }

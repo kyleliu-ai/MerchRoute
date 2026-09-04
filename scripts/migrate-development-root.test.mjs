@@ -55,6 +55,9 @@ async function fixture(t) {
     status: 'ACTIVE',
     startedAt: '2026-09-03T00:00:00.000Z'
   });
+  await atomicJson(path.join(home, 'publication.json'), { number: 29, localBatchBranch: 'work/previous' });
+  await atomicJson(path.join(home, 'publication-intent.json'), { localBatchBranch: 'work/previous' });
+  await atomicJson(path.join(home, 'verified.json'), { identity: { commit, tree } });
   const options = {
     'to-root': newRoot,
     'recovery-directory': recoveryDirectory,
@@ -97,6 +100,10 @@ test('preflight, atomic move and finalize preserve identity and roll the active 
   const archived = JSON.parse(await readFile(path.join(fixtureValue.home, 'completed', 'work_previous-merged-pending-release.json'), 'utf8'));
   assert.equal(archived.status, 'MERGED_PENDING_RELEASE');
   assert.equal(archived.mergedPr, 29);
+  for (const name of ['publication.json', 'publication-intent.json', 'verified.json']) {
+    await assert.rejects(readFile(path.join(fixtureValue.home, name)), /ENOENT/);
+    await readFile(path.join(fixtureValue.home, 'completed', `previous-${name}`));
+  }
   await registration(fixtureValue.newRoot, fixtureValue.home);
 });
 

@@ -93,6 +93,18 @@ export async function preflightDevelopmentRootMigration(root, home, options) {
     await copyFile(source, target);
     backups.push({ name, source, sha256: await fileDigest(target) });
   }
+  for (const name of ['publication.json', 'publication-intent.json', 'verified.json']) {
+    const source = path.join(home, name);
+    try {
+      await lstat(source);
+    } catch (error) {
+      if (error.code === 'ENOENT') continue;
+      throw error;
+    }
+    const target = path.join(backupDirectory, name);
+    await copyFile(source, target);
+    backups.push({ name, source, sha256: await fileDigest(target), previousBatchState: true });
+  }
   const bundle = path.join(recoveryDirectory, 'development-repository.bundle');
   git(fromRoot, 'bundle', 'create', bundle, '--all');
   git(fromRoot, 'bundle', 'verify', bundle);
@@ -120,6 +132,10 @@ export async function finalizeDevelopmentRootMigration(root, home, options) {
   const batchBackup = intent.backups.find((item) => item.name === 'batch.json');
   if (!machineBackup || !batchBackup || await fileDigest(machinePath) !== machineBackup.sha256 || await fileDigest(batchPath) !== batchBackup.sha256) {
     throw new Error('External registration changed after migration preflight');
+  }
+  const previousBatchState = intent.backups.filter((item) => item.previousBatchState === true);
+  for (const item of previousBatchState) {
+    if (await fileDigest(item.source) !== item.sha256) throw new Error(`Previous batch state changed after migration preflight: ${item.name}`);
   }
   if (await fileDigest(intent.bundle.path) !== intent.bundle.sha256) throw new Error('Recovery Git bundle changed after preflight');
   git(resolvedRoot, 'bundle', 'verify', intent.bundle.path);
@@ -155,6 +171,9 @@ export async function finalizeDevelopmentRootMigration(root, home, options) {
   const completedDirectory = path.join(home, 'completed');
   await mkdir(completedDirectory, { recursive: true, mode: 0o700 });
   await atomicJson(path.join(completedDirectory, `${intent.previousBatch.branch.replaceAll('/', '_')}-merged-pending-release.json`), archivedBatch);
+  for (const item of previousBatchState) {
+    await rename(item.source, path.join(completedDirectory, `${intent.previousBatch.name}-${item.name}`));
+  }
   await atomicJson(machinePath, nextMachine);
   await atomicJson(batchPath, intent.nextBatch);
   await atomicJson(path.join(intent.recoveryDirectory, COMPLETED_NAME), completed);
