@@ -24,9 +24,9 @@
 
 本机为权威来源，默认本机 → GitHub。此类开发机不执行下文通用安装分支的“快进到 origin/main”步骤，也不能把用户粘贴本提示词当成覆盖授权。先只读核对源码树、公开历史映射和已验收基线；内容相同但 squash 提交不同只更新经过核验的映射，不 pull、merge 或 rebase 本机。出现批次外的远端内容先停止报告，再按前述规则二次确认。
 
-本批版本 `0.1.3` 为可配置端口候选。开发完成、GitHub 已同步、正式运行已更新分别验收；`v0.1.2` 已发布但本机未激活，其标签和资产不可改写。独立运行包通过外部固定哈希核验全部源码、构建和依赖，无 `.git`、无旧 worktree 依赖；不得上线时重新编译替换已验收构建。
+本批版本 `0.1.4` 为发布工具修复候选。开发完成、GitHub 已同步、正式运行已更新分别验收；`v0.1.2` 与 `v0.1.3` 已发布但本机未激活，其标签和资产不可改写。独立运行包通过外部固定哈希核验全部源码、构建和依赖，无 `.git`、无旧 worktree 依赖；不得上线时重新编译替换已验收构建。
 
-升级不得把开发 5173/4184、测试 4183 接到正式端口或生产数据库。Windows 如系统排除固定测试端口 4183，只能使用仓库受控 Docker E2E 运行器在隔离容器网络内继续使用 4183；不得改 HNS/WinNAT、停止 Docker或自动换测试端口。正式端口从仓库外 `merchroute.env` 和 schema v2 发布绑定读取，默认 `43173`；`MERCHROUTE_RUNTIME_BASE_URL` 必须与端口完全一致。`merchroute_dev` / `merchroute_dev_app` 仅用于开发，真实 n8n、PostgreSQL、Jimeng、媒体和 Profile 保持原位置。Draft PR 合并并发布 v0.1.3 前不能更改正式启动入口。切换前备份、检查活动任务及 PID，失败只回滚代码/入口，不盲目恢复业务状态，旧目录至少保留七天且清理另批审批。
+升级不得把开发 5173/4184、测试 4183 接到正式端口或生产数据库。Windows 如系统排除固定测试端口 4183，只能使用仓库受控 Docker E2E 运行器在隔离容器网络内继续使用 4183；不得改 HNS/WinNAT、停止 Docker或自动换测试端口。正式端口从仓库外 `merchroute.env` 和 schema v2 发布绑定读取，默认 `43173`；`MERCHROUTE_RUNTIME_BASE_URL` 必须与端口完全一致。`merchroute_dev` / `merchroute_dev_app` 仅用于开发，真实 n8n、PostgreSQL、Jimeng、媒体和 Profile 保持原位置。Draft PR 合并并发布 v0.1.4 前不能更改正式启动入口。切换前备份、检查活动任务及 PID，失败只回滚代码/入口，不盲目恢复业务状态，旧目录至少保留七天且清理另批审批。
 
 本提示词对应当前发布快照：Node.js `22.23.1`、npm `10.9.8`、n8n `2.32.6`、PostgreSQL `18.4`、Playwright `1.61.1`、Jimeng `0.9.1`；n8n 清单为 36 个唯一工作流和 3 个部署包；数据库映射为 `merchroute` → `merchroute_app`、`merchroute_n8n` → `merchroute_n8n`。
 
