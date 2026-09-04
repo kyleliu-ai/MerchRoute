@@ -46,7 +46,8 @@ foreach ($requiredText in @(
 $allowedCommands = @(
   'Split-Path', 'Get-NetTCPConnection', 'Select-Object', 'Get-CimInstance',
   'Invoke-RestMethod', 'ForEach-Object', 'Write-Warning', 'Stop-Process',
-  'Get-Date', 'Start-Sleep', 'Start-Process', 'Get-Command', 'Join-Path', 'ConvertTo-Json'
+  'Get-Date', 'Start-Sleep', 'Start-Process', 'Get-Command', 'Join-Path', 'ConvertTo-Json',
+  'Test-Path', 'Get-Content', 'Where-Object', 'Get-RuntimeSetting'
 )
 foreach ($commandAst in $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] }, $true)) {
   if ($allowedCommands -notcontains $commandAst.GetCommandName()) {
@@ -85,7 +86,7 @@ function Invoke-MockedRestart {
   function Get-NetTCPConnection {
     [CmdletBinding()]
     param([int]$LocalPort, [string]$State)
-    if ($LocalPort -ne 49173 -or $State -ne 'Listen') { throw 'Unexpected simulated port lookup' }
+    if ($LocalPort -ne 39173 -or $State -ne 'Listen') { throw 'Unexpected simulated port lookup' }
     if ($simulation.Phase -eq 'running') { return [pscustomobject]@{ OwningProcess = 2147483000 } }
     if ($simulation.Phase -eq 'started') { return [pscustomobject]@{ OwningProcess = 2147483001 } }
   }
@@ -98,21 +99,21 @@ function Invoke-MockedRestart {
   function Invoke-RestMethod {
     [CmdletBinding()]
     param([string]$Uri, [int]$TimeoutSec)
-    if ($Uri -match '^http://127\.0\.0\.1:49173/api/v1/purchases\?page=1&pageSize=10&status=([^&]+)$') {
+    if ($Uri -match '^http://127\.0\.0\.1:39173/api/v1/purchases\?page=1&pageSize=10&status=([^&]+)$') {
       $requestedState = $Matches[1]
       $simulation.Events.Add("download:$requestedState")
       $simulation.DownloadQueries.Add($requestedState)
       if ($simulation.ApiFailure -eq 'downloads') { throw 'Simulated download API failure' }
       return [pscustomobject]@{ total = [int]($requestedState -eq $simulation.DownloadState) }
     }
-    if ($Uri -match '^http://127\.0\.0\.1:49173/api/v1/wb/automation/jobs\?page=1&pageSize=1&state=([^&]+)$') {
+    if ($Uri -match '^http://127\.0\.0\.1:39173/api/v1/wb/automation/jobs\?page=1&pageSize=1&state=([^&]+)$') {
       $requestedState = $Matches[1]
       $simulation.Events.Add("wb:$requestedState")
       $simulation.WbQueries.Add($requestedState)
       if ($simulation.ApiFailure -eq 'wb') { throw 'Simulated WB API failure' }
       return [pscustomobject]@{ total = [int]($requestedState -eq $simulation.WbState) }
     }
-    if ($Uri -eq 'http://127.0.0.1:49173/api/v1/health' -and $simulation.Phase -eq 'started') {
+    if ($Uri -eq 'http://127.0.0.1:39173/api/v1/health' -and $simulation.Phase -eq 'started') {
       $simulation.Events.Add('health')
       return [pscustomobject]@{ status = 'ok'; version = 'mock-only' }
     }
@@ -145,13 +146,19 @@ function Invoke-MockedRestart {
     [CmdletBinding()]
     param([int]$Milliseconds)
   }
+  function Test-Path { throw 'Runtime env file access is not expected in the restart simulation' }
+  function Get-Content { throw 'Runtime env file reads are not expected in the restart simulation' }
 
   $originalPort = [Environment]::GetEnvironmentVariable('PORT', 'Process')
+  $originalMerchRoutePort = [Environment]::GetEnvironmentVariable('MERCHROUTE_PORT', 'Process')
+  $originalRuntimeBaseUrl = [Environment]::GetEnvironmentVariable('MERCHROUTE_RUNTIME_BASE_URL', 'Process')
   $originalNoOpen = [Environment]::GetEnvironmentVariable('NO_OPEN_BROWSER', 'Process')
   $errorMessage = $null
   $output = $null
   try {
-    $env:PORT = '49173'
+    $env:PORT = '39173'
+    $env:MERCHROUTE_PORT = '39173'
+    $env:MERCHROUTE_RUNTIME_BASE_URL = 'http://127.0.0.1:39173'
     $parameters = @{}
     if ($ForceDownloads) { $parameters.ForceActiveDownloads = $true }
     if ($ForceWb) { $parameters.ForceActiveWbPublishing = $true }
@@ -160,6 +167,8 @@ function Invoke-MockedRestart {
     $errorMessage = $_.Exception.Message
   } finally {
     [Environment]::SetEnvironmentVariable('PORT', $originalPort, 'Process')
+    [Environment]::SetEnvironmentVariable('MERCHROUTE_PORT', $originalMerchRoutePort, 'Process')
+    [Environment]::SetEnvironmentVariable('MERCHROUTE_RUNTIME_BASE_URL', $originalRuntimeBaseUrl, 'Process')
     [Environment]::SetEnvironmentVariable('NO_OPEN_BROWSER', $originalNoOpen, 'Process')
   }
   return [pscustomobject]@{ Simulation = $simulation; ErrorMessage = $errorMessage; Output = $output }
@@ -168,7 +177,7 @@ function Invoke-MockedRestart {
 $scenarios = [Collections.Generic.List[string]]::new()
 foreach ($state in $requiredStates) {
   $result = Invoke-MockedRestart -ActiveWbState $state
-  Assert-RestartTest ($result.ErrorMessage -like '*存在活动 WB 自动上品任务*') "WB $state 必须阻止重启"
+  Assert-RestartTest ($result.ErrorMessage -like '*存在活动 WB 自动上品任务*') "WB $state 必须阻止重启；实际错误：$($result.ErrorMessage)"
   Assert-RestartTest ($result.ErrorMessage -like "*$state=1*") "WB $state 必须出现在阻断提示中"
   Assert-RestartTest ($result.Simulation.StopCount -eq 0 -and $result.Simulation.StartCount -eq 0) "WB $state 不得触发进程操作"
   Assert-RestartTest (($result.Simulation.WbQueries -join ',') -eq ($requiredStates -join ',')) "WB $state 必须核验全部活动状态"
