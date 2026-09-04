@@ -66,6 +66,7 @@ export type AboutVersionInfo = {
     dirty?: boolean;
     buildChannel?: 'candidate' | 'release';
     releaseTag?: string;
+    runtimeEndpoint?: { host: '127.0.0.1'; port: number; origin: string };
   };
   available: AboutAvailableVersion | null;
   syncStatus: AboutSyncStatus;
@@ -98,6 +99,7 @@ type AboutVersionServiceOptions = {
   readContract?: () => Promise<FingerprintScopeContract>;
   collectLocalSnapshot?: (contract: FingerprintScopeContract) => Promise<ContentFingerprintSnapshot>;
   readBuildInfo?: () => Promise<AboutBuildInfo | undefined>;
+  runtimeEndpoint?: { host: '127.0.0.1'; port: number; origin: string };
 };
 
 type GithubRelease = {
@@ -189,7 +191,8 @@ export function createAboutVersionService(options: AboutVersionServiceOptions): 
       ...(buildInfo?.commitSha ? { commitSha: buildInfo.commitSha } : {}),
       ...(buildInfo?.builtAt ? { builtAt: buildInfo.builtAt } : {}),
       ...(buildInfo ? { dirty: buildInfo.dirty } : {}),
-      ...(buildInfo?.buildChannel ? { buildChannel: buildInfo.buildChannel } : {})
+      ...(buildInfo?.buildChannel ? { buildChannel: buildInfo.buildChannel } : {}),
+      ...(options.runtimeEndpoint ? { runtimeEndpoint: options.runtimeEndpoint } : runtimeEndpointFromProcess())
     };
 
     let localSnapshot: ContentFingerprintSnapshot | undefined;
@@ -298,6 +301,16 @@ export function createAboutVersionService(options: AboutVersionServiceOptions): 
     },
     invalidate: () => { cached = undefined; }
   };
+}
+
+function runtimeEndpointFromProcess(): { runtimeEndpoint?: { host: '127.0.0.1'; port: number; origin: string } } {
+  const host = String(process.env.HOST || '').trim();
+  const port = Number(process.env.MERCHROUTE_PORT || process.env.PORT);
+  const origin = String(process.env.MERCHROUTE_RUNTIME_BASE_URL || '').trim().replace(/\/$/, '');
+  const expected = `http://127.0.0.1:${port}`;
+  return host === '127.0.0.1' && Number.isInteger(port) && port >= 1024 && port <= 49151 && origin === expected
+    ? { runtimeEndpoint: { host: '127.0.0.1', port, origin } }
+    : {};
 }
 
 type GithubJson = <T>(endpoint: string, allowNotFound?: boolean) => Promise<T | undefined>;

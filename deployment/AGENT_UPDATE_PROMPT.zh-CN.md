@@ -24,9 +24,9 @@
 
 本机为权威来源，默认本机 → GitHub。此类开发机不执行下文通用安装分支的“快进到 origin/main”步骤，也不能把用户粘贴本提示词当成覆盖授权。先只读核对源码树、公开历史映射和已验收基线；内容相同但 squash 提交不同只更新经过核验的映射，不 pull、merge 或 rebase 本机。出现批次外的远端内容先停止报告，再按前述规则二次确认。
 
-本批版本 `0.1.2` 为候选。开发完成、GitHub 已同步、正式运行已更新分别验收；v0.1.1 既有标签不可改写。独立运行包通过外部固定哈希核验全部源码、构建和依赖，无 `.git`、无旧 worktree 依赖；不得上线时重新编译替换已验收构建。
+本批版本 `0.1.3` 为可配置端口候选。开发完成、GitHub 已同步、正式运行已更新分别验收；`v0.1.2` 已发布但本机未激活，其标签和资产不可改写。独立运行包通过外部固定哈希核验全部源码、构建和依赖，无 `.git`、无旧 worktree 依赖；不得上线时重新编译替换已验收构建。
 
-升级不得把开发 5173/4184、测试 4183 接到生产 4173 或生产数据库。`merchroute_dev` / `merchroute_dev_app` 仅用于开发，真实 n8n、PostgreSQL、Jimeng、媒体和 Profile 保持原位置。本批迁移阶段 A/B 只完成候选和 Draft PR，不能更改启动入口；用户合并并发布 v0.1.2 后另行批准正式切换。切换前备份、检查活动任务及 PID，失败只回滚代码/入口，不盲目恢复业务状态，旧目录至少保留七天且清理另批审批。
+升级不得把开发 5173/4184、测试 4183 接到正式端口或生产数据库。Windows 如系统排除固定测试端口 4183，只能使用仓库受控 Docker E2E 运行器在隔离容器网络内继续使用 4183；不得改 HNS/WinNAT、停止 Docker或自动换测试端口。正式端口从仓库外 `merchroute.env` 和 schema v2 发布绑定读取，默认 `43173`；`MERCHROUTE_RUNTIME_BASE_URL` 必须与端口完全一致。`merchroute_dev` / `merchroute_dev_app` 仅用于开发，真实 n8n、PostgreSQL、Jimeng、媒体和 Profile 保持原位置。Draft PR 合并并发布 v0.1.3 前不能更改正式启动入口。切换前备份、检查活动任务及 PID，失败只回滚代码/入口，不盲目恢复业务状态，旧目录至少保留七天且清理另批审批。
 
 本提示词对应当前发布快照：Node.js `22.23.1`、npm `10.9.8`、n8n `2.32.6`、PostgreSQL `18.4`、Playwright `1.61.1`、Jimeng `0.9.1`；n8n 清单为 36 个唯一工作流和 3 个部署包；数据库映射为 `merchroute` → `merchroute_app`、`merchroute_n8n` → `merchroute_n8n`。
 
@@ -133,7 +133,7 @@ node deployment/scripts/n8n-upgrade-guard.mjs --phase=pre-stop
 
 ### 5. 优雅停止服务并安全重写外部配置
 
-使用当前安装实际采用的 `launchd`、终端进程或服务管理方式向 MerchRoute 和 n8n 发送正常终止信号；不得直接 `kill -9`。等待端口 `4173`、`5678` 释放。Jimeng/PostgreSQL 可保持运行，除非升级步骤需要重建。
+使用当前安装实际采用的 `launchd`、终端进程或服务管理方式向 MerchRoute 和 n8n 发送正常终止信号；不得直接 `kill -9`。等待发布绑定的 MerchRoute 端口和 `5678` 释放。Jimeng/PostgreSQL 可保持运行，除非升级步骤需要重建。
 
 如果第 2 步因为 Profile 正在使用而延期备份，现在确认 Chrome/Playwright/n8n 已释放两个 Profile，再完成完整 Profile 备份并核对可读性。配置、两个数据库和两个 Profile 的备份全部完成前，仍不得运行 `prepare`。
 
@@ -181,7 +181,7 @@ Profile 烟测只允许离线 `data:` 页面，不访问平台页面、不读取
 
 ```text
 http://127.0.0.1:5678/healthz
-http://127.0.0.1:4173/api/v1/health
+http://127.0.0.1:43173/api/v1/health
 http://127.0.0.1:8000/ping  -> pong
 ```
 

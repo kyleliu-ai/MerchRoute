@@ -364,7 +364,9 @@ test('configure-merchroute adds E007 once, writes runtime parameters, and verifi
   });
   await new Promise((resolve, reject) => {
     server.once('error', reject);
-    server.listen({ host: '127.0.0.1', port: 0 }, resolve);
+    // Keep the mock endpoint inside the same 1024-49151 contract enforced for
+    // a configured MerchRoute runtime. Windows may assign port 0 above 49151.
+    server.listen({ host: '127.0.0.1', port: 39091, exclusive: true }, resolve);
   });
   const address = server.address();
   assert.ok(address && typeof address === 'object');

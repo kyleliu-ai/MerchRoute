@@ -8,7 +8,7 @@ Thank you for helping improve MerchRoute. Please keep changes focused, testable,
 2. Fork and clone the repository.
 3. Run `npm ci` from the repository root.
 4. Copy `.env.example` to `.env` only when local overrides are needed.
-5. Run `npm run dev` and open `http://127.0.0.1:4173`.
+5. Run `npm run dev` and open `http://127.0.0.1:5173`; the isolated API listens on `4184` and never proxies to the configured production runtime.
 
 ## Before Opening a Pull Request
 

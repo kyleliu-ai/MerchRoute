@@ -63,8 +63,8 @@ async function writeControl(file, value) {
 }
 
 function validatePort(port) {
-  if (!Number.isInteger(port) || port < 1 || port > 65535 || port === 4173) {
-    throw new Error('E2E lifecycle forbids production port 4173 and requires a valid isolated port');
+  if (!Number.isInteger(port) || port < 1 || port > 65535 || [4173, 43173].includes(port)) {
+    throw new Error('E2E lifecycle forbids production runtime ports and requires a valid isolated port');
   }
 }
 

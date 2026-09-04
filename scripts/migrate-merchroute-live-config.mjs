@@ -5,7 +5,8 @@ const options = new Map(process.argv.slice(2).map((argument) => {
   const [key, ...value] = argument.split('=');
   return [key.replace(/^--/, ''), value.join('=')];
 }));
-const apiRoot = (options.get('api') || 'http://127.0.0.1:4173/api/v1').replace(/\/$/, '');
+const runtimeBaseUrl = String(process.env.MERCHROUTE_RUNTIME_BASE_URL || 'http://127.0.0.1:43173').replace(/\/$/, '');
+const apiRoot = (options.get('api') || `${runtimeBaseUrl}/api/v1`).replace(/\/$/, '');
 const oldRoot = options.get('old') || 'G:\\01_n8n-global';
 const newRoot = options.get('new') || 'G:\\01_MerchRoute';
 const backupRoot = options.get('backup');

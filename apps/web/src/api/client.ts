@@ -907,6 +907,7 @@ export type AboutVersionInfo = {
     commitSha?: string;
     builtAt?: string;
     dirty?: boolean;
+    runtimeEndpoint?: { host: '127.0.0.1'; port: number; origin: string };
   };
   available: {
     source: 'release' | 'main';

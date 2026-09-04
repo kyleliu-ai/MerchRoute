@@ -57,6 +57,18 @@ export async function prepareInstalledRelease(root,home,config) {
   const receipt={schemaVersion:1,id,root:target,productVersion:version,sourceCommit:source.identity.commit,
     sourceTree:source.identity.headTreeHash,identity:source.identity,manifestSha256,build,artifactRoot,
     artifacts:artifacts.map(x=>({name:x.name,sha256:digest(x.data)})),preparedAt:new Date().toISOString(),status:'CANDIDATE_NOT_ACTIVE'};
+  try{
+    const previous=await readJson(path.join(home,'candidate.json'));
+    if(previous.id!==receipt.id){
+      const unactivatedV012=previous.productVersion==='0.1.2'&&previous.status==='CANDIDATE_NOT_ACTIVE';
+      await atomicJson(path.join(home,'completed','releases',previous.id+'.json'),{
+        ...previous,
+        status:unactivatedV012?'PUBLISHED_NOT_ACTIVATED':'SUPERSEDED_CANDIDATE',
+        ...(unactivatedV012?{reason:'PORT_EXCLUDED'}:{}),
+        archivedAt:new Date().toISOString()
+      });
+    }
+  }catch(error){if(error.code!=='ENOENT')throw error;}
   await atomicJson(receiptFile,receipt);await atomicJson(path.join(home,'candidate.json'),receipt);
   return receipt;
 }

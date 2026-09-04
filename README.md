@@ -172,9 +172,9 @@ npm run workflow -- begin --name example-batch --task-id example-task --baseline
 npm run dev
 ```
 
-开发前端为 `127.0.0.1:5173`，仅代理开发后端 `127.0.0.1:4184`；E2E 使用 `4183`，正式服务仍为 `4173`。端口冲突时停止。开发使用专用空库 `merchroute_dev` / `merchroute_dev_app`、合成数据及独立媒体目录，默认阻断真实外部业务请求，不读取生产环境文件。
+开发前端为 `127.0.0.1:5173`，仅代理开发后端 `127.0.0.1:4184`；E2E 使用 `4183`。正式服务默认为 `127.0.0.1:43173`，可在仓库外 `merchroute.env` 中同时设置 `MERCHROUTE_PORT` 和与之一致的 `MERCHROUTE_RUNTIME_BASE_URL`。端口被占用或被系统排除时直接停止并报告，不自动换端口。开发使用专用空库 `merchroute_dev` / `merchroute_dev_app`、合成数据及独立媒体目录，默认阻断真实外部业务请求，不读取生产环境文件。
 
-本批源码版本为 **0.1.2 候选**，不代表 GitHub 已正式发布或本机正式服务已更新。三种状态分别报告：开发完成、GitHub 已同步、正式运行已更新。完整操作与迁移/回滚门禁见[单人串行开发说明](docs/SINGLE_DEVELOPER_WORKFLOW.zh-CN.md)。
+当前源码版本为 **0.1.3 候选**；v0.1.2 保留为已发布但本机未激活版本。三种状态分别报告：开发完成、GitHub 已同步、正式运行已更新。完整操作与迁移/回滚门禁见[单人串行开发说明](docs/SINGLE_DEVELOPER_WORKFLOW.zh-CN.md)。
 
 生产数据库、全局 n8n、Jimeng、媒体和 Profile 不随源码迁移。生产环境仍通过仓库外 `MERCHROUTE_ENV_FILE` 配置；`.env.runtime` 仅用于旧安装兼容。未经二次确认，不允许从 GitHub 覆盖本机权威内容。
 

@@ -10,10 +10,11 @@ import { atomicJson, git, withCommandLock, registration } from './state.mjs';
 import { developmentEnvironment, blockDevelopmentOutbound, assertPortFree } from './development.mjs';
 import { inventoryRelease, verifyInstalledRelease, digest, gitBlob, safeRelative } from '../lib/installed-release.mjs';
 import { switchRelease } from './release-transaction.mjs';
+import { validateV012Rollover } from './publish.mjs';
 import { assertNoActivity } from './business-gate.mjs';
 import { validateManifest, compareBranchInventory } from '../verify-release-completeness.mjs';
 import { candidateSnapshot, verifyAcceptedCandidate } from './candidate-acceptance.mjs';
-import { commandTranscript } from './verify.mjs';
+import { commandTranscript, fixedPortE2eDockerArgs } from './verify.mjs';
 import { captureCommand } from '../run-ci-check.mjs';
 
 test('silent successful commands keep actual capture metadata and failing output is preserved',async()=>{
@@ -75,7 +76,7 @@ test('registered repository rejects Git alternates',async t=>{
 test('development environment never inherits production secrets, ports or configuration',()=>{
   const sandboxRoot=path.resolve(os.tmpdir(),'merchroute-development-test');
   const config={databaseUrl:'postgresql://merchroute_dev_app:synthetic@127.0.0.1:5432/merchroute_dev',sandboxRoot};
-  const env=developmentEnvironment(config,{MERCHROUTE_ENV_FILE:'/production',DATABASE_URL:'production',PORT:'4173',WB_API_TOKEN:'private',NODE_OPTIONS:'unsafe'});
+  const env=developmentEnvironment(config,{MERCHROUTE_ENV_FILE:'/production',DATABASE_URL:'production',PORT:'43173',WB_API_TOKEN:'private',NODE_OPTIONS:'unsafe'});
   assert.equal(env.PORT,'4184');assert.equal(env.MERCHROUTE_ENV_FILE,undefined);assert.equal(env.WB_API_TOKEN,undefined);assert.equal(env.NODE_OPTIONS,undefined);
   assert.throws(()=>developmentEnvironment({...config,databaseUrl:config.databaseUrl.replace('/merchroute_dev','/merchroute')}),/dedicated/);
   assert.throws(()=>developmentEnvironment({...config,databaseUrl:config.databaseUrl.replace('127.0.0.1','example.com')}),/dedicated/);
@@ -92,7 +93,7 @@ test('port conflict is an error and never falls through to production',async()=>
 });
 
 async function installedFixture(t){
-  const root=await temporary(t),version='0.1.2',commit='a'.repeat(40),builtAt='2026-09-03T00:00:00.000Z';
+  const root=await temporary(t),version='0.1.3',commit='a'.repeat(40),builtAt='2026-09-03T00:00:00.000Z';
   const data=Buffer.from(JSON.stringify({name:'fixture',version}));await writeFile(path.join(root,'package.json'),data);
   await mkdir(path.join(root,'apps/server/dist'),{recursive:true});
   await atomicJson(path.join(root,'apps/server/dist/build-info.json'),{productVersion:version,commitSha:commit,dirty:false,builtAt});
@@ -102,7 +103,7 @@ async function installedFixture(t){
   return {root,manifest,pin:digest(await readFile(path.join(root,'installed-release.json')))};
 }
 test('Git-free release verification reads actual files and rejects missing/extra/modified files or manifest',async t=>{
-  const {root,pin}=await installedFixture(t);assert.equal((await verifyInstalledRelease(root,pin)).manifest.productVersion,'0.1.2');
+  const {root,pin}=await installedFixture(t);assert.equal((await verifyInstalledRelease(root,pin)).manifest.productVersion,'0.1.3');
   await assert.rejects(verifyInstalledRelease(root),/externally pinned/);
   await writeFile(path.join(root,'rogue.js'),'bad');await assert.rejects(verifyInstalledRelease(root,pin),/undeclared/);await rm(path.join(root,'rogue.js'));
   const bytes=await readFile(path.join(root,'package.json'));await writeFile(path.join(root,'package.json'),'{}');await assert.rejects(verifyInstalledRelease(root,pin),/changed/);await writeFile(path.join(root,'package.json'),bytes);
@@ -137,6 +138,26 @@ test('automatic pre-acceptance rollback must pass both restored-runtime probes',
     start:async b=>{if(b.id==='new')throw Error('new start failed');return {pid:2};},
     probe:async(b,_running,cycle)=>calls.push(b.id+':'+cycle),accept:async()=>calls.push('accept'),rollbackCheck:async()=>{},journal:async r=>calls.push(r.state)}),/new start failed/);
   assert.deepEqual(calls.slice(-3),['old:1','old:2','ROLLED_BACK']);assert.equal(calls.includes('accept'),false);
+});
+
+test('v0.1.2 rollover requires the exact merged PR, final release and accepted tree',()=>{
+  const previous={number:26,sourceCommit:'922b08f444977edd480d1a020cf4a90c4f513809',publicCommit:'a'.repeat(40),tree:'b'.repeat(40)};
+  const input={main:'c'.repeat(40),baseTree:previous.tree,oldPr:{merged:true,state:'closed',base:{ref:'main'},head:{sha:previous.publicCommit}},oldRelease:{draft:false,prerelease:false,tag_name:'v0.1.2'},oldPublishedTree:previous.tree};
+  assert.equal(validateV012Rollover(previous,input).status,'PUBLISHED_NOT_ACTIVATED');
+  assert.throws(()=>validateV012Rollover(previous,{...input,oldPublishedTree:'d'.repeat(40)}),/not aligned/);
+  assert.throws(()=>validateV012Rollover({...previous,number:25},input),/outside the approved/);
+});
+
+test('isolated PostgreSQL installs pg_trgm before parallel integration workers start',async()=>{
+  const source=await readFile(path.join(import.meta.dirname,'verify.mjs'),'utf8');
+  const extension=source.indexOf("CREATE EXTENSION IF NOT EXISTS pg_trgm");
+  const action=source.indexOf("return await action(");
+  assert.ok(extension>0&&action>extension,'pg_trgm must be installed before test workers receive the database URL');
+});
+test('Windows E2E container keeps port 4183 inside the PostgreSQL network namespace',()=>{
+  const args=fixedPortE2eDockerArgs({archive:path.resolve('source.tar'),evidenceDirectory:path.resolve('evidence'),postgresContainer:'a'.repeat(64),databaseUrl:'postgresql://merchroute_ci@127.0.0.1:55555/merchroute_ci_test'});
+  assert.equal(args[0],'docker');assert.ok(args.includes('container:'+'a'.repeat(64)));
+  const command=args.at(-1);assert.match(command,/127\.0\.0\.1:5432/);assert.match(command,/npm run test:e2e/);assert.doesNotMatch(command,/55555/);
 });
 test('historical audit retains thirty source branches and thirteen feature groups without fake local refs',async()=>{
   const root=path.resolve(import.meta.dirname,'../..');const manifest=JSON.parse(await readFile(path.join(root,'config/release-features.json'))),historical=await readFile(path.join(root,manifest.historicalAudit.path));

@@ -6,10 +6,10 @@
 
 ### 开发目录与正式运行分离（优先于后续通用启动示例）
 
-- 先询问这是正式安装还是开发机；默认不能把开发服务当成正式 4173。开发机采用[单人串行开发说明](../docs/SINGLE_DEVELOPER_WORKFLOW.zh-CN.md)：固定一个目录、一个活动批次、一个写入任务，同批修复复用分支和 Draft PR，只有并行任务、紧急修复或高风险实验才建临时 worktree。
-- 本批产品 `0.1.2` 是候选版本。回读目标 Release 是否真正发布，不能把 package.json、PR 合并或版本较新当成发布完成，不改写 v0.1.1。固定依赖版本仍以下方机器契约为准。
+- 先询问这是正式安装还是开发机；默认不能把开发服务当成正式服务。正式端口新安装默认为 `43173`，只允许回环地址；开发机采用[单人串行开发说明](../docs/SINGLE_DEVELOPER_WORKFLOW.zh-CN.md)，同一批次复用同一分支和 Draft PR。
+- 本批产品 `0.1.3` 是可配置端口候选版本；`v0.1.2` 保留为已发布但本机未激活版本，禁止改写其标签或资产。回读目标 Release 是否真正发布，不能把 package.json、PR 合并或版本较新当成发布完成。
 - 将个人路径仅登记在仓库外 `development/machine.json`。开发库仅为 `merchroute_dev` / `merchroute_dev_app`；不可用生产库权限绕过缺失的管理员输入，也不能复制生产数据。
-- 开发只用 `npm run dev` 安全启动器：5173 → 4184，E2E 4183；不得加载生产 `MERCHROUTE_ENV_FILE`、代理 4173 或调用真实 n8n、WB/OZON、付费服务。端口冲突停止，不自动改端口。
+- 开发只用 `npm run dev` 安全启动器：5173 → 4184，E2E 固定 4183；不得加载生产 `MERCHROUTE_ENV_FILE`、代理正式端口或调用真实 n8n、WB/OZON、付费服务。端口冲突停止，不自动改端口。Windows 若系统排除 4183，只能调用仓库受控 Docker E2E 运行器，在隔离容器网络内仍使用 4183；不得改 HNS/WinNAT、停止 Docker或改测试端口。
 - 正式运行包放到系统用户数据目录 `MerchRoute/releases/<版本>-<构建标识>`，不含 `.git`，不依赖开发目录或旧 worktree。源码、构建、依赖逐文件核验，清单 SHA-256 固定在外部登记中；清单缺失或损坏时停止，不回退旧路径。
 - 源码/构建只读使用，配置、日志、状态、媒体、数据库、浏览器 Profile 在包外。已有状态的电脑必须先进入升级保护，不执行新安装默认值覆盖。
 - Windows 固定入口是用户数据目录中的 `Start-MerchRoute.ps1`，桌面与开机入口一致。macOS 通用 Node 校验可复用，但本批 Windows 切换适配器不等于 macOS 上线已经验收；不得伪造跨平台完成。
@@ -45,7 +45,7 @@
 1. 固定版本全部回读一致，Git commit 已记录。
 2. `npm run deployment:verify`、`npm run check`、Jimeng 测试和构建全部通过。
 3. PostgreSQL 两个数据库均可由各自应用角色连接，角色不能互用。
-4. `http://127.0.0.1:4173/api/v1/health` 返回成功。
+4. 仓库外 `merchroute.env` 同时含 `MERCHROUTE_PORT=43173` 和 `MERCHROUTE_RUNTIME_BASE_URL=http://127.0.0.1:43173`，且该 Base URL 的 `/api/v1/health` 返回成功。
 5. `http://127.0.0.1:5678/healthz` 返回成功。
 6. `http://127.0.0.1:8000/ping` 正文为 `pong`。
 7. 从新 n8n 数据库回读恰好 36 个与清单 ID 集完全一致的工作流；E007 的 ID/名称正确，且 36 个全部 `active=false`。
@@ -76,11 +76,13 @@
 
 ### 1. 识别系统并预检
 
-读取系统版本与 CPU 架构，确认是 Windows 11 x64 或 macOS arm64。确认至少 10 GiB 可用空间、能够访问 GitHub、npm registry、Docker Hub、WB、OZON、Jimeng 及配置中的 AI 服务。检查 `5432`、`4173`、`5678`、`8000`。
+读取系统版本与 CPU 架构，确认是 Windows 11 x64 或 macOS arm64。确认至少 10 GiB 可用空间、能够访问 GitHub、npm registry、Docker Hub、WB、OZON、Jimeng 及配置中的 AI 服务。检查 `5432`、配置的 MerchRoute 端口（默认 `43173`）、`5678`、`8000`。
 
 在产生任何写入前检查默认/指定 `MERCHROUTE_APP_HOME`。如果已存在 `secrets/n8n.env`、`deployment/state.json`、n8n 数据库或 PDD/1688 浏览器 Profile，判定为既有安装，立即切换到 `deployment/AGENT_UPDATE_PROMPT.zh-CN.md`；不得继续运行新装脚本。
 
 未知进程占用端口时，先显示进程名和监听地址，停止并询问用户如何处理。只有健康端点匹配的既有 MerchRoute/n8n/Jimeng 服务，或带 `com.docker.compose.project=merchroute-postgres` 标签的 PostgreSQL 容器，才能作为幂等重跑对象。
+
+MerchRoute 端口必须是 `1024–49151` 的整数，且不得为 `4183、4184、5173、5432、5678、8000`。Windows 同时检查 IPv4/IPv6 排除区间和真实 Node 独占绑定，macOS 检查监听进程和真实绑定。失败时报告端口、PID 或排除区间，禁止自动漂移、改 HNS/WinNAT 或停 Docker。
 
 ### 2. 安装 Git 并克隆仓库
 

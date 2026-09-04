@@ -43,7 +43,7 @@ chmod +x scripts/start-macos.command
 ./scripts/start-macos.command
 ```
 
-也可以执行 `npm start`，然后打开 `http://127.0.0.1:4173`。
+也可以执行 `npm start`，然后打开仓库外 `merchroute.env` 中配置的 `MERCHROUTE_RUNTIME_BASE_URL`；新安装默认为 `http://127.0.0.1:43173`。
 
 ## 3. 路径配置
 

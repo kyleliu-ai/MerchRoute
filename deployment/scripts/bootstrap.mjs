@@ -11,6 +11,7 @@ import {
   categoryRulesFilePath,
   verifyCategoryRulesFiles,
 } from '../n8n/runtime-contract.mjs';
+import { createRuntimeEndpoint } from '../../scripts/lib/runtime-endpoint.mjs';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(scriptDir, '..', '..');
@@ -43,6 +44,7 @@ const credentialsPath = path.join(secretsDir, 'credentials.local.json');
 const statePath = path.join(stateDir, 'state.json');
 const probeResultsPath = path.join(stateDir, 'credential-probes.json');
 const existingN8nEnv = await readEnvIfPresent(n8nEnvPath);
+const existingMerchRouteEnv = await readEnvIfPresent(merchrouteEnvPath);
 const existingState = await readJsonIfPresent(statePath);
 const persistedBrowserProfileRoots = [
   existingN8nEnv.MERCHROUTE_BROWSER_PROFILE_ROOT,
@@ -67,11 +69,15 @@ const browserProfileDirectories = browserProfileContracts.map((contract) => cont
 const browserExecutable = process.platform === 'darwin'
   ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
   : 'C:/Program Files/Google/Chrome/Application/chrome.exe';
-const merchrouteBaseUrl = String(options.get('merchroute-base-url') || 'http://127.0.0.1:4173').replace(/\/$/, '');
-const merchrouteUrl = new URL(merchrouteBaseUrl);
-if (merchrouteUrl.protocol !== 'http:' || !['127.0.0.1', 'localhost', '::1'].includes(merchrouteUrl.hostname)) {
-  throw new Error('--merchroute-base-url 只允许本机 HTTP loopback 地址');
+const requestedBaseUrl = String(options.get('merchroute-base-url') || process.env.MERCHROUTE_RUNTIME_BASE_URL || '').trim().replace(/\/$/, '');
+const requestedPort = options.get('merchroute-port') || process.env.MERCHROUTE_PORT;
+const persistedPort = existingMerchRouteEnv.MERCHROUTE_PORT || existingMerchRouteEnv.PORT;
+if (!requestedPort && persistedPort && persistedPort !== '43173') {
+  throw new Error(`已有 MerchRoute 端口 ${persistedPort}；必须先报告差异并显式传入 --merchroute-port，禁止静默换端口`);
 }
+const runtimeEndpoint = createRuntimeEndpoint(requestedPort || (requestedBaseUrl ? new URL(requestedBaseUrl).port : persistedPort || 43173));
+if (requestedBaseUrl && requestedBaseUrl !== runtimeEndpoint.origin) throw new Error('--merchroute-base-url 必须与 --merchroute-port 完全一致');
+const merchrouteBaseUrl = runtimeEndpoint.origin;
 const merchrouteApiUrl = (pathname) => new URL(pathname, `${merchrouteBaseUrl}/`).toString();
 
 function normalizedForComparison(value) {
@@ -326,11 +332,12 @@ async function prepare() {
   const merchrouteEnv = {
     ...previousMerchRoute,
     HOST: '127.0.0.1',
-    PORT: '4173',
+    PORT: String(runtimeEndpoint.port),
+    MERCHROUTE_PORT: String(runtimeEndpoint.port),
     DATABASE_URL: databaseUrl,
     APP_DATA_DIR: path.join(appHome, 'app-data'),
     MERCHROUTE_DATA_ROOT: dataRoot,
-    MERCHROUTE_RUNTIME_BASE_URL: 'http://127.0.0.1:4173',
+    MERCHROUTE_RUNTIME_BASE_URL: runtimeEndpoint.origin,
     MERCHROUTE_RUNTIME_KEY: values.MERCHROUTE_RUNTIME_KEY,
     MERCHROUTE_CREDENTIAL_ENCRYPTION_KEY: values.MERCHROUTE_CREDENTIAL_ENCRYPTION_KEY,
     MERCHROUTE_OZON_MULTISTORE_FLEET_READY: 'false',
@@ -365,7 +372,7 @@ async function prepare() {
     MERCHROUTE_BROWSER_PROFILE_ROOT: browserProfileRoot,
     MERCHROUTE_BROWSER_EXECUTABLE: browserExecutable,
     MERCHROUTE_TEMP_DIR: tempDir,
-    MERCHROUTE_RUNTIME_BASE_URL: 'http://127.0.0.1:4173',
+    MERCHROUTE_RUNTIME_BASE_URL: runtimeEndpoint.origin,
     MERCHROUTE_RUNTIME_KEY: values.MERCHROUTE_RUNTIME_KEY,
     MERCHROUTE_CATEGORY_RULES_FILE: categoryRulesRuntimePath,
     GENERIC_TIMEZONE: 'Asia/Shanghai',

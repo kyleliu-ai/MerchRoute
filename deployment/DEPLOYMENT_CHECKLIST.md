@@ -6,6 +6,7 @@
 - [ ] Node.js 22.23.1、npm 10.9.8、全局 n8n 2.32.6 回读一致。
 - [ ] PostgreSQL 18.4、Playwright 1.61.1、Jimeng 固定版本与 `runtime-versions.json` 一致。
 - [ ] `npm run versions:check:full`、`npm run deployment:verify`、`npm run check` 通过。
+- [ ] E2E 始终使用隔离 `4183`；Windows 如排除该端口，只允许使用受控 Docker E2E 运行器在容器网络内保留 `4183`，不得修改 HNS/WinNAT 或自动换端口。
 
 ## 外部数据与数据库
 
@@ -16,7 +17,8 @@
 
 ## 服务
 
-- [ ] MerchRoute `127.0.0.1:4173` 健康。
+- [ ] MerchRoute 仓库外 `merchroute.env` 已同时写入 `MERCHROUTE_PORT` 和一致的 `MERCHROUTE_RUNTIME_BASE_URL`，新安装默认 `127.0.0.1:43173` 健康。
+- [ ] 已检查端口监听进程、Windows IPv4/IPv6 排除区间（若适用）及真实独占绑定；失败时未自动换端口。
 - [ ] 全局 n8n `127.0.0.1:5678` 健康，owner 已在本机浏览器创建。
 - [ ] `n8n.env` 含 `N8N_LISTEN_ADDRESS=127.0.0.1`、`NODES_EXCLUDE=[]`、`N8N_GRACEFUL_SHUTDOWN_TIMEOUT=1200`。
 - [ ] Jimeng `127.0.0.1:8000/ping` 返回 `pong`，`/app/data` 使用外部卷。

@@ -4,13 +4,15 @@
 
 ## 端口冲突
 
-标准端口为 PostgreSQL `5432`、MerchRoute `4173`、n8n `5678`、Jimeng `8000`。运行：
+标准端口为 PostgreSQL `5432`、MerchRoute `43173`、n8n `5678`、Jimeng `8000`。MerchRoute 可在仓库外 `merchroute.env` 中通过 `MERCHROUTE_PORT` 覆盖，但 `MERCHROUTE_RUNTIME_BASE_URL` 必须与之完全一致。运行：
 
 ```bash
 node deployment/scripts/preflight.mjs
 ```
 
-`known-service` 表示检测到本部署的健康端点；`occupied` 表示未知进程占用，必须先确认进程归属再停止或改端口。不要盲目结束系统服务。PostgreSQL 只有带 Compose 项目标签 `merchroute-postgres` 的容器才视为可安全重用。
+`known-service` 表示检测到本部署的健康端点；`occupied` 表示未知进程占用。Windows 还必须检查 `netsh interface ipv4/ipv6 show excludedportrange protocol=tcp`，所有系统均要执行真实 Node 独占绑定测试。任一失败均停止并报告端口、占用 PID 或排除区间，禁止自动漂移、改 HNS/WinNAT 或停 Docker 规避。PostgreSQL 只有带 Compose 项目标签 `merchroute-postgres` 的容器才视为可安全重用。
+
+开发与 E2E 端口也不得自动改号。若 Windows 把固定 E2E 端口 `4183` 纳入系统排除区间，正式发布门禁使用 `deployment/Dockerfile.e2e` 构建固定 Node `22.23.1` / Playwright `1.61.1` 的隔离运行器，并在一次性 PostgreSQL 容器的网络命名空间内继续使用 `127.0.0.1:4183`。该方案不删除系统排除范围、不停止 Docker，也不把 E2E 接到正式服务；若隔离镜像无法构建或测试失败，发布必须停止。
 
 ## Docker Desktop 未就绪
 
