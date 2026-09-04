@@ -30,7 +30,13 @@
     "path": "config/release-source-audit.json",
     "sha256": "13368df6d6f1ae3d9a95c68119e50f062c767681f380c2798801271c426f0701"
   },
-  "completedBatches": [],
+  "completedBatches": [
+    {
+      "name": "work/solo-dev-migration-20260903-2050",
+      "head": "bdd6f75361e940e33bce2e6f23265907ee59f631",
+      "featureId": "project-release-guardrails"
+    }
+  ],
   "branches": [
     {
       "name": "agent/docs-workflow-parameter-options",
@@ -630,7 +636,7 @@
         "gitleaks",
         "diff-check"
       ],
-      "sourceDocumentSha256": "748ba298bcda641b30c71951a7669751250905fcbec51084834eed41edd08c57"
+      "sourceDocumentSha256": "816f19c4fcd8bf4e37ee647e327145f0f926a0377bdaa9ddc0d52bc6cd4bbe62"
     },
     {
       "id": "review-delivery-reliability",
