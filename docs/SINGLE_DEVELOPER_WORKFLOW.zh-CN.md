@@ -33,10 +33,11 @@ Windows 固定开发仓库建议使用不含中文、空格、括号和 shell �
 ```text
 npm run development:migrate-root -- preflight <参数> --apply --approved
 # 退出引用旧仓库的开发进程后，在同一磁盘执行一次原子目录移动
+# 在目标目录运行 npm ci，重建仍指向旧绝对路径的 workspace 链接
 npm run development:migrate-root -- finalize --home <外部 development 目录> --apply --approved
 ```
 
-`preflight` 要求干净的独立 Git 仓库、唯一 worktree、本机与公开 `main` 的内容树一致、ASCII 目标路径不存在，并在仓库外保存 Git bundle、登记文件、当前发布指针和固定启动器。`finalize` 会重新核对提交、tree、分支、bundle 与登记文件哈希，归档上一批为“已合并待发布”，再更新 `machine.json` 和新的活动批次。旧路径仍存在、外部登记被并发修改或任何身份不一致时必须停止。正式运行包与固定启动器不依赖开发仓库，因此迁移开发目录不得触发正式服务重启。
+`preflight` 要求干净的独立 Git 仓库、唯一 worktree、本机分支起点与公开 `main` 的内容树一致、ASCII 目标路径不存在，并在仓库外保存 Git bundle、登记文件、当前发布指针和固定启动器。移动后必须从锁文件执行 `npm ci`；`finalize` 会拒绝缺失、损坏、仍指向旧目录或仓库外的依赖链接，并重新核对提交、tree、分支、bundle 与登记文件哈希，归档上一批为“已合并待发布”，再更新 `machine.json` 和新的活动批次。旧路径仍存在、外部登记被并发修改或任何身份不一致时必须停止。正式运行包与固定启动器不依赖开发仓库，因此迁移开发目录不得触发正式服务重启。
 
 ## 开发数据库与网络隔离
 

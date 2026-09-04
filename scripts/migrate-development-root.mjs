@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { copyFile, lstat, mkdir, readFile, realpath, rename } from 'node:fs/promises';
+import { copyFile, lstat, mkdir, readFile, readdir, realpath, rename } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -113,6 +113,7 @@ export async function finalizeDevelopmentRootMigration(root, home, options) {
   if (identity.status || identity.commit !== intent.source.commit || identity.tree !== intent.source.tree || identity.branch !== intent.source.branch) {
     throw new Error('Repository identity changed during the filesystem move');
   }
+  await assertDevelopmentDependenciesRebased(resolvedRoot);
   const machinePath = path.join(home, 'machine.json');
   const batchPath = path.join(home, 'batch.json');
   const machineBackup = intent.backups.find((item) => item.name === 'machine.json');
@@ -186,6 +187,37 @@ function isAncestor(root, ancestor, descendant) {
     return true;
   } catch {
     return false;
+  }
+}
+
+export async function assertDevelopmentDependenciesRebased(root) {
+  const modulesRoot = path.join(root, 'node_modules');
+  let entries;
+  try {
+    entries = await readdir(modulesRoot, { withFileTypes: true });
+  } catch (error) {
+    if (error.code === 'ENOENT') throw new Error('node_modules is missing after the move; run npm ci from the target root before finalize');
+    throw error;
+  }
+  const candidates = [];
+  for (const entry of entries) {
+    if (entry.name === '.bin') continue;
+    const absolute = path.join(modulesRoot, entry.name);
+    if (entry.name.startsWith('@') && entry.isDirectory()) {
+      for (const child of await readdir(absolute, { withFileTypes: true })) candidates.push(path.join(absolute, child.name));
+    } else candidates.push(absolute);
+  }
+  for (const candidate of candidates) {
+    const metadata = await lstat(candidate);
+    if (!metadata.isSymbolicLink()) continue;
+    let target;
+    try {
+      target = await realpath(candidate);
+    } catch (error) {
+      if (error.code === 'ENOENT') throw new Error(`A stale dependency link still points to the previous root; run npm ci before finalize: ${path.relative(root, candidate)}`);
+      throw error;
+    }
+    if (!isWithin(root, target)) throw new Error(`An external dependency link is forbidden after migration: ${path.relative(root, candidate)}`);
   }
 }
 
