@@ -7,6 +7,25 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { AppError, createDefaultConfig, workflowParameterFileName, workflowParameterOptionsFileName, type AppConfig } from '@n8n-media-review/shared';
 import { applySharedMediaRetryOutcome, buildApp, isLegacyRootSensitiveRequest } from './app.js';
 import { LocalDirectoryOpener } from './services/local-directory-opener.js';
+import { acquireStateWriterLock } from './utils/state-writer-lock.js';
+
+async function temporaryStateRoot(prefix: string, reserve = acquireStateWriterLock): Promise<string> {
+  // Random fixture identities can hash into Windows/Hyper-V excluded ports.
+  // Choose another disposable directory, never weaken the real writer lock.
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const temporary = await mkdtemp(path.join(os.tmpdir(), prefix));
+    try {
+      const release = await reserve(path.join(temporary, 'app-data'));
+      await release();
+      return temporary;
+    } catch (error) {
+      if (path.dirname(path.resolve(temporary)) !== path.resolve(os.tmpdir())) throw new Error('Fixture cleanup path escaped its temporary parent');
+      await rm(temporary, { recursive: true, force: true });
+      if (!(error instanceof AppError) || error.code !== 'STATE_WRITER_BUSY' || attempt === 7) throw error;
+    }
+  }
+  throw new Error('No available isolated state-writer fixture');
+}
 
 describe.sequential('review and submission integration', () => {
   let root: string;
@@ -35,7 +54,7 @@ describe.sequential('review and submission integration', () => {
   };
 
   beforeAll(async () => {
-    root = await mkdtemp(path.join(os.tmpdir(), 'n8n-review-v001-'));
+    root = await temporaryStateRoot('n8n-review-v001-');
     appData = path.join(root, 'app-data');
     config = fixtureConfig(root);
     await mkdir(appData, { recursive: true });
@@ -71,6 +90,17 @@ describe.sequential('review and submission integration', () => {
     await app?.close();
     delete process.env.APP_DATA_DIR;
     await rm(root, { recursive: true, force: true });
+  });
+
+  it('reallocates only a disposable fixture when its lock port is unavailable', async () => {
+    let attempts = 0;
+    const fixture = await temporaryStateRoot('merchroute-lock-fixture-', async (directory) => {
+      attempts += 1;
+      if (attempts === 1) throw new AppError('STATE_WRITER_BUSY', 'Synthetic excluded-port fixture', { port: 50804 }, 503);
+      return acquireStateWriterLock(directory);
+    });
+    try { expect(attempts).toBeGreaterThanOrEqual(2); }
+    finally { await rm(fixture, { recursive: true, force: true }); }
   });
 
   it('scans nested images, saves and restores a draft', async () => {
@@ -1104,7 +1134,7 @@ describe.sequential('review and submission integration', () => {
   });
 
   it('backfills legacy pending records from the target workflow template on startup', async () => {
-    const legacyRoot = await mkdtemp(path.join(os.tmpdir(), 'n8n-review-legacy-'));
+    const legacyRoot = await temporaryStateRoot('n8n-review-legacy-');
     const legacyAppData = path.join(legacyRoot, 'app-data');
     await mkdir(legacyAppData, { recursive: true });
     await writeFile(path.join(legacyAppData, 'config.json'), `${JSON.stringify(fixtureConfig(legacyRoot), null, 2)}\n`, 'utf8');
@@ -1113,12 +1143,13 @@ describe.sequential('review and submission integration', () => {
       pendingSubmissions: [{ id: 'legacy-pending', taskId: 'legacy-task', sourceStageId: 'E002', targetStageId: 'E003', selectedRelativePaths: ['image.png'], conflictPolicy: 'skip', status: 'PENDING', createdAt: '2026-07-11T00:00:00.000Z', updatedAt: '2026-07-11T00:00:00.000Z' }]
     }, null, 2)}\n`, 'utf8');
     process.env.APP_DATA_DIR = legacyAppData;
-    const legacyApp = await buildApp({ databaseUrl: null });
+    let legacyApp: Awaited<ReturnType<typeof buildApp>> | undefined;
     try {
+      legacyApp = await buildApp({ databaseUrl: null });
       const pending = (await legacyApp.inject({ method: 'GET', url: '/api/v1/pending-submissions' })).json().items[0];
       expect(pending.n8nTaskParameters).toMatchObject({ SKU: '', productName: '' });
     } finally {
-      await legacyApp.close();
+      await legacyApp?.close();
       process.env.APP_DATA_DIR = appData;
       await rm(legacyRoot, { recursive: true, force: true });
     }

@@ -31,6 +31,10 @@ function git(root, args) {
 export function validateManifest(manifest) {
   const errors = [];
   if (manifest?.schemaVersion !== 2) errors.push('功能台账版本必须为 2');
+  if (manifest?.policy?.branchInventory !== undefined && manifest.policy.branchInventory !== 'ARCHIVED_WITH_ACTIVE_BATCH') errors.push('未知分支台账模式');
+  if (manifest?.policy?.branchInventory === 'ARCHIVED_WITH_ACTIVE_BATCH'
+    && (manifest.historicalAudit?.path !== 'config/release-source-audit.json'
+      || !/^[a-f0-9]{64}$/.test(manifest.historicalAudit?.sha256 || ''))) errors.push('缺少冻结的历史来源审计');
   if (!/^[0-9a-f]{40}$/i.test(manifest?.baseline?.commit || '')) errors.push('台账缺少明确本机基线');
   if (manifest?.policy?.candidateBinding !== 'EXPLICIT_EXPECTED_COMMIT'
     || manifest?.policy?.sourceAuthority !== 'LOCAL' || manifest?.policy?.currentBranch !== undefined) {
@@ -48,6 +52,12 @@ export function validateManifest(manifest) {
   if (new Set(manifest.branches.map((item) => item.name)).size !== manifest.branches.length) errors.push('审计分支重复');
   for (const branch of manifest.branches) {
     if (!features.has(branch.featureId) || !/^[0-9a-f]{40}$/i.test(branch.head || '')) errors.push('分支未关联有效功能和提交：' + branch.name);
+  }
+  const completedNames=new Set();
+  for(const batch of manifest.completedBatches||[]){
+    if(!batch.name?.startsWith('work/')||completedNames.has(batch.name)||manifest.branches.some(x=>x.name===batch.name)
+      ||!/^[a-f0-9]{40}$/.test(batch.head||'')||!features.has(batch.featureId))errors.push('已关闭批次台账无效');
+    completedNames.add(batch.name);
   }
   if (!manifest.sourceCandidate?.branch?.startsWith('work/')
     || !/^[0-9a-f]{40}$/i.test(manifest.sourceCandidate?.commit || '')
@@ -74,7 +84,7 @@ export function validateManifest(manifest) {
 export function compareBranchInventory(manifest, liveBranches, currentBranch, expectedCommit, candidateAliases = []) {
   const errors = [];
   if (!currentBranch?.startsWith('work/')) errors.push('当前分支不是独立候选 work/ 分支');
-  const expected = new Map(manifest.branches.map((item) => [item.name, item.head]));
+  const expected = new Map([...manifest.branches, ...(manifest.completedBatches || [])].map((item) => [item.name, item.head]));
   const actual = new Map(liveBranches.map((item) => [item.name, item.head]));
   if (!/^[0-9a-f]{40}$/i.test(expectedCommit || '') || actual.get(currentBranch) !== expectedCommit?.toLowerCase()) {
     errors.push('当前候选分支 HEAD 必须匹配显式 --expected-commit');
@@ -87,7 +97,8 @@ export function compareBranchInventory(manifest, liveBranches, currentBranch, ex
     }
   }
   for (const [name, head] of expected) {
-    if (actual.get(name) !== head) errors.push('已审计分支发生变化或缺失，需重新审计：' + name);
+    if ((actual.has(name) || manifest.policy?.branchInventory !== 'ARCHIVED_WITH_ACTIVE_BATCH')
+      && actual.get(name) !== head) errors.push('已审计分支发生变化或缺失，需重新审计：' + name);
   }
   for (const name of actual.keys()) {
     if (name !== currentBranch && !expected.has(name) && !candidateAliases.includes(name)) errors.push('发现未纳入台账的本机分支：' + name);
@@ -244,9 +255,9 @@ export function inspectValidationLog(id, command, log, { playwrightReport, platf
     check: /npm(?:-cli\.js|\.cmd)?["']?\s+run\s+check(?:\s|$)/i,
     'postgres-integration': /vitest\.mjs["']?\s+run\s+\.integration\.test\.ts(?:\s|$)/i,
     e2e: /npm(?:-cli\.js|\.cmd)?["']?\s+run\s+test:e2e(?:\s|$)/i,
-    jimeng: /npm(?:-cli\.js|\.cmd)?["']?\s+run\s+jimeng:test(?:\s|$)/i,
+    jimeng: /(?:npm(?:-cli\.js|\.cmd)?["']?\s+run\s+jimeng:test|node(?:\.exe)?\s+--import\s+tsx\s+scripts\/ci-regression-tests\.mjs\s+--suite\s+jimeng)(?:\s|$)/i,
     'deployment-verify': /npm(?:-cli\.js|\.cmd)?["']?\s+run\s+deployment:verify(?:\s|$)/i,
-    gitleaks: /gitleaks(?:\.exe)?(?:["']|\s|$)/i,
+    gitleaks: /gitleaks(?:-8\.30\.1)?(?:\.exe)?(?:["']|\s|$)/i,
     'diff-check': /^git(?:\.exe)?\s+diff\s+--check(?:\s|$)/i,
     'release-verifier-tests': /--test\s+scripts[\\/]verify-release-completeness\.test\.mjs(?:\s|$)/i,
     'restart-safety': /test-restart-windows-safety\.ps1(?:["']|\s|$)/i,
@@ -415,6 +426,15 @@ export async function runVerification({ root = process.cwd(), evidencePath, stri
   root = path.resolve(root);
   const manifest = JSON.parse(await readFile(path.join(root, MANIFEST_PATH), 'utf8'));
   const manifestErrors = validateManifest(manifest);
+  if (manifest.policy?.branchInventory === 'ARCHIVED_WITH_ACTIVE_BATCH') {
+    const historicalBytes = await readFile(path.join(root, manifest.historicalAudit.path));
+    const historical = JSON.parse(historicalBytes);
+    if (sha256(historicalBytes) !== manifest.historicalAudit.sha256
+      || JSON.stringify(historical.branches) !== JSON.stringify(manifest.branches)
+      || REQUIRED_FEATURE_IDS.some((id) => !historical.features.some((feature) => feature.id === id))) {
+      manifestErrors.push('冻结历史来源台账身份、分支或功能清单不一致');
+    }
+  }
   if (manifestErrors.length) throw new Error(manifestErrors.join('; '));
   const commit = git(root, ['rev-parse', 'HEAD']);
   const headTreeHash = git(root, ['rev-parse', 'HEAD^{tree}']);

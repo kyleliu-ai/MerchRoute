@@ -1,7 +1,12 @@
 import path from 'node:path';
+import { existsSync } from 'node:fs';
+import { verifyInstalledRelease } from '../../../scripts/lib/installed-release.mjs';
 import { loadRuntimeEnvironment } from './runtime-environment.js';
 
 const projectRoot = path.resolve(import.meta.dirname, '../../..');
+if (process.env.MERCHROUTE_INSTALLED_MANIFEST_SHA256 || existsSync(path.join(projectRoot, 'installed-release.json'))) {
+  await verifyInstalledRelease(projectRoot, process.env.MERCHROUTE_INSTALLED_MANIFEST_SHA256);
+}
 loadRuntimeEnvironment({ projectRoot });
 
 const { buildApp } = await import('./app.js');

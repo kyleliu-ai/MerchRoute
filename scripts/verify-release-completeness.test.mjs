@@ -7,6 +7,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { LEGACY_OZON_SKIPS, POSIX_SKIP } from './ci-evidence-contract.mjs';
+import { captureCommand } from './run-ci-check.mjs';
+import { commandTranscript } from './workflow/verify.mjs';
 import {
   collectContentIdentity,
   compareBranchInventory,
@@ -102,9 +104,10 @@ test('两种模式共用不可删减的 13 项关键功能与本机 11 类检查
 });
 
 test('当前候选以真实提交绑定；历史移动、缺失或未知新提交仍阻断', () => {
+  const legacyManifest=structuredClone(manifest);delete legacyManifest.policy.branchInventory;
   const branches = manifest.branches.map(({ name, head }) => ({ name, head }));
   branches.push({ name: candidateBranch, head: exampleIdentity.commit });
-  const inspect = (items, current = candidateBranch, expected = exampleIdentity.commit) => compareBranchInventory(manifest, items, current, expected);
+  const inspect = (items, current = candidateBranch, expected = exampleIdentity.commit) => compareBranchInventory(legacyManifest, items, current, expected);
   assert.deepEqual(inspect(branches), []);
   const moved = structuredClone(branches);
   moved[0].head = 'd'.repeat(40);
@@ -236,7 +239,27 @@ test('证据要求完整检查及仓库外非空日志，并验证日志哈希',
   assert.equal((await verifyEvidence(requirement, exampleIdentity, evidence, root)).status, 'FAIL');
 });
 
+test('真实静默 diff 检查保留捕获记录且错误退出仍被证据门禁拒绝', async (t) => {
+  const root = await tempDirectory(t, 'silent-diff-repo');
+  const logs = await tempDirectory(t, 'silent-diff-logs');
+  const left=path.join(root,'left.txt'),right=path.join(root,'right.txt');
+  // No line-ending conversion warning from the host's global autocrlf setting.
+  await writeFile(left,'same');await writeFile(right,'same');
+  const argv=['git','diff','--check','--no-index',left,right];
+  const result=await captureCommand(argv[0],argv.slice(1),{cwd:root});
+  assert.equal(result.exitCode,0);assert.equal(result.output.length,0);
+  const transcript=commandTranscript(argv,result),logPath=path.join(logs,'diff.log');
+  await writeFile(logPath,transcript);
+  const evidence={schemaVersion:1,identity:exampleIdentity,checks:[{id:'diff-check',command:argv.join(' '),exitCode:result.exitCode,completedAt:new Date().toISOString(),logPath,logSha256:digest(transcript)}]};
+  const required={requiredChecks:[{id:'diff-check'}]};
+  assert.equal((await verifyEvidence(required,exampleIdentity,evidence,root)).status,'PASS');
+  evidence.checks[0].exitCode=1;
+  assert.equal((await verifyEvidence(required,exampleIdentity,evidence,root)).status,'FAIL');
+});
+
 test('实际命令与日志汇总双检，全跳过、未知跳过和有失败的测试不算通过', () => {
+  assert.deepEqual(inspectValidationLog('gitleaks', 'C:/tools/gitleaks-8.30.1.exe git --redact .', 'no leaks found').problems, []);
+  assert.notEqual(inspectValidationLog('gitleaks', 'C:/tools/gitleaks-unknown.exe git .', 'no leaks found').problems.length, 0);
   const pgCommand = 'node.exe F:/project/node_modules/vitest/vitest.mjs run .integration.test.ts --maxWorkers=2';
   assert.deepEqual(inspectValidationLog('postgres-integration', pgCommand, ' Tests  23 passed (23)\n'), {
     problems: [], summary: { passed: 23, failed: 0, skipped: 0 }
@@ -386,7 +409,9 @@ test('CI 不依赖本机 refs 或分支名，但错误真实 HEAD 与 dirty 源�
   assert.match(inspectModeConstraints({ ...input, commit: 'f'.repeat(40) }).join(' '), /真实 Git HEAD/);
   assert.match(inspectModeConstraints({ ...input, dirty: true }).join(' '), /干净且已提交/);
   assert.match(inspectModeConstraints({ ...input, expectedCommit: undefined }).join(' '), /expected-commit/);
-  assert.match(inspectModeConstraints({ ...input, mode: 'local', currentBranch: candidateBranch }).join(' '), /分支发生变化或缺失/);
+  const legacyManifest=structuredClone(manifest);delete legacyManifest.policy.branchInventory;
+  assert.match(inspectModeConstraints({ ...input, manifest:legacyManifest, mode: 'local', currentBranch: candidateBranch }).join(' '), /分支发生变化或缺失/);
+  assert.match(inspectModeConstraints({ ...input, mode: 'local', currentBranch: candidateBranch }).join(' '), /expected-commit/);
   assert.deepEqual(verifyExpectedCommit(undefined, exampleIdentity.commit), []);
   assert.notDeepEqual(verifyExpectedCommit(exampleIdentity.commit, 'f'.repeat(40)), []);
 });

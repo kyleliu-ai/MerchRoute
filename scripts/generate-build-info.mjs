@@ -16,6 +16,7 @@ const snapshot = await collectLocalContentSnapshot(repoRoot, contract);
 const summary = summarizeContentSnapshot(snapshot);
 const buildInfo = {
   schemaVersion: 1,
+  buildChannel: 'candidate',
   productVersion: typeof packageJson.version === 'string' ? packageJson.version : 'unknown',
   configVersion: 'v003',
   builtAt: new Date().toISOString(),

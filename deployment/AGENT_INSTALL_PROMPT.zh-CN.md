@@ -4,6 +4,17 @@
 
 ## 目标与固定契约
 
+### 开发目录与正式运行分离（优先于后续通用启动示例）
+
+- 先询问这是正式安装还是开发机；默认不能把开发服务当成正式 4173。开发机采用[单人串行开发说明](../docs/SINGLE_DEVELOPER_WORKFLOW.zh-CN.md)：固定一个目录、一个活动批次、一个写入任务，同批修复复用分支和 Draft PR，只有并行任务、紧急修复或高风险实验才建临时 worktree。
+- 本批产品 `0.1.2` 是候选版本。回读目标 Release 是否真正发布，不能把 package.json、PR 合并或版本较新当成发布完成，不改写 v0.1.1。固定依赖版本仍以下方机器契约为准。
+- 将个人路径仅登记在仓库外 `development/machine.json`。开发库仅为 `merchroute_dev` / `merchroute_dev_app`；不可用生产库权限绕过缺失的管理员输入，也不能复制生产数据。
+- 开发只用 `npm run dev` 安全启动器：5173 → 4184，E2E 4183；不得加载生产 `MERCHROUTE_ENV_FILE`、代理 4173 或调用真实 n8n、WB/OZON、付费服务。端口冲突停止，不自动改端口。
+- 正式运行包放到系统用户数据目录 `MerchRoute/releases/<版本>-<构建标识>`，不含 `.git`，不依赖开发目录或旧 worktree。源码、构建、依赖逐文件核验，清单 SHA-256 固定在外部登记中；清单缺失或损坏时停止，不回退旧路径。
+- 源码/构建只读使用，配置、日志、状态、媒体、数据库、浏览器 Profile 在包外。已有状态的电脑必须先进入升级保护，不执行新安装默认值覆盖。
+- Windows 固定入口是用户数据目录中的 `Start-MerchRoute.ps1`，桌面与开机入口一致。macOS 通用 Node 校验可复用，但本批 Windows 切换适配器不等于 macOS 上线已经验收；不得伪造跨平台完成。
+- 若仅获开发/同步授权，完成候选与 Draft PR 后暂停。用户确认合并并发布目标版本、验收资产一致且业务空闲后，才能按独立切换审批变更正式入口。
+
 - 仓库：`https://github.com/kyleliu-ai/MerchRoute.git`
 - 支持系统：Windows 11 x64，或 Apple Silicon macOS（arm64）。其他平台停止并报告。
 - MerchRoute：Node.js `22.23.1`、npm `10.9.8`、Playwright `1.61.1`。
