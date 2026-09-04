@@ -13,6 +13,30 @@ import { probeReadOnlyPages } from './read-only-pages.mjs';
 import { assertAcceptedCandidate } from './candidate-acceptance.mjs';
 import { createRuntimeEndpoint, runtimeEndpointFromBinding } from '../lib/runtime-endpoint.mjs';
 
+export function stopProcessInput(binding, live) {
+  if(!live||live.stopped||!Number.isInteger(live.pid)||!live.createdAt)throw new Error('Live process identity is incomplete');
+  return {...live,runtimeEndpoint:runtimeEndpointFromBinding(binding,{allowLegacy:true})};
+}
+
+export function assertAboutIdentity(binding,about) {
+  const endpoint=runtimeEndpointFromBinding(binding,{allowLegacy:true});
+  const endpointMatches=binding.legacy===true||about?.current?.runtimeEndpoint?.origin===endpoint.origin;
+  if(about?.current?.commitSha!==binding.sourceCommit||about?.current?.productVersion!==binding.productVersion
+    ||about?.runtimeStatus!=='CURRENT'||!endpointMatches)throw new Error('About identity mismatch');
+  return true;
+}
+
+export function assertRecoverablePreStopJournal(journal,{previous,currentLive,expectedPid,pointerExists,acceptedCommit}) {
+  const samePrevious=journal?.previous?.root===previous.root
+    &&journal?.previous?.sourceCommit===previous.sourceCommit
+    &&journal?.previous?.productVersion===previous.productVersion;
+  if(journal?.state!=='FAILED'||!journal.error||!samePrevious||pointerExists
+    ||currentLive?.stopped||currentLive?.pid!==expectedPid||acceptedCommit!==previous.sourceCommit){
+    throw new Error('Interrupted release journal is not a proven pre-stop failure');
+  }
+  return true;
+}
+
 export async function releaseCommand(command,{root,home,config,options}) {
   const configuredEndpoint=createRuntimeEndpoint(config.production?.port||43173);
   if(command==='prepare'){
@@ -62,10 +86,17 @@ export async function releaseCommand(command,{root,home,config,options}) {
   const verifyTarget=binding=>binding.legacy?verifyLegacyRelease(binding):verifyInstalledRelease(binding.root,binding.manifestSha256);
   await verifyTarget(candidate);await verifyTarget(previous);
   await inspectBusinessIdle(previous);
-  if(options['dry-run'])return {dryRun:true,from:previous.sourceCommit,to:candidate.sourceCommit,release:candidate.releaseTag};
-  requireApply(options);
   const journalFile=path.join(home,'release-journal.json');
-  try{const old=await readJson(journalFile);if(!['ACCEPTED','ROLLED_BACK'].includes(old.state))throw new Error('Interrupted release journal requires explicit recovery');}catch(error){if(error.code!=='ENOENT')throw error;}
+  let interruptedJournal=null;
+  try{
+    const old=await readJson(journalFile);
+    if(!['ACCEPTED','ROLLED_BACK'].includes(old.state)){
+      if(old.state!=='FAILED'||approval.recoverFailedPreStopApproved!==true)throw new Error('Interrupted release journal requires explicit recovery');
+      interruptedJournal=old;
+    }
+  }catch(error){if(error.code!=='ENOENT')throw error;}
+  if(options['dry-run'])return {dryRun:true,from:previous.sourceCommit,to:candidate.sourceCommit,release:candidate.releaseTag,journalRecovery:interruptedJournal?'PRE_STOP_PROOF_REQUIRED':null};
+  requireApply(options);
   const outside=path.join(config.recoveryDirectory,'cutover-'+Date.now());await mkdir(outside,{recursive:true,mode:0o700});
   const shortcuts=[];
   for(const [index,file] of config.production.shortcuts.entries()){const backup=path.join(outside,'shortcut-'+index+'.lnk');await copyFile(file,backup);shortcuts.push({path:file,backup,sha256:digest(await readFile(backup))});}
@@ -74,9 +105,16 @@ export async function releaseCommand(command,{root,home,config,options}) {
   const active=new Map();
   async function inspect(binding){return windows('Inspect',{entry:path.join(binding.root,'apps/server/dist/index.js'),nodePath:binding.nodePath,runtimeEndpoint:runtimeEndpointFromBinding(binding,{allowLegacy:true})});}
   const fixedLauncher=path.join(config.runtimeHome,'Start-MerchRoute.ps1'),pointer=path.join(config.runtimeHome,'current-release.json');
+  if(interruptedJournal){
+    const currentLive=await inspect(previous);
+    let pointerExists=true;try{await readJson(pointer);}catch(error){if(error.code==='ENOENT')pointerExists=false;else throw error;}
+    const accepted=await readJson(config.acceptedReleaseFile);
+    assertRecoverablePreStopJournal(interruptedJournal,{previous,currentLive,expectedPid:approval.expectedPid,pointerExists,acceptedCommit:accepted.local?.commit});
+    await atomicJson(path.join(outside,'failed-journal-before-retry.json'),interruptedJournal);
+  }
   return switchRelease({previous,candidate,
     check:async(old,next)=>{await inspectBusinessIdle(old);const live=await inspect(old);if(live.stopped){if(approval.expectedStopped!==true)throw new Error('Production process unexpectedly stopped');}else{if(live.pid!==approval.expectedPid)throw new Error('Production process changed');active.set(old.root,live);}await verifyTarget(next);},
-    stop:async(binding)=>{const live=await inspect(binding);if(live.stopped)return;const expected=active.get(binding.root);if(!expected||expected.pid!==live.pid)throw new Error('Refusing to stop an unowned process');await inspectBusinessIdle(binding);await windows('Stop',live);},
+    stop:async(binding)=>{const live=await inspect(binding);if(live.stopped)return;const expected=active.get(binding.root);if(!expected||expected.pid!==live.pid)throw new Error('Refusing to stop an unowned process');await inspectBusinessIdle(binding);await windows('Stop',stopProcessInput(binding,live));},
     bind:async(binding)=>{
       if(binding.legacy){await windows('RestoreShortcuts',{shortcuts:binding.shortcutBackups});await atomicJson(pointer,binding);return;}
       await copyFile(path.join(binding.root,'scripts/Start-MerchRoute.ps1'),fixedLauncher);
@@ -98,8 +136,7 @@ export async function releaseCommand(command,{root,home,config,options}) {
       if(!health.ok)throw new Error('Read-only health check failed');
       await probeReadOnlyPages(endpoint.origin);
       const about=await (await fetch(endpoint.origin+'/api/v1/about/version',{signal:AbortSignal.timeout(60000)})).json();
-      if(about.current.commitSha!==binding.sourceCommit||about.current.productVersion!==binding.productVersion||about.runtimeStatus!=='CURRENT'
-        ||about.current.runtimeEndpoint?.origin!==endpoint.origin)throw new Error('About identity mismatch');
+      assertAboutIdentity(binding,about);
     },
     accept:async(binding,running)=>{
       const accepted=await readJson(config.acceptedReleaseFile);

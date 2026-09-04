@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
+import { createServer } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { digest } from '../lib/installed-release.mjs';
@@ -13,9 +14,38 @@ import { testEnvironment } from './verify.mjs';
 import { probeReadOnlyPages } from './read-only-pages.mjs';
 import { candidateSnapshot, assertAcceptedCandidate } from './candidate-acceptance.mjs';
 import { switchRelease } from './release-transaction.mjs';
+import { assertAboutIdentity, assertRecoverablePreStopJournal, stopProcessInput } from './release.mjs';
+
+test('release stop payload retains the verified runtime endpoint',()=>{
+  const binding={schemaVersion:2,runtimeEndpoint:{host:'127.0.0.1',port:43173,origin:'http://127.0.0.1:43173'}};
+  const live={pid:1234,createdAt:'2026-09-04T00:00:00.000Z',entry:'C:/release/apps/server/dist/index.js',nodePath:'C:/node.exe'};
+  assert.deepEqual(stopProcessInput(binding,live),{...live,runtimeEndpoint:binding.runtimeEndpoint});
+  assert.equal(live.runtimeEndpoint,undefined,'the inspected process record must remain immutable');
+  assert.throws(()=>stopProcessInput(binding,{...live,createdAt:''}),/incomplete/);
+});
+
+test('legacy rollback accepts an old About response without runtimeEndpoint but new releases do not',()=>{
+  const current={commitSha:'a'.repeat(40),productVersion:'0.1.0'};
+  const legacy={legacy:true,schemaVersion:2,sourceCommit:current.commitSha,productVersion:current.productVersion,runtimeEndpoint:{host:'127.0.0.1',port:43173,origin:'http://127.0.0.1:43173'}};
+  assert.equal(assertAboutIdentity(legacy,{current,runtimeStatus:'CURRENT'}),true);
+  const release={...legacy,legacy:false,productVersion:'0.1.4'};
+  const releaseCurrent={...current,productVersion:'0.1.4'};
+  assert.throws(()=>assertAboutIdentity(release,{current:releaseCurrent,runtimeStatus:'CURRENT'}),/identity mismatch/);
+  assert.equal(assertAboutIdentity(release,{current:{...releaseCurrent,runtimeEndpoint:release.runtimeEndpoint},runtimeStatus:'CURRENT'}),true);
+});
+
+test('a failed cutover journal can be retried only after proving the old runtime was never stopped',()=>{
+  const previous={root:'C:/legacy',sourceCommit:'a'.repeat(40),productVersion:'0.1.0'};
+  const journal={state:'FAILED',previous:{...previous},candidate:{sourceCommit:'b'.repeat(40)},error:'stop adapter failed'};
+  const proof={previous,currentLive:{pid:5804,createdAt:'2026-09-04T00:00:00.000Z'},expectedPid:5804,pointerExists:false,acceptedCommit:previous.sourceCommit};
+  assert.equal(assertRecoverablePreStopJournal(journal,proof),true);
+  assert.throws(()=>assertRecoverablePreStopJournal(journal,{...proof,pointerExists:true}),/not a proven pre-stop/);
+  assert.throws(()=>assertRecoverablePreStopJournal(journal,{...proof,currentLive:{stopped:true}}),/not a proven pre-stop/);
+  assert.throws(()=>assertRecoverablePreStopJournal({...journal,state:'RECOVERY_REQUIRED'},proof),/not a proven pre-stop/);
+});
 
 test('acceptance pins the exact package and artifacts, not only the source commit',()=>{
-  const candidate={id:'fixture',productVersion:'0.1.3',root:path.resolve('fixture-release'),artifactRoot:path.resolve('fixture-artifacts'),sourceCommit:'a'.repeat(40),sourceTree:'b'.repeat(40),manifestSha256:'c'.repeat(64),artifacts:[{name:'source.zip',sha256:'d'.repeat(64)}]};
+  const candidate={id:'fixture',productVersion:'0.1.4',root:path.resolve('fixture-release'),artifactRoot:path.resolve('fixture-artifacts'),sourceCommit:'a'.repeat(40),sourceTree:'b'.repeat(40),manifestSha256:'c'.repeat(64),artifacts:[{name:'source.zip',sha256:'d'.repeat(64)}]};
   const accepted=candidateSnapshot(candidate);assert.deepEqual(assertAcceptedCandidate(candidate,accepted),accepted);
   assert.throws(()=>assertAcceptedCandidate({...candidate,manifestSha256:'e'.repeat(64)},accepted),/accepted build/);
   assert.throws(()=>assertAcceptedCandidate({...candidate,artifacts:[{name:'source.zip',sha256:'e'.repeat(64)}]},accepted),/accepted build/);
@@ -55,7 +85,7 @@ test('docs preserve local authority, serial ownership, phase boundary and produc
   const root=path.resolve(import.meta.dirname,'../..');
   for(const file of ['AGENTS.md','docs/SINGLE_DEVELOPER_WORKFLOW.zh-CN.md','deployment/AGENT_INSTALL_PROMPT.zh-CN.md','deployment/AGENT_UPDATE_PROMPT.zh-CN.md']){
     const text=await readFile(path.join(root,file),'utf8');
-    for(const marker of ['批次','43173','4184','0.1.3'])assert.ok(text.includes(marker),file+' missing '+marker);
+    for(const marker of ['批次','43173','4184','0.1.4'])assert.ok(text.includes(marker),file+' missing '+marker);
   }
   const vite=await readFile(path.join(root,'apps/web/vite.config.ts'),'utf8');assert.ok(vite.includes('http://127.0.0.1:4184'));assert.ok(!vite.includes(':4173'));assert.ok(vite.includes('strictPort: true'));
 });
@@ -81,6 +111,30 @@ if(process.platform==='win32')for(const shell of ['powershell.exe','pwsh']){
     assert.match(run(),/Launcher binding verified/);await writeFile(path.join(root,'scripts/lib/installed-release.mjs'),'changed verifier');assert.throws(run);
   });
 }
+if(process.platform==='win32')test('Windows release adapter stops only the inspected process with the retained endpoint',async t=>{
+  const root=await mkdtemp(path.join(os.tmpdir(),'merchroute-stop-adapter-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  let port=0;
+  for(let candidate=43800;candidate<43900&&!port;candidate++){
+    const server=createServer();
+    try{await new Promise((resolve,reject)=>server.once('error',reject).listen(candidate,'127.0.0.1',resolve));port=candidate;}catch{/* Try the next bounded test port. */}
+    finally{if(server.listening)await new Promise(resolve=>server.close(resolve));}
+  }
+  assert.ok(port,'no bounded fixture port is available');
+  const entry=path.join(root,'fixture-server.mjs');
+  await writeFile(entry,"import{createServer}from'node:net';createServer((_q,r)=>r.end('ok')).listen(Number(process.argv[2]),'127.0.0.1',()=>console.log('READY'));\n");
+  const child=spawn(process.execPath,[entry,String(port)],{windowsHide:true,stdio:['ignore','pipe','pipe']});
+  t.after(()=>{if(child.exitCode===null)child.kill();});
+  await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('fixture server did not start')),10000);child.once('error',reject);child.stdout.on('data',data=>{if(data.toString().includes('READY')){clearTimeout(timer);resolve();}});});
+  const binding={schemaVersion:2,runtimeEndpoint:{host:'127.0.0.1',port,origin:'http://127.0.0.1:'+port}};
+  const inspectFile=path.join(root,'inspect.json');await atomicJson(inspectFile,{entry,nodePath:process.execPath,runtimeEndpoint:binding.runtimeEndpoint});
+  const adapter=path.resolve(import.meta.dirname,'../release-windows.ps1');
+  const live=JSON.parse(execFileSync('powershell.exe',['-NoProfile','-File',adapter,'-Action','Inspect','-InputFile',inspectFile],{encoding:'utf8',windowsHide:true}));
+  assert.equal(live.pid,child.pid);
+  const stopFile=path.join(root,'stop.json');await atomicJson(stopFile,stopProcessInput(binding,live));
+  execFileSync('powershell.exe',['-NoProfile','-File',adapter,'-Action','Stop','-InputFile',stopFile],{encoding:'utf8',windowsHide:true});
+  await new Promise(resolve=>child.once('exit',resolve));
+  assert.notEqual(child.exitCode,null);
+});
 test('npm lookup supports Windows and macOS archive layouts without relying on PATH',async t=>{
   const root=await mkdtemp(path.join(os.tmpdir(),'merchroute-toolchain-test-'));t.after(()=>rm(root,{recursive:true,force:true}));
   for(const [binary,npm] of [['windows/node.exe','windows/node_modules/npm/bin/npm-cli.js'],['mac/bin/node','mac/lib/node_modules/npm/bin/npm-cli.js']]){
