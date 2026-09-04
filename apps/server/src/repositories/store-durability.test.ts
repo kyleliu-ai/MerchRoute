@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import pino from 'pino';
 import { StateStore } from './store.js';
 import { ReviewOperationService } from '../services/review-operations.js';
-import { acquireStateWriterLock } from '../utils/state-writer-lock.js';
+import { acquireStateWriterLock, resolveStateWriterLockPort } from '../utils/state-writer-lock.js';
 const roots: string[] = [];
 const services: ReviewOperationService[] = [];
 const temp = async () => { const root = await mkdtemp(path.join(os.tmpdir(), 'merchroute-durable-test-')); roots.push(root); return root; };
@@ -57,6 +57,9 @@ describe('durable review state', () => {
   });
   it('holds a kernel-owned exclusive writer reservation until close', async () => {
     const root = await temp();
+    const port = await resolveStateWriterLockPort(root);
+    expect(port).toBeGreaterThanOrEqual(20_000);
+    expect(port).toBeLessThan(30_000);
     const release = await acquireStateWriterLock(root);
     await expect(acquireStateWriterLock(root)).rejects.toMatchObject({ code: 'STATE_WRITER_BUSY' });
     await release();
