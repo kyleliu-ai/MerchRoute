@@ -13,9 +13,76 @@ import { probeReadOnlyPages } from './read-only-pages.mjs';
 import { assertAcceptedCandidate } from './candidate-acceptance.mjs';
 import { createRuntimeEndpoint, runtimeEndpointFromBinding } from '../lib/runtime-endpoint.mjs';
 
+const V014_OPERATOR_MODE='v0.1.4-prestop-unicode';
+const V014_OPERATOR_COMMIT='2b4d9ff3c9cd479bb8be3a4e726c0f2db30adb3b';
+const V014_OPERATOR_FILES=Object.freeze([
+  'AGENTS.md',
+  'scripts/release-windows.ps1',
+  'scripts/workflow/launcher.test.mjs',
+  'scripts/workflow/publish.mjs',
+  'scripts/workflow/release.mjs'
+]);
+
+export function assertV014OperatorHardening(identity,candidate,mode) {
+  if(mode!==V014_OPERATOR_MODE||identity.commit!==V014_OPERATOR_COMMIT||identity.tree!==candidate?.sourceTree
+    ||candidate?.sourceCommit!==V014_OPERATOR_COMMIT||candidate?.productVersion!=='0.1.4')throw new Error('Operator hardening is not bound to the accepted v0.1.4 candidate');
+  const entries=String(identity.status||'').split(/\r?\n/).filter(Boolean);
+  const files=entries.map(line=>{
+    let file;
+    if([' M','M ','MM'].includes(line.slice(0,2))&&line[2]===' ')file=line.slice(3);
+    else if(line.startsWith('M '))file=line.slice(2); // state.mjs trims the leading space from the first unstaged entry
+    else throw new Error('Operator hardening contains an unsupported Git state');
+    if(!file||file.includes(' -> '))throw new Error('Operator hardening contains an ambiguous path');
+    return file;
+  }).sort();
+  const expected=[...V014_OPERATOR_FILES].sort();
+  if(files.length!==expected.length||files.some((file,index)=>file!==expected[index]))throw new Error('Operator hardening contains files outside the approved local patch');
+  return files;
+}
+
+export function createPublishedBinding(candidate,fields) {
+  if(!fields?.runtimeEndpoint)throw new Error('Published binding requires an explicit runtime endpoint');
+  return {...candidate,...fields,schemaVersion:2,runtimeEndpoint:fields.runtimeEndpoint};
+}
+
+export async function downloadAcceptedArtifact(asset,artifact,{fetchImpl=fetch,sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms))}={}) {
+  let lastError;
+  for(let attempt=1;attempt<=3;attempt++){
+    try{
+      const response=await fetchImpl(asset.browser_download_url,{signal:AbortSignal.timeout(60000)});
+      if(!response.ok)throw new Error('Release asset request failed with HTTP '+response.status);
+      const bytes=Buffer.from(await response.arrayBuffer());
+      if(digest(bytes)!==artifact.sha256)throw new Error('Published asset differs from the accepted local build');
+      return {attempts:attempt,bytes:bytes.length};
+    }catch(error){
+      if(String(error.message).includes('differs from the accepted local build'))throw error;
+      lastError=error;
+      if(attempt<3)await sleep(attempt*1000);
+    }
+  }
+  throw new Error('Release asset download failed after 3 attempts: '+String(lastError?.message||lastError));
+}
+
+async function verifyV014OperatorHardening(root,config,identity,candidate,mode) {
+  const files=assertV014OperatorHardening(identity,candidate,mode);
+  if(digest(await readFile(config.nodePath))!==config.nodeSha256)throw new Error('Pinned Node toolchain changed before operator verification');
+  execFileSync('git',['-C',root,'diff','--check'],{encoding:'utf8',windowsHide:true,stdio:['ignore','pipe','pipe']});
+  execFileSync(config.gitleaksPath,['dir',root,'--redact=100','--no-banner','--no-color'],{encoding:'utf8',windowsHide:true,stdio:['ignore','pipe','pipe'],maxBuffer:32*1024*1024});
+  execFileSync(config.nodePath,['--import','tsx','--test','scripts/workflow/launcher.test.mjs'],{cwd:root,encoding:'utf8',windowsHide:true,stdio:['ignore','pipe','pipe'],maxBuffer:32*1024*1024});
+  const patch=execFileSync('git',['-C',root,'diff','--binary','HEAD','--',...files],{windowsHide:true,maxBuffer:32*1024*1024});
+  return {schemaVersion:1,mode,baseCommit:identity.commit,baseTree:identity.tree,patchSha256:digest(patch),verifiedAt:new Date().toISOString(),
+    files:await Promise.all(files.map(async file=>({path:file,sha256:digest(await readFile(path.join(root,file)))})))};
+}
+
 export function stopProcessInput(binding, live) {
   if(!live||live.stopped||!Number.isInteger(live.pid)||!live.createdAt)throw new Error('Live process identity is incomplete');
-  return {...live,runtimeEndpoint:runtimeEndpointFromBinding(binding,{allowLegacy:true})};
+  return {
+    pid:live.pid,
+    createdAt:live.createdAt,
+    entry:path.join(binding.root,'apps/server/dist/index.js'),
+    nodePath:binding.nodePath,
+    runtimeEndpoint:runtimeEndpointFromBinding(binding,{allowLegacy:true})
+  };
 }
 
 export function assertAboutIdentity(binding,about) {
@@ -59,7 +126,9 @@ export async function releaseCommand(command,{root,home,config,options}) {
     const saved=await readJson(path.join(home,'previous-release.json'));candidate=saved;
     if(approval.noBusinessStateRestore!==true)throw new Error('Rollback must not restore historical database or review state');
   }else{
-    const verified=await requireVerified(root,home);
+    const identity=sourceIdentity(root);
+    const operatorPatch=identity.status?await verifyV014OperatorHardening(root,config,identity,candidate,options['operator-hardening']):null;
+    const verified=await requireVerified(root,home,{allowDirty:Boolean(operatorPatch)});
     assertAcceptedCandidate(candidate,verified.record.candidate);
     const publication=await readJson(path.join(home,'publication.json'));
     const pr=githubJson(config,'repos/'+config.github.repository+'/pulls/'+publication.number);
@@ -71,12 +140,12 @@ export async function releaseCommand(command,{root,home,config,options}) {
     for(const artifact of candidate.artifacts){
       const asset=release.assets.find(x=>x.name===artifact.name);
       if(!asset)throw new Error('An accepted release asset is missing: '+artifact.name);
-      const response=await fetch(asset.browser_download_url,{signal:AbortSignal.timeout(60000)});
-      if(!response.ok||digest(Buffer.from(await response.arrayBuffer()))!==artifact.sha256)throw new Error('Published asset differs from the accepted local build');
+      await downloadAcceptedArtifact(asset,artifact);
     }
-    candidate={schemaVersion:2,...candidate,nodePath:config.nodePath,nodeSha256:config.nodeSha256,runtimeEndpoint:configuredEndpoint,
+    candidate=createPublishedBinding(candidate,{nodePath:config.nodePath,nodeSha256:config.nodeSha256,runtimeEndpoint:configuredEndpoint,
       ...config.production,releaseTag:'v'+candidate.productVersion,logDirectory:path.join(config.runtimeHome,'logs'),
-      launcherSha256:digest(await readFile(path.join(candidate.root,'scripts/release-runtime.mjs'))),publicCommit:published.sha};
+      launcherSha256:digest(await readFile(path.join(candidate.root,'scripts/release-runtime.mjs'))),publicCommit:published.sha,
+      ...(operatorPatch?{operatorPatch}:{})});
     candidate.bootstrapHashes={};
     for(const file of ['scripts/release-runtime.mjs','scripts/lib/installed-release.mjs','scripts/workflow/development.mjs','scripts/workflow/state.mjs'])candidate.bootstrapHashes[file]=digest(await readFile(path.join(candidate.root,file)));
   }
