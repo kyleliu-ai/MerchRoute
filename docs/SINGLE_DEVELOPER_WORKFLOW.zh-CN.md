@@ -6,7 +6,7 @@
 
 本机为权威来源，默认本机 → GitHub。远端比较不是覆盖授权；GitHub → 本机必须先报告差异、备份、再次获得用户确认。新批次从已验收本机完整基线建立。源码完成、GitHub 同步、正式运行更新是三个独立状态。
 
-本批为 0.1.4 发布工具修复候选；v0.1.2 与 v0.1.3 保留为已发布但本机未激活版本，不改写其标签或资产。0.1.4 修复停止旧进程时的端点传递，并兼容旧版 About 不含端点字段的回滚验收；不自动合并 main、创建 Release、重启或切换生产。
+批次文档只描述长期流程，不把某个正在开发或运行的版本写成永久事实。实际开发分支、正式运行版本、发布绑定和 GitHub 映射必须通过仓库外登记与只读状态命令回读。
 
 ## 外部目录登记
 
@@ -25,6 +25,18 @@ Windows 用户数据根为 `%LOCALAPPDATA%\MerchRoute`，macOS 为 `~/Library/Ap
 `machine.json` 记录 `schemaVersion:1`、`sourceAuthority:"LOCAL"`、`devRoot`、本机 `baseline.commit/tree`、`github.repository/baselineCommit/baselineTree`、`nodePath/nodeSha256`、Gitleaks 和 GitHub CLI 路径、`releasesRoot`、`runtimeHome`、`acceptedReleaseFile`、`recoveryDirectory` 及生产入口位置。只能在本机写入真实绝对路径，不把登记文件提交到仓库。
 
 固定目录首次建立：确认空目录 → 仓库外完整 Git bundle 与未提交文件备份 → 仅从已验收本机分支使用 `git clone --no-local --single-branch --no-tags --no-checkout` → 在本机基线提交建立批次。不共享旧对象库、hardlink、alternates 或 node_modules。源码树、每个受控文件和二进制哈希相同后再安装依赖。
+
+Windows 固定开发仓库建议使用不含中文、空格、括号和 shell 特殊字符的绝对路径，例如 `F:\Projects\MerchRoute-System\merchroute-ai-system`。需要从旧路径迁移时，只移动登记的固定开发仓库，不整体重命名包含备份、旧 worktree、业务资料或其他项目的共享父目录，也不移动独立正式运行包、数据库、n8n、Jimeng、媒体目录或凭据。
+
+迁移分为两个可核验阶段：
+
+```text
+npm run development:migrate-root -- preflight <参数> --apply --approved
+# 退出引用旧仓库的开发进程后，在同一磁盘执行一次原子目录移动
+npm run development:migrate-root -- finalize --home <外部 development 目录> --apply --approved
+```
+
+`preflight` 要求干净的独立 Git 仓库、唯一 worktree、本机与公开 `main` 的内容树一致、ASCII 目标路径不存在，并在仓库外保存 Git bundle、登记文件、当前发布指针和固定启动器。`finalize` 会重新核对提交、tree、分支、bundle 与登记文件哈希，归档上一批为“已合并待发布”，再更新 `machine.json` 和新的活动批次。旧路径仍存在、外部登记被并发修改或任何身份不一致时必须停止。正式运行包与固定启动器不依赖开发仓库，因此迁移开发目录不得触发正式服务重启。
 
 ## 开发数据库与网络隔离
 
