@@ -1,6 +1,6 @@
 {
   "name": "merchroute",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Local-first procurement, AI commerce media, review, pricing, shipping, and WB/OZON listing operations platform.",
   "private": true,
   "type": "module",
@@ -30,13 +30,14 @@
   "scripts": {
     "dev": "node scripts/start-development.mjs",
     "workflow": "node --import tsx scripts/workflow.mjs",
+    "development:migrate-root": "node --import tsx scripts/migrate-development-root.mjs",
     "workflow:test": "node --import tsx --test scripts/workflow/*.test.mjs",
     "build": "npm run clean && npm run build -w packages/shared && npm run build -w apps/web && npm run build -w apps/server && node scripts/generate-build-info.mjs",
     "start": "npm run start -w apps/server",
     "test": "npm run build -w packages/shared && npm run test -ws --if-present",
     "test:e2e": "playwright test",
     "release:verify": "node --import tsx scripts/verify-release-completeness.mjs",
-    "release:test": "node --import tsx --test scripts/verify-release-completeness.test.mjs scripts/e2e-isolation.test.mjs scripts/package-release-candidate.test.mjs scripts/run-ci-check.test.mjs scripts/verify-ci-gate.test.mjs scripts/workflow/*.test.mjs",
+    "release:test": "node --import tsx --test scripts/verify-release-completeness.test.mjs scripts/e2e-isolation.test.mjs scripts/migrate-development-root.test.mjs scripts/package-release-candidate.test.mjs scripts/run-ci-check.test.mjs scripts/verify-ci-gate.test.mjs scripts/workflow/*.test.mjs",
     "release:package": "node --import tsx scripts/package-release-candidate.mjs",
     "e2e:prepare": "tsx tests/e2e/prepare.ts",
     "e2e:server": "node scripts/start-e2e-server.mjs",

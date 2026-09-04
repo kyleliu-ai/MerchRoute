@@ -113,8 +113,12 @@ test('docs preserve local authority, serial ownership, phase boundary and produc
   const root=path.resolve(import.meta.dirname,'../..');
   for(const file of ['AGENTS.md','docs/SINGLE_DEVELOPER_WORKFLOW.zh-CN.md','deployment/AGENT_INSTALL_PROMPT.zh-CN.md','deployment/AGENT_UPDATE_PROMPT.zh-CN.md']){
     const text=await readFile(path.join(root,file),'utf8');
-    for(const marker of ['批次','43173','4184','0.1.4'])assert.ok(text.includes(marker),file+' missing '+marker);
+    for(const marker of ['批次','43173','4184'])assert.ok(text.includes(marker),file+' missing '+marker);
   }
+  const workflowDoc=await readFile(path.join(root,'docs/SINGLE_DEVELOPER_WORKFLOW.zh-CN.md'),'utf8');
+  for(const marker of ['不把某个正在开发或运行的版本写成永久事实','ASCII','development:migrate-root','正式运行包与固定启动器不依赖开发仓库'])assert.ok(workflowDoc.includes(marker),'workflow docs missing '+marker);
+  const agents=await readFile(path.join(root,'AGENTS.md'),'utf8');
+  for(const marker of ['v0.1.4 已从独立运行包在本机正式激活','PR #29','不得冒充已经上线'])assert.ok(agents.includes(marker),'AGENTS.md missing '+marker);
   const vite=await readFile(path.join(root,'apps/web/vite.config.ts'),'utf8');assert.ok(vite.includes('http://127.0.0.1:4184'));assert.ok(!vite.includes(':4173'));assert.ok(vite.includes('strictPort: true'));
 });
 test('stale-lock recovery requires exact hash and explicit approval',async t=>{

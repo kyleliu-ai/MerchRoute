@@ -10,7 +10,7 @@ import { atomicJson, git, withCommandLock, registration } from './state.mjs';
 import { developmentEnvironment, blockDevelopmentOutbound, assertPortFree } from './development.mjs';
 import { inventoryRelease, verifyInstalledRelease, digest, gitBlob, safeRelative } from '../lib/installed-release.mjs';
 import { switchRelease } from './release-transaction.mjs';
-import { validateV012Rollover, validateV013Rollover } from './publish.mjs';
+import { publicationBody, publicationDescriptor, validateV012Rollover, validateV013Rollover } from './publish.mjs';
 import { assertNoActivity } from './business-gate.mjs';
 import { validateManifest, compareBranchInventory } from '../verify-release-completeness.mjs';
 import { candidateSnapshot, verifyAcceptedCandidate } from './candidate-acceptance.mjs';
@@ -156,6 +156,23 @@ test('v0.1.3 rollover requires PR #27, the immutable final release and the exact
   assert.equal(rollover.reason,'RELEASE_TOOL_PRE_STOP_PAYLOAD_BUG');
   assert.throws(()=>validateV013Rollover(previous,{...input,oldRelease:{...input.oldRelease,tag_name:'v0.1.4'}}),/not aligned/);
   assert.throws(()=>validateV013Rollover({...previous,number:26},input),/outside the approved/);
+});
+
+test('publication identity is derived from the active batch and accepted stable version',()=>{
+  const batch={name:'english-path-migration'};
+  const descriptor=publicationDescriptor(batch,'0.1.5',new Date('2026-09-04T15:01:02.000Z'));
+  assert.deepEqual(descriptor,{
+    productVersion:'0.1.5',
+    branch:'work/english-path-migration-v015-202609041501',
+    ref:'refs/merchroute/publications/english-path-migration-v015',
+    title:'chore(release): MerchRoute v0.1.5 候选',
+    message:'chore(release): prepare MerchRoute v0.1.5 candidate'
+  });
+  const identity={commit:'a'.repeat(40),tree:'b'.repeat(40)};
+  const body=publicationBody({batch,descriptor,identity});
+  assert.match(body,/v0\.1\.5/);assert.match(body,/english-path-migration/);assert.match(body,/不从 GitHub 反向覆盖本机代码/);
+  assert.throws(()=>publicationDescriptor({name:'Unsafe Name'},'0.1.5'),/Invalid batch/);
+  assert.throws(()=>publicationDescriptor(batch,'0.1.5-rc.1'),/stable semantic/);
 });
 
 test('isolated PostgreSQL installs pg_trgm before parallel integration workers start',async()=>{
