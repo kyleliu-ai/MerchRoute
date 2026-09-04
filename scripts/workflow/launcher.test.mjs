@@ -14,7 +14,7 @@ import { testEnvironment } from './verify.mjs';
 import { probeReadOnlyPages } from './read-only-pages.mjs';
 import { candidateSnapshot, assertAcceptedCandidate } from './candidate-acceptance.mjs';
 import { switchRelease } from './release-transaction.mjs';
-import { assertAboutIdentity, stopProcessInput } from './release.mjs';
+import { assertAboutIdentity, assertRecoverablePreStopJournal, stopProcessInput } from './release.mjs';
 
 test('release stop payload retains the verified runtime endpoint',()=>{
   const binding={schemaVersion:2,runtimeEndpoint:{host:'127.0.0.1',port:43173,origin:'http://127.0.0.1:43173'}};
@@ -32,6 +32,16 @@ test('legacy rollback accepts an old About response without runtimeEndpoint but 
   const releaseCurrent={...current,productVersion:'0.1.4'};
   assert.throws(()=>assertAboutIdentity(release,{current:releaseCurrent,runtimeStatus:'CURRENT'}),/identity mismatch/);
   assert.equal(assertAboutIdentity(release,{current:{...releaseCurrent,runtimeEndpoint:release.runtimeEndpoint},runtimeStatus:'CURRENT'}),true);
+});
+
+test('a failed cutover journal can be retried only after proving the old runtime was never stopped',()=>{
+  const previous={root:'C:/legacy',sourceCommit:'a'.repeat(40),productVersion:'0.1.0'};
+  const journal={state:'FAILED',previous:{...previous},candidate:{sourceCommit:'b'.repeat(40)},error:'stop adapter failed'};
+  const proof={previous,currentLive:{pid:5804,createdAt:'2026-09-04T00:00:00.000Z'},expectedPid:5804,pointerExists:false,acceptedCommit:previous.sourceCommit};
+  assert.equal(assertRecoverablePreStopJournal(journal,proof),true);
+  assert.throws(()=>assertRecoverablePreStopJournal(journal,{...proof,pointerExists:true}),/not a proven pre-stop/);
+  assert.throws(()=>assertRecoverablePreStopJournal(journal,{...proof,currentLive:{stopped:true}}),/not a proven pre-stop/);
+  assert.throws(()=>assertRecoverablePreStopJournal({...journal,state:'RECOVERY_REQUIRED'},proof),/not a proven pre-stop/);
 });
 
 test('acceptance pins the exact package and artifacts, not only the source commit',()=>{

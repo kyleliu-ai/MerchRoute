@@ -78,7 +78,7 @@ npm run workflow -- release prepare --task-id <owner> --apply --approved
 2. 用户合并后只读校验 PR、Release、源码树和每份发布资产 SHA-256。提交号可以因 squash 不同，文件树与内容指纹不能伪造。更新映射不能自动 pull 或 rebase 本机。
 3. 重新记录真实运行 PID、开始时间、路径、构建、环境与业务空闲结果到外部 `runtime-before-switch.json`。旧 Git 启动器作为 `legacy` 回滚入口时，记录脚本路径与 SHA-256；不移动旧目录。
    legacy 记录必须包含原 Node 路径/哈希、全部三个 dist 目录的 `fileHashes`、原唯一已验收记录的不可变备份 `previousAcceptedFile/previousAcceptedSha256`、原 productVersion/commit/tree。它只用于回滚到迁移前的已核验版本，不是新版本绕过独立运行包规则的通道。
-4. 当前用户批准写入外部短期有效 `approval-file`：`operation`、`productionRestartApproved`、`releasePublishedApproved`、`expiresAt`、`expectedCurrentCommit`、`targetCommit`、`expectedPid` 和是否允许 `rollbackApproved`。这些值必须来自本次核验，不能复制历史授权。
+4. 当前用户批准写入外部短期有效 `approval-file`：`operation`、`productionRestartApproved`、`releasePublishedApproved`、`expiresAt`、`expectedCurrentCommit`、`targetCommit`、`expectedPid` 和是否允许 `rollbackApproved`。这些值必须来自本次核验，不能复制历史授权。若上次日志为 `FAILED`，只有证明旧进程仍由原 PID/提交运行、发布指针不存在、已验收记录仍指向旧版，并获得本次 `recoverFailedPreStopApproved` 明确授权后才可重试；`RECOVERY_REQUIRED` 不得使用该通道。
 5. `release activate ... --approval-file <外部批准文件> --dry-run` 通过后，才可 `--apply --approved`。先备份入口，检查任务/租约/锁，再核对 PID，只处理确认的当前服务。Windows 固定入口和开机/桌面快捷方式共同使用外部发布指针。
 6. 两次独立检查周期读取运行包、PID、About 和只读页面，随后才能更新唯一已验收发布记录。不得因健康码 200 单独宣布全部功能验收通过。
 7. `release rollback` 同样要求当前授权、兼容性和业务空闲检查。失败后 `release-journal.json` 为 `RECOVERY_REQUIRED` 时先人工核验，不重复切换。仅回滚代码/入口，不还原旧数据库或审核状态，尤其不能覆盖上线后已产生的业务写入。
