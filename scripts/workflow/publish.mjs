@@ -27,10 +27,10 @@ export function validateV013Rollover(previous,{main,baseTree,oldPr,oldRelease,ol
   }
   return {publication:previous,main,tree:baseTree,releaseTag:'v0.1.3',status:'PUBLISHED_NOT_ACTIVATED',reason:'RELEASE_TOOL_PRE_STOP_PAYLOAD_BUG'};
 }
-export async function requireVerified(root,home){
+export async function requireVerified(root,home,{allowDirty=false}={}){
   await verifyDevelopmentDatabase(root,home);
   const identity=sourceIdentity(root), record=await readJson(path.join(home,'verified.json'));
-  if(identity.status || record.level!=='full'||record.ok!==true||!record.publishable
+  if((identity.status&&!allowDirty) || record.level!=='full'||record.ok!==true||!record.publishable
     || record.identity.commit!==identity.commit||record.identity.tree!==identity.tree)throw new Error('Current clean candidate has not passed full verification');
   const required=['check','postgres-integration','browser-build','e2e','jimeng','isolated-runtime','release-verifier-tests','restart-safety','retirement-safety','gitleaks','gitleaks-files','diff-check','deployment-verify'];
   for(const id of required){const entry=record.records.find(x=>x.id===id);if(!entry||entry.exitCode!==0||digest(await readFile(entry.log))!==entry.sha256)throw new Error('Verification evidence missing or changed: '+id);}

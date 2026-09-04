@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { ServerResponse } from 'node:http';
 import type { FastifyBaseLogger } from 'fastify';
-import { AppError, type AppDatabase, type ReviewOperation, type ReviewOperationProgress } from '@n8n-media-review/shared';
+import { AppError, type AppDatabase, type ReviewOperation, type ReviewOperationMetrics, type ReviewOperationProgress } from '@n8n-media-review/shared';
 import { StateStore, operationIsActive } from '../repositories/store.js';
 import { reviewOperationContext } from '../utils/review-operation-context.js';
 
@@ -84,15 +84,27 @@ export class ReviewOperationService {
   view(id: string): Omit<ReviewOperation, 'input' | 'requestHash' | 'requestKey'> & { progress?: ReviewOperationProgress } {
     const operation = this.store.getOperation(id);
     if (!operation) throw new AppError('OPERATION_NOT_FOUND', '提交任务不存在', { operationId: id }, 404);
+    return this.publicView(operation);
+  }
+  private publicView(operation: ReviewOperation): Omit<ReviewOperation, 'input' | 'requestHash' | 'requestKey'> & { progress?: ReviewOperationProgress } {
     const { input: _input, requestHash: _hash, requestKey: _key, requestAliases: _aliases, ...publicOperation } = operation;
     void [_input, _hash, _key, _aliases];
     let error = publicOperation.error;
     try { this.store.assertWritable(); } catch {
       error = { code: 'STATE_STORE_UNAVAILABLE', message: '状态文件暂时无法保存；磁盘恢复后点击恢复处理，原投递编号保持不变', statusCode: 503 };
     }
-    return { ...publicOperation, error, progress: this.progress.get(id) };
+    return { ...publicOperation, error, progress: this.progress.get(operation.operationId) };
   }
-  list(activeOnly: boolean) { return this.store.operations(activeOnly).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, activeOnly ? 200 : 50).map((row) => { const { result: _result, ...view } = this.view(row.operationId); void _result; return view; }); }
+  list(activeOnly: boolean, includeRecent = false) {
+    const selected = this.store.select('reviewOperations', (rows) => {
+      const ordered = [...(rows || [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+      const active = ordered.filter(operationIsActive).slice(0, 200);
+      return activeOnly
+        ? [...active, ...(includeRecent ? ordered.filter((row) => !operationIsActive(row)).slice(0, 1) : [])]
+        : ordered.slice(0, 50);
+    });
+    return selected.map((row) => { const { result: _result, ...view } = this.publicView(row); void _result; return view; });
+  }
   report(patch: Omit<ReviewOperationProgress, 'operationId' | 'updatedAt'>, operationId = this.currentId): void {
     if (!operationId) return;
     this.progress.set(operationId, { ...this.progress.get(operationId), ...patch, operationId, updatedAt: new Date().toISOString() });
@@ -149,7 +161,9 @@ export class ReviewOperationService {
     const row = this.store.getOperation(id)!;
     this.publish(id);
     const started = performance.now();
-    await reviewOperationContext.run({ operationId: id }, async () => {
+    const queueMs = Math.max(0, Date.parse(row.startedAt || new Date().toISOString()) - Date.parse(row.createdAt));
+    const metrics: ReviewOperationMetrics = { queueMs };
+    await reviewOperationContext.run({ operationId: id, metrics }, async () => {
       try {
         const execute = this.executors.get(row.kind);
         if (!execute) throw new AppError('OPERATION_UNSUPPORTED', '当前程序不能执行该任务，请使用兼容版本');
@@ -161,7 +175,10 @@ export class ReviewOperationService {
         const firstFailure = (result?.results || result?.submissions || [result]).find((item: any) => ['FAILED', 'PARTIAL_SUCCESS'].includes(item?.status));
         await this.store.updateSections(['reviewOperations'], (db) => {
           const current = db.reviewOperations!.find((item) => item.operationId === id)!;
-          Object.assign(current, { status: allFailed ? 'FAILED' : partial ? 'PARTIAL_SUCCESS' : 'SUCCEEDED', result, error: firstFailure ? { code: firstFailure.errorCode || 'DELIVERY_INCOMPLETE', message: firstFailure.errorMessage || '部分投递尚未完成，请重试未完成部分' } : undefined, completedAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+          const completedAt = new Date().toISOString();
+          const executionMs = Math.max(0, performance.now() - started);
+          Object.assign(metrics, { executionMs: Math.round(executionMs * 10) / 10, totalMs: Math.max(0, Date.parse(completedAt) - Date.parse(row.createdAt)) });
+          Object.assign(current, { status: allFailed ? 'FAILED' : partial ? 'PARTIAL_SUCCESS' : 'SUCCEEDED', result, metrics: structuredClone(metrics), error: firstFailure ? { code: firstFailure.errorCode || 'DELIVERY_INCOMPLETE', message: firstFailure.errorMessage || '部分投递尚未完成，请重试未完成部分' } : undefined, completedAt, updatedAt: completedAt });
         });
       } catch (error: any) {
         const checkpoint = this.store.select('deliveryCheckpoints', (rows) => rows?.find((item) => item.operationId === id && ['COMMIT_INTENT', 'NEEDS_ATTENTION'].includes(item.phase)));
@@ -169,7 +186,10 @@ export class ReviewOperationService {
         const delay = !unknown && ['EBUSY', 'EPERM', 'EAGAIN'].includes(error?.code) ? RETRY_MS[row.attempt - 1] : undefined;
         await this.store.updateSections(['reviewOperations'], (db) => {
           const current = db.reviewOperations!.find((item) => item.operationId === id)!;
-          Object.assign(current, { status: unknown ? 'NEEDS_ATTENTION' : delay === undefined ? 'FAILED' : 'RETRY_WAIT', error: { code: error?.code || 'REVIEW_OPERATION_FAILED', message: error?.message || '处理失败', statusCode: error?.statusCode, details: error?.details }, updatedAt: new Date().toISOString(), nextAttemptAt: delay === undefined ? undefined : new Date(Date.now() + delay).toISOString(), completedAt: delay === undefined ? new Date().toISOString() : undefined });
+          const updatedAt = new Date().toISOString();
+          const executionMs = Math.max(0, performance.now() - started);
+          Object.assign(metrics, { executionMs: Math.round(executionMs * 10) / 10, totalMs: Math.max(0, Date.parse(updatedAt) - Date.parse(row.createdAt)) });
+          Object.assign(current, { status: unknown ? 'NEEDS_ATTENTION' : delay === undefined ? 'FAILED' : 'RETRY_WAIT', metrics: structuredClone(metrics), error: { code: error?.code || 'REVIEW_OPERATION_FAILED', message: error?.message || '处理失败', statusCode: error?.statusCode, details: error?.details }, updatedAt, nextAttemptAt: delay === undefined ? undefined : new Date(Date.now() + delay).toISOString(), completedAt: delay === undefined ? updatedAt : undefined });
         });
       } finally {
         this.logger.info({ operationId: id, kind: row.kind, elapsedMs: Math.round(performance.now() - started), status: this.store.getOperation(id)?.status }, '审核投递操作处理结束');

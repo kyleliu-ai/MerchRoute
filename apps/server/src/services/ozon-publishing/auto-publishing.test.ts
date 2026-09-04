@@ -1459,6 +1459,43 @@ describe('OZON automatic media delivery wake-up', () => {
 });
 
 describe('OZON automatic shared-material market-field boundary', () => {
+  it('keeps normal repeated pocket prose as a warning and continues the automatic fan-out', async () => {
+    const harness = await createAutoGrossWeightHarness({ procurementGrossWeightGrams: '650' });
+    const normalPocketDescription = 'Карман на молнии, открытый накладной карман для мелочей, на задней стенке предусмотрен дополнительный горизонтальный карман';
+    harness.descriptions.resolveVariants.mockResolvedValue({
+      status: 'READY',
+      content: normalPocketDescription,
+      source: {
+        workflowCode: 'E003', executionId: 170, folderName: '0000170', fileName: 'detail.txt',
+        sha256: 'a'.repeat(64), productVariantId: harness.fixture.variantId
+      },
+      variantSources: [{
+        status: 'READY',
+        productVariantId: harness.fixture.variantId,
+        productVariantName: '咖啡色',
+        content: normalPocketDescription,
+        source: {
+          workflowCode: 'E003', executionId: 170, folderName: '0000170', fileName: 'detail.txt',
+          sha256: 'b'.repeat(64), productVariantId: harness.fixture.variantId
+        }
+      }]
+    });
+
+    await expect((harness.coordinator as any).processJob(harness.job())).resolves.toBeUndefined();
+
+    expect(harness.persistAutomaticSharedMaterialRevision).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        descriptionRu: normalPocketDescription,
+        offers: expect.arrayContaining([expect.objectContaining({
+          productVariantId: harness.fixture.variantId,
+          descriptionRu: normalPocketDescription
+        })])
+      })
+    }));
+    expect(harness.storeService.createAutomaticPublicationsFromFrozenPlan).toHaveBeenCalledOnce();
+    expect(harness.job().state).not.toBe('NEEDS_ATTENTION');
+  });
+
   it('prepares shared material without reading procurement, pricing, title translation, or a global preset', async () => {
     const harness = await createAutoGrossWeightHarness({
       procurementGrossWeightGrams: '650.5',
@@ -1544,6 +1581,79 @@ describe('OZON automatic shared-material market-field boundary', () => {
     expect(harness.descriptions.resolveVariants).toHaveBeenCalledOnce();
     expect(harness.createListing).not.toHaveBeenCalled();
     expect(harness.storeService.createAutomaticPublicationsFromFrozenPlan).toHaveBeenCalledOnce();
+  });
+});
+
+describe('OZON automatic preparation manual-success reconciliation', () => {
+  it('builds a stable plan and reconciles only after exact current-store manual success evidence', async () => {
+    const harness = createManualSuccessReconcileHarness();
+
+    const detail = await harness.coordinator.preparationTaskDetail(harness.autoJob.id);
+    expect(detail).toMatchObject({
+      recovery: {
+        canRecheck: false,
+        canManualTakeover: false,
+        canReconcileManualSuccess: true,
+        recoveryMode: 'MANUAL_SUCCESS_RECONCILE'
+      },
+      manualSuccessReconcilePlan: {
+        canReconcileManualSuccess: true,
+        blockers: [],
+        targetStores: [expect.objectContaining({
+          storeId: harness.store.id,
+          publicationId: harness.publication.id,
+          manualJobId: harness.manualJob.id
+        })]
+      }
+    });
+
+    const dryRun = await harness.coordinator.preparationManualSuccessReconcilePlan(harness.autoJob.id, {
+      rowVersion: harness.autoJob.rowVersion
+    });
+    const applied = await harness.coordinator.reconcilePreparationToManualSuccess(harness.autoJob.id, {
+      rowVersion: harness.autoJob.rowVersion,
+      planHash: dryRun.plan.planHash,
+      requestId: dryRun.plan.requestId
+    });
+
+    expect(harness.reconcileAutomaticPreparationToManualSuccess).toHaveBeenCalledOnce();
+    expect(harness.reconcileAutomaticPreparationToManualSuccess).toHaveBeenCalledWith(expect.objectContaining({
+      jobId: harness.autoJob.id,
+      expectedJobRowVersion: harness.autoJob.rowVersion,
+      expectedListingRowVersion: harness.listing.rowVersion,
+      expectedListingRevision: harness.listing.revision,
+      planHash: dryRun.plan.planHash,
+      requestId: dryRun.plan.requestId,
+      targetStores: [expect.objectContaining({
+        storeId: harness.store.id,
+        publicationRowVersion: harness.publication.rowVersion,
+        manualJobRowVersion: harness.manualJob.rowVersion
+      })]
+    }));
+    expect(applied).toEqual(harness.reconcileResult);
+  });
+
+  it('fails closed when any currently eligible store lacks exact manual success evidence', async () => {
+    const harness = createManualSuccessReconcileHarness({ missingPublication: true });
+
+    const dryRun = await harness.coordinator.preparationManualSuccessReconcilePlan(harness.autoJob.id, {
+      rowVersion: harness.autoJob.rowVersion
+    });
+
+    expect(dryRun.plan).toMatchObject({
+      canReconcileManualSuccess: false,
+      recoveryMode: 'READBACK_REQUIRED'
+    });
+    expect(dryRun.plan.blockers).toEqual(expect.arrayContaining([
+      `MANUAL_SUCCESS_PUBLICATION_MISSING:${harness.store.id}`,
+      'MANUAL_SUCCESS_STORE_SET_INCOMPLETE'
+    ]));
+    await expect(harness.coordinator.reconcilePreparationToManualSuccess(harness.autoJob.id, {
+      rowVersion: harness.autoJob.rowVersion,
+      planHash: dryRun.plan.planHash,
+      requestId: dryRun.plan.requestId
+    })).rejects.toMatchObject({ code: 'OZON_READBACK_REQUIRED' });
+    expect(harness.reconcileAutomaticPreparationToManualSuccess).not.toHaveBeenCalled();
   });
 });
 
@@ -3165,6 +3275,17 @@ function createFrozenReplanHarness(options: {
     getListing: vi.fn(async () => listing),
     getCategory: vi.fn(async (categoryKey: string) => categories.get(categoryKey)
       || Promise.reject(new AppError('NOT_FOUND', '类目不存在', { categoryKey }, 404))),
+    getAutomaticPreparationRecoveryEvidence: vi.fn(async () => ({
+      publicationCount: storeIds.length,
+      gatewayRequestCount: 0,
+      productLinkCount: 0,
+      mappingCount: 0,
+      importIntentPresent: false,
+      platformWriteAttempted: false,
+      activeLease: false,
+      activeSlot: false,
+      activeStatusRefresh: false
+    })),
     getAutomaticPreparationReplanEvidence: vi.fn(async () => evidence),
     replaceAutomaticPreparationWithCurrentPreset,
     recheck: vi.fn()
@@ -3175,7 +3296,10 @@ function createFrozenReplanHarness(options: {
     { warn: vi.fn() } as any,
     {},
     {
-      storeRepository: { listEligibleAutoStores: vi.fn(async () => eligibleStores) } as any,
+      storeRepository: {
+        listEligibleAutoStores: vi.fn(async () => eligibleStores),
+        listPublications: vi.fn(async () => [])
+      } as any,
       storeService: { automaticPublicationPlan } as any,
       storeGateway: { proveExactNoBrandDictionaryValue } as any
     }
@@ -3391,6 +3515,133 @@ async function createPrePlanHarness(options: {
     }
   );
   return { coordinator, fixture, job, listing, stores, repository, proveStoreOfferAbsence };
+}
+
+function createManualSuccessReconcileHarness(options: { missingPublication?: boolean } = {}) {
+  const offerId = '0000170-01';
+  const autoJob: any = {
+    id: '5f848e98-f28a-4bcc-8f1d-2fab1bae0b7a',
+    sku: '0000170',
+    taskKind: 'SHARED_PREPARATION',
+    state: 'NEEDS_ATTENTION',
+    source: 'AUTO',
+    storeAlias: 'default',
+    offerIds: [],
+    rowVersion: 7,
+    retryCount: 0,
+    stageStates: {},
+    ozonProductLinks: [],
+    payload: { multistorePreparation: true },
+    lastErrorCode: 'CONFIG_INVALID',
+    lastErrorMessage: 'descriptionRu 命中关键词堆砌规则',
+    createdAt: '2026-09-04T01:00:00.000Z',
+    updatedAt: '2026-09-04T01:01:00.000Z'
+  };
+  const listing: any = {
+    sku: autoJob.sku,
+    productName: '测试商品',
+    status: 'PUBLISHED',
+    managementSource: 'MANUAL',
+    rowVersion: 11,
+    revision: 5,
+    data: { offers: [{ offerId }] }
+  };
+  const store: any = {
+    id: '24666790-0000-4000-8000-000000000001',
+    storeAlias: 'glauke',
+    displayName: 'Glauke/2466679'
+  };
+  const manualJobId = '17000000-0000-4000-8000-000000000002';
+  const publication: any = {
+    id: '17000000-0000-4000-8000-000000000001',
+    sku: autoJob.sku,
+    storeId: store.id,
+    source: 'MANUAL',
+    status: 'SUCCEEDED',
+    offerIds: [offerId],
+    productIds: ['123456789'],
+    productLinks: ['https://www.ozon.ru/product/987654321/'],
+    plannedJobId: manualJobId,
+    preparationJobId: null,
+    rowVersion: 4,
+    completedAt: '2026-09-04T02:00:00.000Z'
+  };
+  const manualJob: any = {
+    id: manualJobId,
+    sku: autoJob.sku,
+    taskKind: 'STORE_PUBLICATION',
+    state: 'SUCCEEDED',
+    source: 'MANUAL',
+    storeAlias: store.storeAlias,
+    offerIds: [offerId],
+    rowVersion: 9,
+    retryCount: 0,
+    stageStates: {},
+    publicationId: publication.id,
+    ozonProductLinks: [{
+      offerId,
+      ozonProductId: '123456789',
+      ozonSku: '987654321',
+      url: publication.productLinks[0],
+      displayState: 'ON_SALE',
+      lastVerifiedAt: '2026-09-04T02:01:00.000Z'
+    }],
+    payload: {},
+    createdAt: '2026-09-04T01:30:00.000Z',
+    updatedAt: '2026-09-04T02:01:00.000Z'
+  };
+  const reconcileResult = {
+    job: { ...autoJob, state: 'CANCELLED', rowVersion: autoJob.rowVersion + 1 },
+    requestId: 'result-request-id',
+    reconciliation: { mode: 'MANUAL_SUCCESS_RECONCILE', targetStoreCount: 1 }
+  };
+  const reconcileAutomaticPreparationToManualSuccess = vi.fn(async () => reconcileResult);
+  const repository = {
+    getJob: vi.fn(async (id: string, source: 'AUTO' | 'MANUAL') => {
+      if (id === autoJob.id && source === 'AUTO') return autoJob;
+      if (id === manualJob.id && source === 'MANUAL') return manualJob;
+      throw new AppError('NOT_FOUND', '任务不存在', { id, source }, 404);
+    }),
+    getListing: vi.fn(async () => listing),
+    getAutomaticPreparationRecoveryEvidence: vi.fn(async () => ({
+      publicationCount: 0,
+      gatewayRequestCount: 0,
+      productLinkCount: 0,
+      mappingCount: 1,
+      importIntentPresent: false,
+      platformWriteAttempted: false,
+      activeLease: false,
+      activeSlot: false,
+      activeStatusRefresh: false
+    })),
+    reconcileAutomaticPreparationToManualSuccess
+  };
+  const storeRepository = {
+    listEligibleAutoStores: vi.fn(async () => [store]),
+    listPublications: vi.fn(async () => options.missingPublication ? [] : [publication])
+  };
+  const coordinator = new OzonAutoPublishingCoordinator(
+    repository as any,
+    {} as any,
+    {} as any,
+    {} as any,
+    {} as any,
+    {} as any,
+    {} as any,
+    { warn: vi.fn() } as any,
+    {},
+    { storeRepository: storeRepository as any, storeService: {} as any }
+  );
+  return {
+    coordinator,
+    autoJob,
+    listing,
+    store,
+    publication,
+    manualJob,
+    reconcileAutomaticPreparationToManualSuccess,
+    reconcileResult
+  };
 }
 
 async function createFixture() {

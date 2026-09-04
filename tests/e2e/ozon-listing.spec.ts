@@ -2720,15 +2720,20 @@ test.describe('OZON 独立上品工作区', () => {
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });
 
-  test('逐变体俄文详情显示清理审计，平台字段失败可返回编辑', async ({ page }) => {
+  test('逐变体俄文详情显示清理审计与重复词提醒，平台字段失败可返回编辑', async ({ page }) => {
     const variantId = '66666666-6666-4666-8666-666666666666';
+    const repeatedPocketDescription = 'Карман на молнии, открытый накладной карман для мелочей, на задней стенке предусмотрен дополнительный горизонтальный карман';
     const failedListing = {
       ...editableListing,
       data: {
         ...editableListing.data,
-        descriptionRu: 'Общее описание товара.',
+        descriptionRu: repeatedPocketDescription,
         descriptionSource: { kind: 'E003', executionId: '87830', productVariantId: variantId },
-        descriptionWarnings: [],
+        descriptionWarnings: [{
+          code: 'OZON_DESCRIPTION_KEYWORD_STUFFING',
+          fieldPath: 'descriptionRu',
+          policyVersion: 'merchroute-ozon-content-v4'
+        }],
         offers: [{
           variantId,
           variantCode: '01',
@@ -2800,6 +2805,8 @@ test.describe('OZON 独立上品工作区', () => {
     await expect(workspace.getByText('E003 执行 87829')).toBeVisible();
     await expect(workspace.getByText('历史详情清理记录', { exact: true })).toBeVisible();
     await expect(workspace.getByText('该记录来自旧版本，不代表当前会自动清理：под荔枝纹', { exact: true })).toBeVisible();
+    await expect(workspace.getByText('详情重复词提醒', { exact: true })).toBeVisible();
+    await expect(workspace.getByText('检测到高密度重复词，系统已允许继续上品，请人工确认不是搜索词堆砌。字段：descriptionRu', { exact: true })).toBeVisible();
 
     await workspace.getByRole('button', { name: `打开手动任务详情 ${failedJob.id}` }).click();
     const jobDrawer = page.getByRole('dialog', { name: '手动任务详情 · 0000049' });

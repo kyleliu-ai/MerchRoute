@@ -32,6 +32,7 @@ import {
   ozonProductUrl,
   OZON_TITLE_TRANSLATION_WORKFLOW_ID,
   stableOzonOfferId,
+  synchronizeOzonListingDescriptionPolicyWarnings,
   ozonSystemSettingsInputSchema,
   projectOzonSharedMaterialDraft,
   type OzonAutoPresetBinding,
@@ -44,6 +45,8 @@ import {
   type OzonListingDraftInput,
   type OzonListingManagementSource,
   type OzonNetworkRecovery,
+  type OzonPreparationManualSuccessReconcileResult,
+  type OzonPreparationManualSuccessReconcileTarget,
   type OzonPreset,
   type OzonPresetInput,
   type OzonPlatformBusinessState,
@@ -1527,7 +1530,8 @@ export class OzonRepository {
     const parsed = ozonListingDraftInputSchema.safeParse(input);
     if (!parsed.success) throw validationError(parsed.error.issues);
     const sku = normalizeSku(skuInput);
-    const { rowVersion, ...rawParsedData } = parsed.data;
+    const synchronizedData = synchronizeOzonListingDescriptionPolicyWarnings(parsed.data);
+    const { rowVersion, ...rawParsedData } = synchronizedData;
     return this.transaction(async (client) => {
       await lockSkuJob(client, sku);
       await assertNoActivePlatformStatusRefreshLease(client, sku);
@@ -1634,7 +1638,8 @@ export class OzonRepository {
     }
     const parsed = ozonListingDraftInputSchema.safeParse({ ...input.data, rowVersion: input.expectedListingRowVersion || 1 });
     if (!parsed.success) throw validationError(parsed.error.issues);
-    const { rowVersion: _parsedRowVersion, ...parsedData } = parsed.data;
+    const synchronizedData = synchronizeOzonListingDescriptionPolicyWarnings(parsed.data);
+    const { rowVersion: _parsedRowVersion, ...parsedData } = synchronizedData;
     void _parsedRowVersion;
     const data = enforceOzonSkuIdentity(
       normalizeOzonListingDescriptions(parsedData),
@@ -1766,6 +1771,231 @@ export class OzonRepository {
 
   async getAutomaticPreparationRecoveryEvidence(jobId: string): Promise<OzonAutomaticPreparationRecoveryEvidence> {
     return getAutomaticPreparationRecoveryEvidenceWithClient(this.requirePool(), jobId);
+  }
+
+  async reconcileAutomaticPreparationToManualSuccess(input: {
+    jobId: string;
+    expectedJobRowVersion: number;
+    expectedListingRowVersion: number;
+    expectedListingRevision: number;
+    eligibilityAt: string;
+    planHash: string;
+    requestId: string;
+    targetStores: OzonPreparationManualSuccessReconcileTarget[];
+  }): Promise<OzonPreparationManualSuccessReconcileResult> {
+    return this.transaction(async (client) => {
+      const identity = await client.query<{ sku: string }>('SELECT sku FROM ozon_publish_jobs WHERE id=$1', [input.jobId]);
+      if (!identity.rows[0]) throw new AppError('NOT_FOUND', 'OZON 自动准备任务不存在', { jobId: input.jobId }, 404);
+      const sku = normalizeSku(identity.rows[0].sku);
+      await lockSkuJob(client, sku);
+      const jobResult = await client.query<SqlRow>('SELECT * FROM ozon_publish_jobs WHERE id=$1 FOR UPDATE', [input.jobId]);
+      const row = jobResult.rows[0];
+      if (!row) throw new AppError('NOT_FOUND', 'OZON 自动准备任务不存在', { jobId: input.jobId }, 404);
+      const payload = jsonObject(row.payload);
+      const prior = jsonObject(payload.manualSuccessReconciliation);
+      if (String(prior.requestId || '') || String(prior.planHash || '')) {
+        if (String(prior.requestId || '') !== input.requestId || String(prior.planHash || '') !== input.planHash) {
+          throw new AppError('VERSION_CONFLICT', 'OZON 自动准备任务已经按另一份手动成功证据收口', {
+            jobId: input.jobId
+          }, 409);
+        }
+        return {
+          job: toJob(row),
+          reconciliation: {
+            requestId: input.requestId,
+            planHash: input.planHash,
+            appliedAt: String(prior.appliedAt || row.updated_at),
+            targetStores: Array.isArray(prior.targetStores)
+              ? prior.targetStores as OzonPreparationManualSuccessReconcileTarget[]
+              : input.targetStores
+          }
+        };
+      }
+      if (Number(row.row_version) !== input.expectedJobRowVersion) {
+        throw new AppError('TASK_LOCKED', 'OZON 自动准备任务已变化，请重新读取收口计划', {
+          jobId: input.jobId,
+          expected: input.expectedJobRowVersion,
+          actual: Number(row.row_version)
+        }, 409);
+      }
+      if (row.source !== 'AUTO'
+        || String(row.task_kind || '') !== 'SHARED_PREPARATION'
+        || !['NEEDS_ATTENTION', 'FAILED'].includes(String(row.state))) {
+        throw new AppError('VERSION_CONFLICT', 'OZON 自动准备任务当前状态不能按手动成功收口', {
+          jobId: input.jobId,
+          state: row.state,
+          source: row.source,
+          taskKind: row.task_kind
+        }, 409);
+      }
+      const listingResult = await client.query<SqlRow>('SELECT * FROM ozon_listing_drafts WHERE sku=$1 FOR UPDATE', [sku]);
+      const listingRow = listingResult.rows[0];
+      if (!listingRow) throw new AppError('NOT_FOUND', 'OZON 上品资料不存在', { sku }, 404);
+      if (Number(listingRow.row_version) !== input.expectedListingRowVersion
+        || Number(listingRow.revision) !== input.expectedListingRevision
+        || String(listingRow.management_source || '') !== 'MANUAL') {
+        throw new AppError('TASK_LOCKED', 'OZON 手动上品资料已变化，请重新读取收口计划', {
+          sku,
+          expectedListingRowVersion: input.expectedListingRowVersion,
+          actualListingRowVersion: Number(listingRow.row_version),
+          expectedListingRevision: input.expectedListingRevision,
+          actualListingRevision: Number(listingRow.revision),
+          managementSource: listingRow.management_source
+        }, 409);
+      }
+      const listing = toListing(listingRow);
+      const expectedOfferIds = [...new Set(listing.data.offers.map((offer) => offer.offerId).filter(Boolean))].sort();
+      const targetStoreIds = input.targetStores.map((target) => target.storeId).sort();
+      if (!expectedOfferIds.length || !targetStoreIds.length) {
+        throw new AppError('CONFIG_INVALID', 'OZON 手动成功收口缺少 Offer 或目标店铺证据', { sku }, 409);
+      }
+      const eligibleStoreIds = await selectExactEligiblePrePlanStoreIds(client, input.eligibilityAt);
+      if (stableJson(eligibleStoreIds) !== stableJson(targetStoreIds)) {
+        throw new AppError('VERSION_CONFLICT', 'OZON 当前参与自动上品的店铺集合已变化', {
+          expected: targetStoreIds,
+          actual: eligibleStoreIds
+        }, 409);
+      }
+      const evidence = await getAutomaticPreparationRecoveryEvidenceWithClient(client, input.jobId);
+      if (evidence.publicationCount || evidence.gatewayRequestCount || evidence.productLinkCount
+        || evidence.importIntentPresent || evidence.platformWriteAttempted
+        || evidence.activeLease || evidence.activeSlot || evidence.activeStatusRefresh) {
+        throw new AppError('OZON_READBACK_REQUIRED', '旧自动任务出现自身 publication、平台写入或活动租约证据，不能收口', {
+          jobId: input.jobId,
+          evidence
+        }, 409);
+      }
+      const stores = await client.query<SqlRow>('SELECT id,store_alias,display_name FROM ozon_stores WHERE id=ANY($1::uuid[]) ORDER BY id FOR UPDATE', [targetStoreIds]);
+      if (stores.rows.length !== targetStoreIds.length) {
+        throw new AppError('VERSION_CONFLICT', 'OZON 收口计划中的店铺已不存在', { targetStoreIds }, 409);
+      }
+      const actualTargets: OzonPreparationManualSuccessReconcileTarget[] = [];
+      for (const target of [...input.targetStores].sort((left, right) => left.storeId.localeCompare(right.storeId))) {
+        const publicationResult = await client.query<SqlRow>('SELECT * FROM ozon_store_publications WHERE id=$1 FOR UPDATE', [target.publicationId]);
+        const manualJobResult = await client.query<SqlRow>('SELECT * FROM ozon_publish_jobs WHERE id=$1 FOR UPDATE', [target.manualJobId]);
+        const publication = publicationResult.rows[0];
+        const manualJobRow = manualJobResult.rows[0];
+        if (!publication || !manualJobRow) {
+          throw new AppError('VERSION_CONFLICT', 'OZON 手动成功 publication 或任务已不存在', {
+            storeId: target.storeId,
+            publicationId: target.publicationId,
+            manualJobId: target.manualJobId
+          }, 409);
+        }
+        const manualJob = toJob(manualJobRow);
+        const publicationOfferIds = normalizeOfferIds(publication.offer_ids).sort();
+        const publicationLinks = stringArray(publication.product_links).sort();
+        const store = stores.rows.find((candidate) => String(candidate.id) === target.storeId);
+        const linksComplete = manualJob.ozonProductLinks.length === expectedOfferIds.length
+          && manualJob.ozonProductLinks.every((link) => Boolean(link.ozonProductId && link.url && link.lastVerifiedAt)
+            && link.displayState === 'ON_SALE');
+        if (!store
+          || String(publication.sku) !== sku
+          || String(publication.store_id) !== target.storeId
+          || String(publication.source) !== 'MANUAL'
+          || String(publication.status) !== 'SUCCEEDED'
+          || Number(publication.row_version) !== target.publicationRowVersion
+          || String(publication.planned_job_id || '') !== target.manualJobId
+          || String(publication.preparation_job_id || '') === input.jobId
+          || stableJson(publicationOfferIds) !== stableJson(expectedOfferIds)
+          || stringArray(publication.product_ids).length !== expectedOfferIds.length
+          || publicationLinks.length !== expectedOfferIds.length
+          || !publication.completed_at
+          || manualJob.source !== 'MANUAL'
+          || manualJob.taskKind !== 'STORE_PUBLICATION'
+          || manualJob.state !== 'SUCCEEDED'
+          || manualJob.publicationId !== target.publicationId
+          || manualJob.rowVersion !== target.manualJobRowVersion
+          || stableJson([...manualJob.offerIds].sort()) !== stableJson(expectedOfferIds)
+          || stableJson(manualJob.ozonProductLinks.map((link) => link.url).sort()) !== stableJson(publicationLinks)
+          || !linksComplete) {
+          throw new AppError('VERSION_CONFLICT', 'OZON 手动成功证据已变化或不完整', {
+            storeId: target.storeId,
+            publicationId: target.publicationId,
+            manualJobId: target.manualJobId
+          }, 409);
+        }
+        actualTargets.push({
+          storeId: target.storeId,
+          storeAlias: String(store.store_alias),
+          storeDisplayName: String(store.display_name),
+          publicationId: target.publicationId,
+          publicationRowVersion: Number(publication.row_version),
+          manualJobId: target.manualJobId,
+          manualJobRowVersion: manualJob.rowVersion,
+          offerIds: expectedOfferIds,
+          productLinks: manualJob.ozonProductLinks,
+          completedAt: iso(publication.completed_at)
+        });
+      }
+      if (stableJson(actualTargets) !== stableJson(input.targetStores)) {
+        throw new AppError('TASK_LOCKED', 'OZON 手动成功收口证据已变化，请重新读取计划', { jobId: input.jobId }, 409);
+      }
+      const canonical = {
+        schemaVersion: 1,
+        jobId: input.jobId,
+        jobRowVersion: input.expectedJobRowVersion,
+        listingRowVersion: input.expectedListingRowVersion,
+        listingRevision: input.expectedListingRevision,
+        expectedOfferIds,
+        targetStores: actualTargets
+      };
+      const calculatedPlanHash = `sha256:${createHash('sha256').update(stableJson(canonical)).digest('hex')}`;
+      if (calculatedPlanHash !== input.planHash
+        || deterministicOzonPrePlanRequestId(input.jobId, calculatedPlanHash) !== input.requestId) {
+        throw new AppError('TASK_LOCKED', 'OZON 手动成功收口计划签名无效或已变化', { jobId: input.jobId }, 409);
+      }
+      const appliedAt = new Date().toISOString();
+      const existingFanout = jsonObject(payload.fanoutSummary);
+      const fanoutSummary = {
+        phase: 'CANCELLED',
+        targetStoreCount: Number(existingFanout.targetStoreCount || 0),
+        publicationCount: Number(existingFanout.publicationCount || 0),
+        failureCount: Number(existingFanout.failureCount || 0),
+        canRecheck: false,
+        canManualTakeover: false,
+        canReconcileManualSuccess: false,
+        recoveryMode: 'NONE'
+      };
+      const reconciliation = {
+        schemaVersion: 1,
+        requestId: input.requestId,
+        planHash: input.planHash,
+        appliedAt,
+        listingRowVersion: input.expectedListingRowVersion,
+        listingRevision: input.expectedListingRevision,
+        eligibilityAt: input.eligibilityAt,
+        targetStores: actualTargets
+      };
+      const nextPayload = {
+        ...payload,
+        fanoutSummary,
+        manualSuccessReconciliation: reconciliation
+      };
+      const updated = await client.query<SqlRow>(`UPDATE ozon_publish_jobs SET
+          state='CANCELLED',payload=$2::jsonb,row_version=row_version+1,finished_at=NOW(),next_attempt_at=NULL,
+          lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,updated_at=NOW()
+        WHERE id=$1 AND row_version=$3 RETURNING *`, [input.jobId, JSON.stringify(nextPayload), input.expectedJobRowVersion]);
+      if (updated.rowCount !== 1) throw new AppError('TASK_LOCKED', 'OZON 自动准备任务在收口时发生变化', { jobId: input.jobId }, 409);
+      await addEvent(
+        client,
+        input.jobId,
+        'AUTOMATIC_PREPARATION_RECONCILED_TO_MANUAL_SUCCESS',
+        String(row.state),
+        'CANCELLED',
+        '旧自动准备任务已按全部参与店铺的手动发布成功证据安全收口',
+        reconciliation
+      );
+      return {
+        job: toJob(updated.rows[0]!),
+        reconciliation: {
+          requestId: input.requestId,
+          planHash: input.planHash,
+          appliedAt,
+          targetStores: actualTargets
+        }
+      };
+    });
   }
 
   /**
@@ -9975,7 +10205,7 @@ function stringArray(value: unknown): string[] {
 }
 
 function storedContentPolicyVersion(value: unknown): OzonListingDraft['contentPolicyVersion'] {
-  if (value === 'merchroute-ozon-content-v2' || value === 'merchroute-ozon-content-v3' || value === 'LEGACY_UNKNOWN') {
+  if (value === 'merchroute-ozon-content-v2' || value === 'merchroute-ozon-content-v3' || value === 'merchroute-ozon-content-v4' || value === 'LEGACY_UNKNOWN') {
     return value;
   }
   return undefined;
@@ -10146,7 +10376,7 @@ function toJob(row: SqlRow): OzonPublishJob {
   const fanoutRaw = jsonObject(payload.fanoutSummary);
   const fanoutSummary: OzonPublishJob['fanoutSummary'] | undefined =
     ['NOT_STARTED', 'PLANNED', 'MATERIALIZING', 'PARTIAL', 'COMPLETED', 'NEEDS_ATTENTION', 'CANCELLED'].includes(String(fanoutRaw.phase))
-    && ['NONE', 'RECHECK', 'REPLAN_WITH_CURRENT_PRESET', 'READBACK_REQUIRED', 'MANUAL_TAKEOVER'].includes(String(fanoutRaw.recoveryMode))
+    && ['NONE', 'RECHECK', 'REPLAN_WITH_CURRENT_PRESET', 'READBACK_REQUIRED', 'MANUAL_TAKEOVER', 'MANUAL_SUCCESS_RECONCILE'].includes(String(fanoutRaw.recoveryMode))
       ? {
           phase: fanoutRaw.phase as NonNullable<OzonPublishJob['fanoutSummary']>['phase'],
           targetStoreCount: Number(fanoutRaw.targetStoreCount || 0),
@@ -10154,6 +10384,7 @@ function toJob(row: SqlRow): OzonPublishJob {
           failureCount: Number(fanoutRaw.failureCount || 0),
           canRecheck: fanoutRaw.canRecheck === true,
           canManualTakeover: fanoutRaw.canManualTakeover === true,
+          ...(fanoutRaw.canReconcileManualSuccess === true ? { canReconcileManualSuccess: true } : {}),
           recoveryMode: fanoutRaw.recoveryMode as NonNullable<OzonPublishJob['fanoutSummary']>['recoveryMode'],
           ...(fanoutRaw.blockedReason ? { blockedReason: String(fanoutRaw.blockedReason) } : {})
         }

@@ -14,8 +14,8 @@ import {
   type WbColorIdentity
 } from '@n8n-media-review/shared';
 import type { StateStore } from '../../repositories/store.js';
-import { reviewOperationContext } from '../../utils/review-operation-context.js';
-import { copyVerified, deliveryIoLimit, treeReceipts, verifyTree, syncDirectory } from '../../utils/delivery-files.js';
+import { addReviewOperationPhase, addReviewOperationWork, reviewOperationContext } from '../../utils/review-operation-context.js';
+import { copyVerified, deliveryFileIoLimit, deliveryIoLimit, treeReceipts, verifyTree, syncDirectory, syncTreeDirectories, type FileReceipt } from '../../utils/delivery-files.js';
 import type { ConfigService } from '../../config/service.js';
 import { parseOzonMediaOutputRootTemplate, resolveOzonMediaOutputRoot, resolveWbMediaOutputRoot } from '../../config/service.js';
 import { validateProductVariantName } from '../../repositories/purchases.js';
@@ -111,6 +111,10 @@ export class VariantMediaDeliveryService {
     const stagedMediaRoot = path.join(stagingRoot, kindDirectory);
     const destination = path.join(outputRoot, variantName, kindDirectory, submissionId);
     const startedAt = new Date().toISOString();
+    addReviewOperationWork(
+      input.selectedRelativePaths.length,
+      input.selectedRelativePaths.reduce((sum, relativePath) => sum + (input.task.images.find((image) => image.relativePath === relativePath)?.sizeBytes || 0), 0)
+    );
     let record: SubmissionRecord = {
       submissionId,
       pendingSubmissionId: submissionId,
@@ -143,7 +147,7 @@ export class VariantMediaDeliveryService {
       manifestPath: path.join(outputRoot, 'variant-media-manifest.json')
     };
     try {
-      await this.saveCheckpoint(checkpoint);
+      let verifiedInThisRun = false;
       const stageAndCommit = async (commitLock: (operation: () => Promise<void>) => Promise<void>) => {
         let staged: ManifestAsset[];
         if (['COMMIT_INTENT', 'TARGET_COMMITTED', 'NEEDS_ATTENTION'].includes(checkpoint!.phase)) {
@@ -154,20 +158,28 @@ export class VariantMediaDeliveryService {
           if (path.dirname(stagingRoot) !== path.join(skuRoot, '.staging')) throw new AppError('CONFIG_INVALID', '暂存路径异常');
           await rm(stagingRoot, { recursive: true, force: true });
           await mkdir(stagedMediaRoot, { recursive: true });
-          staged = await this.stageFiles(input, stagedMediaRoot, variantName, kind, submissionId);
-          checkpoint!.files = await treeReceipts(stagedMediaRoot, true);
+          const stageStarted = performance.now();
+          const prepared = await this.stageFiles(input, stagedMediaRoot, variantName, kind, submissionId);
+          staged = prepared.assets;
+          checkpoint!.files = prepared.files;
+          await syncTreeDirectories(stagedMediaRoot);
+          verifiedInThisRun = true;
+          addReviewOperationPhase('copyAndVerifyMs', performance.now() - stageStarted);
           checkpoint!.manifestAssets = staged as unknown as Array<Record<string, unknown>>;
           if (checkpoint!.archiveTemp) {
+            const archiveStarted = performance.now();
             if (path.dirname(checkpoint!.archiveTemp) !== path.join(input.stage.approvedArchiveRoot!, '.staging')) throw new AppError('CONFIG_INVALID', '归档暂存路径异常');
             await rm(checkpoint!.archiveTemp, { recursive: true, force: true });
             await copyDirectory(stagedMediaRoot, checkpoint!.archiveTemp);
             if (JSON.stringify(await treeReceipts(checkpoint!.archiveTemp, true)) !== JSON.stringify(checkpoint!.files)) throw new AppError('VERIFY_FAILED', '归档暂存校验失败');
+            addReviewOperationPhase('archiveMs', performance.now() - archiveStarted);
           }
           checkpoint!.phase = 'VERIFIED';
           await this.saveCheckpoint(checkpoint!);
         }
         await commitLock(async () => {
           if (checkpoint!.phase === 'TARGET_COMMITTED') return;
+          const commitStarted = performance.now();
           const manifestPath = checkpoint!.manifestPath!;
           let manifest: VariantMediaManifest | undefined;
           try { manifest = JSON.parse(await readFile(manifestPath, 'utf8')); }
@@ -176,24 +188,32 @@ export class VariantMediaDeliveryService {
           if (registered.length) {
             if (registered.length !== staged.length || registered.some((asset, index) => asset.sha256 !== staged[index]?.sha256 || asset.relativePath !== staged[index]?.relativePath || asset.sortOrder !== staged[index]?.sortOrder)) throw new AppError('DELIVERY_OUTCOME_UNKNOWN', '共享媒体清单与冻结记录不一致', { submissionId }, 409);
             // Manifest is the commit point. Downstream may already have cleaned files.
+            if (await stat(destination).catch(() => undefined)) {
+              const recoveredFiles = await this.inspectCommittedFiles(destination, outputRoot, input, kind, submissionId, staged);
+              if (staged.length !== recoveredFiles.length || staged.some((item, index) => item.sha256 !== recoveredFiles[index]?.sha256 || item.relativePath !== recoveredFiles[index]?.relativePath || item.sortOrder !== recoveredFiles[index]?.sortOrder)) {
+                throw new AppError('DELIVERY_OUTCOME_UNKNOWN', '共享媒体恢复校验失败，请核对目标目录，禁止重复投递', { submissionId }, 409);
+              }
+            }
           } else {
             checkpoint!.phase = 'COMMIT_INTENT';
             await this.saveCheckpoint(checkpoint!);
             this.store?.assertWritable();
             await mkdir(path.dirname(destination), { recursive: true });
+            let renamedVerifiedStaging = false;
             if (!(await stat(destination).catch(() => undefined))) {
-              if (!await verifyTree(stagedMediaRoot, checkpoint!.files)) throw new AppError('DELIVERY_OUTCOME_UNKNOWN', '共享媒体暂存及目标均无法验证，禁止重新复制', { submissionId }, 409);
+              if (!verifiedInThisRun && !await verifyTree(stagedMediaRoot, checkpoint!.files)) throw new AppError('DELIVERY_OUTCOME_UNKNOWN', '共享媒体暂存及目标均无法验证，禁止重新复制', { submissionId }, 409);
               await rename(stagedMediaRoot, destination);
               await syncDirectory(path.dirname(destination));
+              renamedVerifiedStaging = true;
             }
-            const committed = await this.inspectCommittedFiles(destination, outputRoot, input, kind, submissionId, staged);
+            const committed = await this.inspectCommittedFiles(destination, outputRoot, input, kind, submissionId, staged, !renamedVerifiedStaging);
             if (staged.length !== committed.length || staged.some((item, index) => item.sha256 !== committed[index]?.sha256 || item.relativePath !== committed[index]?.relativePath || item.sortOrder !== committed[index]?.sortOrder)) throw new AppError('VERIFY_FAILED', '共享媒体目标文件校验失败');
             await this.updateManifest(manifestPath, input, committed);
             await syncDirectory(path.dirname(manifestPath));
           }
           record.mediaManifestPath = manifestPath; record.targetFolder = destination;
           checkpoint!.record = structuredClone(record); checkpoint!.phase = 'TARGET_COMMITTED';
-          await this.saveCheckpoint(checkpoint!);
+          addReviewOperationPhase('commitMs', performance.now() - commitStarted);
         });
       };
       if (input.platform === 'WB') await stageAndCommit((operation) => withWbSourceMediaSkuLock(input.productSku, operation));
@@ -204,9 +224,11 @@ export class VariantMediaDeliveryService {
       record.targetFolder = destination;
       try {
         if (checkpoint.archiveFinal && checkpoint.archiveTemp) {
-          if (!await verifyTree(checkpoint.archiveFinal, checkpoint.files)) {
-            if (!await verifyTree(checkpoint.archiveTemp, checkpoint.files)) throw new AppError('VERIFY_FAILED', '已投递，但归档暂存校验失败');
-            if (await stat(checkpoint.archiveFinal).catch(() => undefined)) throw new AppError('TARGET_FOLDER_EXISTS', '归档已存在不同内容');
+          const archiveFinalExists = await stat(checkpoint.archiveFinal).catch(() => undefined);
+          if (archiveFinalExists) {
+            if (!await verifyTree(checkpoint.archiveFinal, checkpoint.files)) throw new AppError('TARGET_FOLDER_EXISTS', '归档已存在不同内容');
+          } else {
+            if (!verifiedInThisRun && !await verifyTree(checkpoint.archiveTemp, checkpoint.files)) throw new AppError('VERIFY_FAILED', '已投递，但归档暂存校验失败');
             await rename(checkpoint.archiveTemp, checkpoint.archiveFinal);
             await syncDirectory(path.dirname(checkpoint.archiveFinal));
           }
@@ -224,8 +246,8 @@ export class VariantMediaDeliveryService {
       record.errorCode = error instanceof AppError ? error.code : ['EBUSY', 'EPERM', 'EAGAIN'].includes((error as NodeJS.ErrnoException)?.code || '') ? (error as NodeJS.ErrnoException).code : 'COPY_FAILED';
       record.errorMessage = error instanceof Error ? error.message : '共享媒体投递失败';
       record.completedAt = new Date().toISOString();
-      if (checkpoint.phase === 'COMMIT_INTENT' || record.errorCode === 'DELIVERY_OUTCOME_UNKNOWN') {
-        checkpoint.phase = 'NEEDS_ATTENTION'; record.errorCode = 'DELIVERY_OUTCOME_UNKNOWN';
+      if (['COMMIT_INTENT', 'COMPLETE'].includes(checkpoint.phase) || record.errorCode === 'DELIVERY_OUTCOME_UNKNOWN') {
+        checkpoint.phase = 'NEEDS_ATTENTION'; record.status = 'FAILED'; record.errorCode = 'DELIVERY_OUTCOME_UNKNOWN';
       }
       checkpoint.record = structuredClone(record);
       await this.saveCheckpoint(checkpoint).catch(() => undefined);
@@ -236,7 +258,11 @@ export class VariantMediaDeliveryService {
   private async saveCheckpoint(checkpoint: DeliveryCheckpoint, completed = false, platform?: 'WB' | 'OZON'): Promise<void> {
     if (!this.store) return;
     checkpoint.updatedAt = new Date().toISOString();
-    await this.store.updateSections(['deliveryCheckpoints', 'deliveryOutbox', 'submissionHistory'], (db) => {
+    const started = performance.now();
+    const sections = completed
+      ? ['deliveryCheckpoints', 'deliveryOutbox', 'submissionHistory', 'appEvents'] as const
+      : ['deliveryCheckpoints'] as const;
+    await this.store.updateSections(sections, (db) => {
       const rows = db.deliveryCheckpoints ||= [];
       const index = rows.findIndex((row) => row.submissionId === checkpoint.submissionId);
       if (index < 0) rows.push(structuredClone(checkpoint)); else rows[index] = structuredClone(checkpoint);
@@ -245,15 +271,22 @@ export class VariantMediaDeliveryService {
         if (historyIndex < 0) db.submissionHistory.unshift(structuredClone(checkpoint.record)); else db.submissionHistory[historyIndex] = structuredClone(checkpoint.record);
         const outbox = db.deliveryOutbox ||= [];
         if (!outbox.some((row) => row.id === checkpoint.submissionId)) outbox.push({ id: checkpoint.submissionId, platform: platform!, submissionId: checkpoint.submissionId, status: 'PENDING', attempts: 0, createdAt: new Date().toISOString() });
+        this.store!.appendEvent(db, `${platform}_MEDIA_DELIVERED`, `${checkpoint.record.sourceStageId} 审核媒体已投递到 ${platform} 共享媒体库`, {
+          taskId: checkpoint.record.taskId,
+          submissionId: checkpoint.record.submissionId,
+          sku: checkpoint.record.productSku,
+          variantName: checkpoint.record.variantName,
+          targetFolder: checkpoint.record.targetFolder
+        });
       }
     });
+    addReviewOperationPhase('checkpointMs', performance.now() - started);
   }
 
-  private async stageFiles(input: DeliveryInput, stagingRoot: string, variantName: string, kind: 'image' | 'video', submissionId: string): Promise<ManifestAsset[]> {
+  private async stageFiles(input: DeliveryInput, stagingRoot: string, variantName: string, kind: 'image' | 'video', submissionId: string): Promise<{ assets: ManifestAsset[]; files: FileReceipt[] }> {
     const extensions = kind === 'video' ? VIDEO_EXTENSIONS : IMAGE_EXTENSIONS;
     const deliveredAt = new Date().toISOString();
-    const assets: ManifestAsset[] = [];
-    for (const [sortOrder, relativePath] of input.selectedRelativePaths.entries()) {
+    const prepared = await settleAll(input.selectedRelativePaths.map((relativePath, sortOrder) => deliveryFileIoLimit(async () => {
       const source = await secureResolve(input.task.sourceFolder, relativePath);
       const sourceInfo = await lstat(source);
       const expected = input.task.images.find((image) => image.relativePath === relativePath);
@@ -265,12 +298,11 @@ export class VariantMediaDeliveryService {
       const target = path.join(stagingRoot, relativePath);
       if (!isPathInside(stagingRoot, target)) throw new AppError('PATH_TRAVERSAL_BLOCKED', '媒体相对路径超出暂存目录', { relativePath });
       await mkdir(path.dirname(target), { recursive: true });
-      await copyVerified(source, target);
-      const [sourceHash, targetHash, targetInfo] = await Promise.all([hashFile(source), hashFile(target), stat(target)]);
-      if (sourceHash !== targetHash || sourceInfo.size !== targetInfo.size) throw new AppError('VERIFY_FAILED', '暂存媒体文件校验失败', { relativePath });
+      const receipt = await copyVerified(source, target);
+      if (sourceInfo.size !== receipt.sizeBytes) throw new AppError('VERIFY_FAILED', '暂存媒体文件校验失败', { relativePath });
       const finalRelative = toApiRelativePath(path.join('variants', variantName, kind === 'video' ? 'videos' : 'images', submissionId, relativePath));
-      assets.push({
-        assetId: createHash('sha256').update(`${finalRelative}\0${targetHash}`).digest('hex'),
+      return { file: { ...receipt, relativePath: toApiRelativePath(relativePath) }, asset: {
+        assetId: createHash('sha256').update(`${finalRelative}\0${receipt.sha256}`).digest('hex'),
         submissionId,
         sourceSubmissionId: input.sourceSubmissionId,
         sourceStageId: input.stage.id,
@@ -281,15 +313,18 @@ export class VariantMediaDeliveryService {
         kind,
         sortOrder,
         relativePath: finalRelative,
-        sizeBytes: targetInfo.size,
-        sha256: targetHash,
+        sizeBytes: receipt.sizeBytes,
+        sha256: receipt.sha256,
         deliveredAt
-      });
-    }
-    return assets;
+      } satisfies ManifestAsset };
+    })));
+    const assets = prepared.map((item) => item.asset);
+    const files = prepared.map((item) => item.file);
+    files.sort((left, right) => left.relativePath.localeCompare(right.relativePath));
+    return { assets, files };
   }
 
-  private async inspectCommittedFiles(destination: string, outputRoot: string, input: DeliveryInput, kind: 'image' | 'video', submissionId: string, expected: ManifestAsset[]): Promise<ManifestAsset[]> {
+  private async inspectCommittedFiles(destination: string, outputRoot: string, input: DeliveryInput, kind: 'image' | 'video', submissionId: string, expected: ManifestAsset[], hashContents = true): Promise<ManifestAsset[]> {
     const files: string[] = [];
     await walkFiles(destination, files);
     const deliveredAt = new Date().toISOString();
@@ -300,7 +335,8 @@ export class VariantMediaDeliveryService {
       const expectedAsset = expectedByPath.get(relativePath);
       if (!expectedAsset) throw new AppError('VERIFY_FAILED', `${input.platform} 共享媒体目标目录包含非本次选中的文件`, { destination, relativePath });
       const info = await stat(file);
-      const sha256 = await hashFile(file);
+      if (info.size !== expectedAsset.sizeBytes) throw new AppError('VERIFY_FAILED', `${input.platform} 共享媒体目标文件大小不一致`, { relativePath });
+      const sha256 = hashContents ? await hashFile(file) : expectedAsset.sha256;
       assetsByPath.set(relativePath, { assetId: createHash('sha256').update(`${relativePath}\0${sha256}`).digest('hex'), submissionId, sourceSubmissionId: input.sourceSubmissionId, sourceStageId: input.stage.id, sourceTaskId: input.task.taskId, variantId: input.variantId, variantName: input.variantName, ...(input.variantColor ? { variantColor: input.variantColor } : {}), kind, sortOrder: expectedAsset.sortOrder, relativePath, sizeBytes: info.size, sha256, deliveredAt });
     }
     if (assetsByPath.size !== expected.length) throw new AppError('VERIFY_FAILED', `${input.platform} 共享媒体目标目录缺少本次选中的文件`, { destination });
@@ -388,10 +424,18 @@ async function hashFile(file: string): Promise<string> {
 
 async function copyDirectory(source: string, target: string): Promise<void> {
   await mkdir(target, { recursive: true });
-  for (const entry of await readdir(source, { withFileTypes: true })) {
+  await settleAll((await readdir(source, { withFileTypes: true })).map(async (entry) => {
     const from = path.join(source, entry.name);
     const to = path.join(target, entry.name);
-    if (entry.isDirectory()) await copyDirectory(from, to);
-    else if (entry.isFile()) await copyFile(from, to);
-  }
+    if (entry.isDirectory()) return copyDirectory(from, to);
+    if (entry.isFile()) return deliveryFileIoLimit(() => copyFile(from, to));
+    throw new AppError('VERIFY_FAILED', '交付包包含不支持的文件类型');
+  }));
+}
+
+async function settleAll<T>(promises: Promise<T>[]): Promise<T[]> {
+  const results = await Promise.allSettled(promises);
+  const failure = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+  if (failure) throw failure.reason;
+  return results.map((result) => (result as PromiseFulfilledResult<T>).value);
 }

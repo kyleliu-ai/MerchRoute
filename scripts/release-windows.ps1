@@ -3,6 +3,9 @@ param([Parameter(Mandatory=$true)][ValidateSet('Inspect','Stop','Bind','RestoreS
       [Parameter(Mandatory=$true)][string]$InputFile)
 $ErrorActionPreference='Stop'
 $env:PSModulePath=(Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\Modules')
+$utf8NoBom=[System.Text.UTF8Encoding]::new($false)
+[Console]::OutputEncoding=$utf8NoBom
+$OutputEncoding=$utf8NoBom
 $data=Get-Content -LiteralPath $InputFile -Raw -Encoding UTF8 | ConvertFrom-Json
 if ($Action -eq 'Inspect' -or $Action -eq 'Stop') {
   $port=[int]$data.runtimeEndpoint.port
@@ -14,10 +17,11 @@ if ($Action -eq 'Inspect' -or $Action -eq 'Stop') {
   $entry=$data.entry.Replace('/','\')
   if ($proc.CommandLine.Replace('/','\').IndexOf($entry,[StringComparison]::OrdinalIgnoreCase) -lt 0 -or $proc.ExecutablePath.Replace('/','\') -ine $data.nodePath.Replace('/','\')) { throw 'Production process path mismatch.' }
   if ($Action -eq 'Stop') {
-    if ([int]$data.pid -ne [int]$proc.ProcessId -or $data.createdAt -ne $proc.CreationDate.ToUniversalTime().ToString('o')) { throw 'Production PID identity changed.' }
+    $createdAt=$proc.CreationDate.ToUniversalTime().ToFileTimeUtc().ToString([System.Globalization.CultureInfo]::InvariantCulture)
+    if ([int]$data.pid -ne [int]$proc.ProcessId -or [string]$data.createdAt -ne $createdAt) { throw 'Production PID identity changed.' }
     Stop-Process -Id $proc.ProcessId -ErrorAction Stop
     Wait-Process -Id $proc.ProcessId -Timeout 20 -ErrorAction SilentlyContinue
-  } else { @{pid=[int]$proc.ProcessId;createdAt=$proc.CreationDate.ToUniversalTime().ToString('o');entry=$data.entry;nodePath=$data.nodePath}|ConvertTo-Json -Compress }
+  } else { @{pid=[int]$proc.ProcessId;createdAt=$proc.CreationDate.ToUniversalTime().ToFileTimeUtc().ToString([System.Globalization.CultureInfo]::InvariantCulture)}|ConvertTo-Json -Compress }
 } elseif ($Action -eq 'Bind') {
   if ((Get-FileHash -LiteralPath $data.launcher -Algorithm SHA256).Hash.ToLowerInvariant() -ne $data.launcherSha256) { throw 'Fixed launcher changed.' }
   $shell=New-Object -ComObject WScript.Shell
