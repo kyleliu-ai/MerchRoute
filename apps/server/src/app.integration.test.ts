@@ -384,6 +384,12 @@ describe.sequential('review and submission integration', () => {
       const all = await app.inject({ method: 'GET', url: '/api/v1/submissions/history' });
       expect(all.statusCode).toBe(200);
       expect(all.json().items.map((item: any) => item.submissionId)).toEqual(['history-sku-17', 'history-sku-18', 'history-legacy']);
+      expect(all.json()).toMatchObject({ total: 3, page: 1, pageSize: 20 });
+
+      const secondPage = await app.inject({ method: 'GET', url: '/api/v1/submissions/history?page=2&pageSize=2' });
+      expect(secondPage.statusCode).toBe(200);
+      expect(secondPage.json()).toMatchObject({ total: 3, page: 2, pageSize: 2 });
+      expect(secondPage.json().items.map((item: any) => item.submissionId)).toEqual(['history-legacy']);
 
       const exact = await app.inject({ method: 'GET', url: '/api/v1/submissions/history?sku=%200000017%20' });
       expect(exact.statusCode).toBe(200);
@@ -438,6 +444,46 @@ describe.sequential('review and submission integration', () => {
       expect(reversed.json().error).toMatchObject({ code: 'CONFIG_INVALID', message: '投递日期结束时间必须晚于起始时间' });
     } finally {
       await app.services.store.update((db) => { db.submissionHistory = previousHistory; });
+    }
+  });
+
+  it('pages a production-sized submission history without returning or cloning every record', async () => {
+    const previousHistory = structuredClone(app.services.store.read().submissionHistory);
+    await app.services.store.updateSections(['submissionHistory'], (db) => {
+      db.submissionHistory = Array.from({ length: 2457 }, (_, index) => ({
+        submissionId: `history-page-${index}`,
+        pendingSubmissionId: `pending-page-${index}`,
+        taskId: `task-page-${index}`,
+        sourceStageId: 'E005',
+        targetStageId: 'WB_SHARED_MEDIA',
+        sourceFolder: `fixture/history/${index}`,
+        selectedImageCount: 7,
+        selectedRelativePaths: Array.from({ length: 7 }, (_item, image) => `${image + 1}.png`),
+        productSku: String(index).padStart(7, '0').slice(-7),
+        productNameSnapshot: 'fixture',
+        n8nTaskParameters: { fixture: 'x'.repeat(1_200) },
+        status: 'SUCCESS' as const,
+        startedAt: '2026-07-19T00:00:00.000Z',
+        completedAt: '2026-07-19T00:00:01.000Z'
+      }));
+    });
+    try {
+      const timings: number[] = [];
+      let response!: Awaited<ReturnType<typeof app.inject>>;
+      for (let sample = 0; sample < 10; sample++) {
+        const started = performance.now();
+        response = await app.inject({ method: 'GET', url: '/api/v1/submissions/history?page=1&pageSize=20' });
+        timings.push(performance.now() - started);
+      }
+      const p95Ms = [...timings].sort((a, b) => a - b)[Math.ceil(timings.length * 0.95) - 1]!;
+      const payloadBytes = Buffer.byteLength(response.body);
+      console.log('HISTORY_PAGE_BENCHMARK ' + JSON.stringify({ records: 2457, pageSize: 20, payloadBytes, p95Ms: Math.round(p95Ms * 10) / 10 }));
+      expect(response.json()).toMatchObject({ total: 2457, page: 1, pageSize: 20 });
+      expect(response.json().items).toHaveLength(20);
+      expect(payloadBytes).toBeLessThan(100 * 1024);
+      if (process.env.MERCHROUTE_REVIEW_BENCHMARK === '1') expect(p95Ms).toBeLessThan(100);
+    } finally {
+      await app.services.store.updateSections(['submissionHistory'], (db) => { db.submissionHistory = previousHistory; });
     }
   });
 

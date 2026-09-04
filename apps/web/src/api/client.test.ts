@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { api, connectMediaIndexEvents } from './client';
+import { api, connectMediaIndexEvents, connectReviewOperationEvents } from './client';
 
 const stageWire = (index: Record<string, unknown>) => ({
   id: 'E006',
@@ -100,6 +100,40 @@ describe('media index wire compatibility', () => {
     }));
     disconnect();
     expect(FakeEventSource.latest?.close).toHaveBeenCalledOnce();
+  });
+});
+
+describe('review workbench request volume contracts', () => {
+  it('requests only the selected pending/history page and the compact operation panel', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ items: [], total: 0, page: 1, pageSize: 20 }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await api.pending(2, 20);
+    await api.history({ sku: '0000017' }, 3, 20);
+    await api.reviewOperations();
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      '/api/v1/pending-submissions?page=2&pageSize=20',
+      '/api/v1/submissions/history?sku=0000017&page=3&pageSize=20',
+      '/api/v1/review-operations?active=true&includeRecent=1'
+    ]);
+  });
+
+  it('writes a review operation SSE payload directly to the consumer', () => {
+    vi.stubGlobal('EventSource', FakeEventSource);
+    const onState = vi.fn();
+    const onOpen = vi.fn();
+    const onError = vi.fn();
+    const disconnect = connectReviewOperationEvents(onState, onOpen, onError);
+    const operation = { operationId: 'operation-1', kind: 'APPROVE', status: 'RUNNING' };
+
+    FakeEventSource.latest?.emit('open', '');
+    FakeEventSource.latest?.emit('review-operation', JSON.stringify(operation));
+
+    expect(onOpen).toHaveBeenCalledOnce();
+    expect(onState).toHaveBeenCalledWith(operation);
+    expect(onError).not.toHaveBeenCalled();
+    disconnect();
   });
 });
 

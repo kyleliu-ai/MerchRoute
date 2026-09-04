@@ -24,10 +24,40 @@ const historyRecords: SubmissionRecord[] = [
   }
 ];
 
+test('renders one 20-row history page without a 100ms main-thread task on refetch', async ({ page }) => {
+  const records = Array.from({ length: 20 }, (_, index) => ({
+    ...historyRecords[index % historyRecords.length]!,
+    submissionId: `performance-history-${index}`,
+    pendingSubmissionId: `performance-pending-${index}`,
+    taskId: `performance-task-${index}`
+  }));
+  await page.addInitScript(() => {
+    (window as any).__merchrouteLongTasks = [];
+    new PerformanceObserver((list) => {
+      (window as any).__merchrouteLongTasks.push(...list.getEntries().map((entry) => entry.duration));
+    }).observe({ type: 'longtask', buffered: true });
+  });
+  await page.route('**/api/v1/submissions/history*', async (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({ items: records, total: 2457, page: 1, pageSize: 20 })
+  }));
+
+  await page.goto('/history', { waitUntil: 'domcontentloaded' });
+  const rows = page.locator('.ant-table-tbody > tr.ant-table-row');
+  await expect(rows).toHaveCount(20);
+  await page.evaluate(() => { (window as any).__merchrouteLongTasks = []; });
+  await page.getByRole('button', { name: '查询', exact: true }).click();
+  await expect(rows).toHaveCount(20);
+  await page.waitForTimeout(500);
+  const longestTaskMs = await page.evaluate(() => Math.max(0, ...(window as any).__merchrouteLongTasks));
+  console.log('HISTORY_BROWSER_BENCHMARK ' + JSON.stringify({ rows: 20, total: 2457, longestTaskMs: Math.round(longestTaskMs * 10) / 10 }));
+  expect(longestTaskMs).toBeLessThan(100);
+});
+
 test('shows compact workflow shortcuts above history filters without changing the dashboard rail', async ({ page }) => {
   await page.route('**/api/v1/submissions/history*', async (route) => route.fulfill({
     contentType: 'application/json',
-    body: JSON.stringify({ items: historyRecords })
+    body: JSON.stringify({ items: historyRecords, total: historyRecords.length, page: 1, pageSize: 20 })
   }));
 
   await page.goto('/history');
@@ -89,7 +119,7 @@ test('shows workflow shortcuts immediately while stage summaries continue loadin
   });
   await page.route('**/api/v1/submissions/history*', async (route) => route.fulfill({
     contentType: 'application/json',
-    body: JSON.stringify({ items: historyRecords })
+    body: JSON.stringify({ items: historyRecords, total: historyRecords.length, page: 1, pageSize: 20 })
   }));
 
   await page.goto('/history');
@@ -111,9 +141,9 @@ test('shows the same compact workflow shortcuts above the pending delivery contr
     await stagesGate;
     await route.fulfill({ contentType: 'application/json', body: JSON.stringify(original) });
   });
-  await page.route('**/api/v1/pending-submissions', async (route) => route.fulfill({
+  await page.route('**/api/v1/pending-submissions*', async (route) => route.fulfill({
     contentType: 'application/json',
-    body: JSON.stringify({ items: [] })
+    body: JSON.stringify({ items: [], total: 0, page: 1, pageSize: 20 })
   }));
 
   await page.goto('/pending');
@@ -164,7 +194,7 @@ test('hides disabled workflow shortcuts and keeps history available when stage d
   });
   await page.route('**/api/v1/submissions/history*', async (route) => route.fulfill({
     contentType: 'application/json',
-    body: JSON.stringify({ items: historyRecords })
+    body: JSON.stringify({ items: historyRecords, total: historyRecords.length, page: 1, pageSize: 20 })
   }));
 
   await page.goto('/history');
@@ -201,7 +231,7 @@ test('filters submission history by one exact SKU and preserves detail viewing',
     requestedSkus.push(sku);
     await route.fulfill({
       contentType: 'application/json',
-      body: JSON.stringify({ items: sku ? historyRecords.filter((item) => item.productSku === sku) : historyRecords })
+      body: JSON.stringify({ items: sku ? historyRecords.filter((item) => item.productSku === sku) : historyRecords, total: (sku ? historyRecords.filter((item) => item.productSku === sku) : historyRecords).length, page: 1, pageSize: 20 })
     });
   });
 
@@ -278,7 +308,7 @@ test('filters submission history by completed date only after clicking query', a
       const completedAt = Date.parse(item.completedAt);
       return (!completedFrom || completedAt >= Date.parse(completedFrom)) && (!completedTo || completedAt < Date.parse(completedTo));
     });
-    await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ items }) });
+    await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ items, total: items.length, page: 1, pageSize: 20 }) });
   });
 
   await page.goto('/history');
@@ -340,7 +370,7 @@ test('filters submission history by completed date only after clicking query', a
 
   await filter.getByRole('button', { name: '清除筛选', exact: true }).click();
   await expect(filter.getByText('共 5 条记录', { exact: true })).toBeVisible();
-  expect(requests.at(-1)?.toString()).toBe('');
+  expect(requests.at(-1)?.toString()).toBe('page=1&pageSize=20');
   await expect(datePreset).toContainText('全部投递日期');
 
   await page.setViewportSize({ width: 320, height: 760 });

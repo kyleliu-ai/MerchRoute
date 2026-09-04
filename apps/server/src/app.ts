@@ -7,7 +7,7 @@ import cors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';
 import pino from 'pino';
 import sharp from 'sharp';
-import { APP_VERSION, AppError, E001_VARIANT_MAX_IMAGE_COUNT, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, appConfigSchema, workflowParameterFileName, workflowParameterOptionsFileName, pricingBatchCalculationInputSchema, pricingCalculationInputSchema, pricingProductQueryInputSchema, shippingCalculationInputSchema, type AppConfig, type ReviewOperation, type TaskDetail, type OzonCatalogDictionaryValue, type OzonColorIdentity, type PendingSubmission, type ProductVariant, type ReviewRecord, type StageConfig, type SubmissionRecord, type VariantSelectionGroup, type WbColorIdentity, type WorkflowParameterOptions, type WorkflowParameters } from '@n8n-media-review/shared';
+import { APP_VERSION, AppError, E001_VARIANT_MAX_IMAGE_COUNT, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, appConfigSchema, workflowParameterFileName, workflowParameterOptionsFileName, pricingBatchCalculationInputSchema, pricingCalculationInputSchema, pricingProductQueryInputSchema, shippingCalculationInputSchema, type AppConfig, type ReviewOperation, type TaskDetail, type OzonCatalogDictionaryValue, type OzonColorIdentity, type PendingSubmission, type ProductVariant, type ReviewRecord, type StageConfig, type StageSummary, type SubmissionRecord, type VariantSelectionGroup, type WbColorIdentity, type WorkflowParameterOptions, type WorkflowParameters } from '@n8n-media-review/shared';
 import { ConfigService, getAppDataDir, parseOzonMediaOutputRootTemplate, parseWbMediaOutputRootTemplate } from './config/service.js';
 import { acquireStateWriterLock } from './utils/state-writer-lock.js';
 import { ReviewOperationService, stableHash } from './services/review-operations.js';
@@ -166,15 +166,38 @@ async function buildAppWithWriter(options: BuildAppOptions) {
   const mediaIndex = new MediaIndexService(config, scanner, app.log, { databaseUrl });
   await mediaIndex.initialize();
   const mediaIndexEvents = new MediaIndexEventHub();
+  const stageSummaryCache = new Map<string, StageSummary>();
+  const updateStageSummary = async (stageId: string): Promise<StageSummary> => {
+    const stage = config.get().stages.find((item) => item.id === stageId);
+    const tasks = stage?.enabled && stage.reviewEnabled ? mediaIndex.snapshotStageTasks(stageId) : [];
+    const index = mediaIndex.getState(stageId);
+    const summary: StageSummary = {
+      pending: tasks.filter((item) => item.status === 'PENDING_REVIEW').length,
+      drafts: tasks.filter((item) => item.status === 'DRAFT').length,
+      approved: store.pendingSubmissionCountsBySourceStage().get(stageId) || 0,
+      queue: index.queueCount || 0,
+      totalTasks: tasks.length,
+      lastScannedAt: index.lastReconciledAt || null
+    };
+    stageSummaryCache.set(stageId, summary);
+    return summary;
+  };
+  const publishMediaIndexState = (type: 'index-changed' | 'review-state-changed', stageId: string): void => {
+    void updateStageSummary(stageId)
+      .then((summary) => mediaIndexEvents.publish({ type, stageId, state: mediaIndex.getState(stageId), summary }))
+      .catch((error) => app.log.warn({ err: error, stageId }, '媒体索引摘要更新失败'));
+  };
   const unsubscribeMediaIndexEvents = mediaIndex.onChange(({ stageId, state }) => {
-    mediaIndexEvents.publish({ type: 'index-changed', stageId, state });
+    void state;
+    publishMediaIndexState('index-changed', stageId);
   });
   const unsubscribeReviewEvents = store.subscribe((change) => {
     for (const stage of config.get().stages.filter((item) => item.enabled && item.reviewEnabled && change.stageIds.includes(item.id))) {
-      mediaIndexEvents.publish({ type: 'review-state-changed', stageId: stage.id, state: mediaIndex.getState(stage.id) });
+      publishMediaIndexState('review-state-changed', stage.id);
     }
   });
   const synchronizeMediaIndexConfig = async (): Promise<void> => {
+    stageSummaryCache.clear();
     await mediaIndex.syncConfig().catch((error) => app.log.warn({ err: error }, '媒体索引配置同步失败，将保留上一份可用索引'));
   };
   const purchases = new PurchaseRepository(databaseUrl, {
@@ -615,21 +638,13 @@ async function buildAppWithWriter(options: BuildAppOptions) {
 
   app.get('/api/v1/stages', async () => {
     const stages = config.get().stages;
-    const pendingSubmissionCounts = store.pendingSubmissionCountsBySourceStage();
     const items = [];
     for (const stage of stages) {
-      const tasks = stage.enabled && stage.reviewEnabled ? await mediaIndex.listStageTasks(stage.id) : [];
       const index = mediaIndex.getState(stage.id);
+      const summary = stageSummaryCache.get(stage.id) || await updateStageSummary(stage.id);
       items.push({
         ...stage,
-        summary: {
-          pending: tasks.filter((item) => item.status === 'PENDING_REVIEW').length,
-          drafts: tasks.filter((item) => item.status === 'DRAFT').length,
-          approved: pendingSubmissionCounts.get(stage.id) || 0,
-          queue: index.queueCount || 0,
-          totalTasks: tasks.length,
-          lastScannedAt: index.lastReconciledAt || null
-        },
+        summary,
         index
       });
     }
@@ -789,6 +804,7 @@ async function buildAppWithWriter(options: BuildAppOptions) {
       }
       const records: Array<Awaited<ReturnType<VariantMediaDeliveryService['deliver']>>> = [];
       const failures: Array<Awaited<ReturnType<VariantMediaDeliveryService['deliver']>>> = [];
+      const deliveryEvents: Array<{ type: string; message: string; details: Record<string, unknown> }> = [];
       let archived = false;
       for (const target of targets) {
         const platform = target === 'WB_SHARED_MEDIA' ? 'WB' : 'OZON';
@@ -796,25 +812,30 @@ async function buildAppWithWriter(options: BuildAppOptions) {
           const record = await variantDelivery.deliver({ submissionId: (operation.input.submissionIds as Record<string, string>)[platform], platform, task, stage, selectedRelativePaths: selected, productSku: resolvedProduct.identity.sku, productName: resolvedProduct.identity.productName, variantId: variant.variantId, variantName: variant.name, variantColor: variant.wbColor, sourceSubmissionId: task.taskContext?.sourceSubmissionId, archiveMedia: !archived });
           archived ||= Boolean(record.archiveFolder);
           records.push(record);
-          await store.addEvent(`${platform}_MEDIA_DELIVERED`, `${stage.id} 审核媒体已投递到 ${platform} 共享媒体库`, { taskId, submissionId: record.submissionId, sku: resolvedProduct.identity.sku, variantName: variant.name, targetFolder: record.targetFolder });
 
         } catch (error) {
           if (!(error instanceof TerminalDeliveryError)) throw error;
           if (error.record.errorCode === 'DELIVERY_OUTCOME_UNKNOWN') throw new AppError('DELIVERY_OUTCOME_UNKNOWN', error.message, { submissionId: error.record.submissionId }, 409);
           failures.push(error.record);
-          await store.addEvent(`${platform}_MEDIA_DELIVERY_FAILED`, `${stage.id} ${platform} 共享媒体投递失败`, { taskId, submissionId: error.record.submissionId, error: error.message });
+          deliveryEvents.push({ type: `${platform}_MEDIA_DELIVERY_FAILED`, message: `${stage.id} ${platform} 共享媒体投递失败`, details: { taskId, submissionId: error.record.submissionId, error: error.message } });
         }
       }
       const now = new Date().toISOString();
-      await store.updateSections(['reviews', 'submissionHistory'], (db) => {
-        const ids = new Set([...records, ...failures].map((row) => row.submissionId));
-        db.submissionHistory = [...records, ...failures, ...db.submissionHistory.filter((row) => !ids.has(row.submissionId))];
+      const reviewSections = failures.length
+        ? ['reviews', 'submissionHistory', 'appEvents'] as const
+        : ['reviews', 'appEvents'] as const;
+      await store.updateSections(reviewSections, (db) => {
+        if (failures.length) {
+          const failedIds = new Set(failures.map((row) => row.submissionId));
+          db.submissionHistory = [...failures, ...db.submissionHistory.filter((row) => !failedIds.has(row.submissionId))];
+        }
         let review = db.reviews.find((item) => item.taskId === persistedTaskId);
         if (!review) {
           review = { taskId: persistedTaskId, stageId: stage.id, sourceFolder: task.sourceFolder, sourceFolderName: task.sourceFolderName, selectedRelativePaths: selected, selectedTargetStageIds: targets, status: records.length ? 'SUBMITTED' : 'DRAFT', createdAt: now, updatedAt: now };
           db.reviews.push(review);
         }
         Object.assign(review, { selectedRelativePaths: selected, selectedTargetStageIds: targets, status: records.length ? 'SUBMITTED' : 'DRAFT', updatedAt: now, ...(records.length ? { approvedAt: now } : {}), productSku: resolvedProduct.identity.sku, productNameSnapshot: resolvedProduct.identity.productName, productIdentitySource: resolvedProduct.source, variantId: variant.variantId, variantName: variant.name });
+        for (const event of deliveryEvents) store.appendEvent(db, event.type, event.message, event.details);
       });
       if (!records.length) {
         const first = failures[0]!;
@@ -912,9 +933,17 @@ async function buildAppWithWriter(options: BuildAppOptions) {
     return { ok: true };
   });
 
-  app.get('/api/v1/pending-submissions', async () => {
-    const pendingItems = store.section('pendingSubmissions');
-    return { items: await Promise.all(pendingItems.map(async (item) => {
+  app.get('/api/v1/pending-submissions', async (request) => {
+    const query = request.query as { page?: string; pageSize?: string };
+    const requestedPage = Number(query.page || 1);
+    const requestedPageSize = Number(query.pageSize || 20);
+    const page = Number.isInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1;
+    const pageSize = Number.isInteger(requestedPageSize) ? Math.min(100, Math.max(1, requestedPageSize)) : 20;
+    const pendingPage = store.select('pendingSubmissions', (rows) => ({
+      items: rows.slice((page - 1) * pageSize, page * pageSize),
+      total: rows.length
+    }));
+    return { items: await Promise.all(pendingPage.items.map(async (item) => {
       const review = store.getReview(item.taskId);
       const sourceStage = config.get().stages.find((candidate) => candidate.id === item.sourceStageId);
       const targetStage = config.get().stages.find((candidate) => candidate.id === item.targetStageId);
@@ -930,7 +959,7 @@ async function buildAppWithWriter(options: BuildAppOptions) {
       }
       const disabledReason = !sourceStageEnabled ? `来源流程 ${item.sourceStageId} 已停用` : !targetStageEnabled ? `目标流程 ${item.targetStageId} 已停用` : identityDisabledReason;
       return { ...item, productNameSnapshot: currentProductName, sourceFolderName: review?.sourceFolderName || item.taskId.slice(0, 12), approvedAt: review?.approvedAt, targetQueueRoot: target?.targetQueueRoot, sourceStageEnabled, targetStageEnabled, disabledReason };
-    })) };
+    })), total: pendingPage.total, page, pageSize };
   });
   app.patch('/api/v1/pending-submissions/:id', async (request) => {
     const { id } = request.params as { id: string };
@@ -1060,7 +1089,10 @@ async function buildAppWithWriter(options: BuildAppOptions) {
     const operation = await reviewOperations.accept({ kind: 'RETRY', requestKey: key, request: { submissionId }, subjectKeys: ['task:' + store.resolvePersistedTaskId(history.taskId)], input: { submissionId } });
     return respondOperation(request, reply, operation);
   });
-  app.get('/api/v1/review-operations', async (request) => ({ items: reviewOperations.list((request.query as { active?: string }).active !== 'false') }));
+  app.get('/api/v1/review-operations', async (request) => {
+    const query = request.query as { active?: string; includeRecent?: string };
+    return { items: reviewOperations.list(query.active !== 'false', query.includeRecent === '1' || query.includeRecent === 'true') };
+  });
   app.get('/api/v1/review-operations/events', async (request, reply) => {
     reply.hijack();
     const remove = reviewOperations.addClient(reply.raw);
@@ -1075,31 +1107,37 @@ async function buildAppWithWriter(options: BuildAppOptions) {
     return batch;
   });
   app.get('/api/v1/submissions/history', async (request) => {
-    const query = request.query as { status?: string; sourceStageId?: string; targetStageId?: string; search?: string; sku?: string; completedFrom?: string; completedTo?: string };
-    let items = store.section('submissionHistory');
+    const query = request.query as { status?: string; sourceStageId?: string; targetStageId?: string; search?: string; sku?: string; completedFrom?: string; completedTo?: string; page?: string; pageSize?: string };
+    const requestedPage = Number(query.page || 1);
+    const requestedPageSize = Number(query.pageSize || 20);
+    const page = Number.isInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1;
+    const pageSize = Number.isInteger(requestedPageSize) ? Math.min(100, Math.max(1, requestedPageSize)) : 20;
+    let sku: string | undefined;
     if (query.sku !== undefined) {
-      const sku = String(query.sku).trim();
+      sku = String(query.sku).trim();
       if (!/^\d{7}$/.test(sku)) throw new AppError('CONFIG_INVALID', 'SKU 必须是完整的 7 位数字', { sku });
-      items = items.filter((item) => item.productSku === sku);
     }
-    if (query.status) items = items.filter((item) => item.status === query.status);
-    if (query.sourceStageId) items = items.filter((item) => item.sourceStageId === query.sourceStageId);
-    if (query.targetStageId) items = items.filter((item) => item.targetStageId === query.targetStageId);
-    if (query.search) items = items.filter((item) => item.sourceFolder.toLocaleLowerCase().includes(query.search!.toLocaleLowerCase()));
     const completedFrom = query.completedFrom ? normalizeSubmissionHistoryDate(query.completedFrom, '投递日期起始时间') : undefined;
     const completedTo = query.completedTo ? normalizeSubmissionHistoryDate(query.completedTo, '投递日期结束时间') : undefined;
     if (completedFrom && completedTo && completedFrom >= completedTo) {
       throw new AppError('CONFIG_INVALID', '投递日期结束时间必须晚于起始时间');
     }
-    if (completedFrom || completedTo) {
-      items = items.filter((item) => {
+    const result = store.select('submissionHistory', (rows) => {
+      let items = rows;
+      if (sku) items = items.filter((item) => item.productSku === sku);
+      if (query.status) items = items.filter((item) => item.status === query.status);
+      if (query.sourceStageId) items = items.filter((item) => item.sourceStageId === query.sourceStageId);
+      if (query.targetStageId) items = items.filter((item) => item.targetStageId === query.targetStageId);
+      if (query.search) items = items.filter((item) => item.sourceFolder.toLocaleLowerCase().includes(query.search!.toLocaleLowerCase()));
+      if (completedFrom || completedTo) items = items.filter((item) => {
         if (!item.completedAt) return false;
         const completedAt = Date.parse(item.completedAt);
         if (!Number.isFinite(completedAt)) return false;
         return (!completedFrom || completedAt >= completedFrom) && (!completedTo || completedAt < completedTo);
       });
-    }
-    return { items };
+      return { items: items.slice((page - 1) * pageSize, page * pageSize), total: items.length };
+    });
+    return { ...result, page, pageSize };
   });
   app.get('/api/v1/submissions/:submissionId', async (request) => {
     const { submissionId } = request.params as { submissionId: string };

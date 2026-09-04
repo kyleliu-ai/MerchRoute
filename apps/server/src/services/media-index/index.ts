@@ -319,6 +319,11 @@ export class MediaIndexService {
     return [];
   }
 
+  snapshotStageTasks(stageId: string): ProductTask[] {
+    this.requireStage(stageId);
+    return this.scanner.hasStageSnapshot(stageId) ? this.scanner.listIndexedStageTasks(stageId) : [];
+  }
+
   getState(stageId: string): MediaIndexState {
     const revision = this.runtimes.get(stageId)?.configRevision || '';
     return cloneState(this.states.get(stageId) || defaultState(stageId, 'WARMING', revision));

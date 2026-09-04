@@ -218,7 +218,7 @@ test('keeps an explicit query failure stable without reporting an empty workflow
   await expect(page.locator('.stage-rescan-button')).toBeVisible();
 });
 
-test('coalesces media index event bursts and refreshes once after open, reconnect, and visible-page recovery', async ({ page }) => {
+test('writes media index events into cache, invalidates only affected lists, and falls back after disconnect', async ({ page }) => {
   const stagesResponse = await page.request.get('/api/v1/stages');
   expect(stagesResponse.ok()).toBe(true);
   const original = await stagesResponse.json() as { stages: StageView[] };
@@ -294,9 +294,8 @@ test('coalesces media index event bursts and refreshes once after open, reconnec
     const source = (window as unknown as { __mediaIndexSource: EventTarget }).__mediaIndexSource;
     source.dispatchEvent(new Event('open'));
   });
-  await expect.poll(() => stageRequests).toBe(2);
   await page.waitForTimeout(250);
-  expect(stageRequests).toBe(2);
+  expect(stageRequests).toBe(1);
 
   const directStageLink = page.locator(`a[href="/review/${stageId}"]`).first();
   if (await directStageLink.count() === 0) {
@@ -319,10 +318,9 @@ test('coalesces media index event bursts and refreshes once after open, reconnec
   }, { stageId });
   expect(stageRequests).toBe(beforeListBurstStages);
   expect(taskListRequests).toBe(beforeListBurstTasks);
-  await expect.poll(() => stageRequests).toBe(beforeListBurstStages + 1);
   await expect.poll(() => taskListRequests).toBe(beforeListBurstTasks + 1);
   await page.waitForTimeout(250);
-  expect(stageRequests).toBe(beforeListBurstStages + 1);
+  expect(stageRequests).toBe(beforeListBurstStages);
   expect(taskListRequests).toBe(beforeListBurstTasks + 1);
 
   await page.locator(`a[href="/task/${detailTask!.taskId}"]`).first().click();
@@ -342,12 +340,10 @@ test('coalesces media index event bursts and refreshes once after open, reconnec
   }, { stageId });
   expect(stageRequests).toBe(beforeDetailBurstStages);
   expect(detailRequests).toBe(beforeDetailBurstDetails);
-  await expect.poll(() => stageRequests).toBe(beforeDetailBurstStages + 1);
-  await expect.poll(() => detailRequests).toBe(beforeDetailBurstDetails + 1);
   await page.waitForTimeout(250);
-  expect(stageRequests).toBe(beforeDetailBurstStages + 1);
+  expect(stageRequests).toBe(beforeDetailBurstStages);
   expect(taskListRequests).toBe(beforeDetailBurstTasks);
-  expect(detailRequests).toBe(beforeDetailBurstDetails + 1);
+  expect(detailRequests).toBe(beforeDetailBurstDetails);
 
   const beforeReviewStages = stageRequests;
   const beforeReviewDetails = detailRequests;
@@ -360,11 +356,9 @@ test('coalesces media index event bursts and refreshes once after open, reconnec
       }) }));
     }
   }, { stageId });
-  await expect.poll(() => stageRequests).toBe(beforeReviewStages + 1);
-  await expect.poll(() => detailRequests).toBe(beforeReviewDetails + 1);
   await page.waitForTimeout(250);
-  expect(stageRequests).toBe(beforeReviewStages + 1);
-  expect(detailRequests).toBe(beforeReviewDetails + 1);
+  expect(stageRequests).toBe(beforeReviewStages);
+  expect(detailRequests).toBe(beforeReviewDetails);
 
   const beforeConnectedVisibilityStages = stageRequests;
   const beforeConnectedVisibilityDetails = detailRequests;
@@ -388,14 +382,12 @@ test('coalesces media index event bursts and refreshes once after open, reconnec
     source.dispatchEvent(new Event('error'));
     source.dispatchEvent(new Event('open'));
   });
-  await expect.poll(() => stageRequests).toBe(beforeReconnectStages + 1);
-  await expect.poll(() => detailRequests).toBe(beforeReconnectDetails + 1);
   await page.waitForTimeout(250);
-  expect(stageRequests).toBe(beforeReconnectStages + 1);
-  expect(detailRequests).toBe(beforeReconnectDetails + 1);
+  expect(stageRequests).toBe(beforeReconnectStages);
+  expect(detailRequests).toBe(beforeReconnectDetails);
   await page.waitForTimeout(350);
-  expect(stageRequests).toBe(beforeReconnectStages + 1);
-  expect(detailRequests).toBe(beforeReconnectDetails + 1);
+  expect(stageRequests).toBe(beforeReconnectStages);
+  expect(detailRequests).toBe(beforeReconnectDetails);
 
   const beforeVisibilityStages = stageRequests;
   const beforeVisibilityDetails = detailRequests;
@@ -405,8 +397,7 @@ test('coalesces media index event bursts and refreshes once after open, reconnec
     document.dispatchEvent(new Event('visibilitychange'));
   });
   await expect.poll(() => stageRequests).toBe(beforeVisibilityStages + 1);
-  await expect.poll(() => detailRequests).toBe(beforeVisibilityDetails + 1);
   await page.waitForTimeout(250);
   expect(stageRequests).toBe(beforeVisibilityStages + 1);
-  expect(detailRequests).toBe(beforeVisibilityDetails + 1);
+  expect(detailRequests).toBe(beforeVisibilityDetails);
 });

@@ -20,7 +20,7 @@ import type { ConfigService } from '../../config/service.js';
 import type { StateStore } from '../../repositories/store.js';
 import type { ScannerService } from '../scanner/index.js';
 import type { ProductIdentityService } from '../product-identity/index.js';
-import { reviewOperationContext } from '../../utils/review-operation-context.js';
+import { addReviewOperationPhase, addReviewOperationWork, reviewOperationContext } from '../../utils/review-operation-context.js';
 import { deliveryIoLimit, copyVerified, treeReceipts, verifyTree, syncDirectory, syncFile, withDeliveryNamespace } from '../../utils/delivery-files.js';
 import { stableHash, type ReviewOperationService } from '../review-operations.js';
 import { atomicRenameWithRetry } from '../../utils/atomic-rename.js';
@@ -246,6 +246,7 @@ export class SubmissionService {
     const missingPaths = pending.selectedRelativePaths.filter((relativePath) => !imageByRelativePath.has(relativePath));
     if (missingPaths.length) throw new AppError('SOURCE_FILE_MISSING', '部分选中的图片已不存在', { relativePaths: missingPaths });
     const sourceImages = pending.selectedRelativePaths.map((relativePath) => imageByRelativePath.get(relativePath)!);
+    addReviewOperationWork(sourceImages.length, sourceImages.reduce((sum, item) => sum + item.sizeBytes, 0));
     for (const image of sourceImages) {
       const { absolutePath: source } = await this.scanner.resolveIndexedMedia(task.taskId, image.relativePath, { allowDisabledStage: true });
       const current = await stat(source);
@@ -304,6 +305,7 @@ export class SubmissionService {
     {
       await this.setProgress(batchId, pending.id, { step: SUBMISSION_STEPS[1], submissionId });
       const selectedFiles: Array<Record<string, unknown>> = [];
+      const copiedMediaReceipts = new Map<string, { sizeBytes: number; sha256: string }>();
       const destinationNames = new Set<string>();
       let copiedBytes = 0;
       const totalBytes = sourceImages.reduce((sum, item) => sum + item.sizeBytes, 0);
@@ -315,10 +317,13 @@ export class SubmissionService {
         destinationNames.add(destinationKey);
         const destination = path.join(targetTemp, ...targetRelativePath.split('/'));
         await mkdir(path.dirname(destination), { recursive: true });
-        await copyVerified(source, destination, (bytes) => {
+        const copyStarted = performance.now();
+        const receipt = await copyVerified(source, destination, (bytes) => {
           copiedBytes += bytes;
           this.operations?.report({ step: '复制及校验图片', copiedBytes, totalBytes, completedFiles: sortOrder, totalFiles: sourceImages.length });
-        });
+        }, { deferDestinationReadback: true });
+        addReviewOperationPhase('copyMs', performance.now() - copyStarted);
+        copiedMediaReceipts.set(targetRelativePath, receipt);
         await this.scanner.resolveIndexedMedia(task.taskId, image.relativePath, { allowDisabledStage: true });
         selectedFiles.push({
           sortOrder,
@@ -377,9 +382,17 @@ export class SubmissionService {
       // Prepare the complete archive before publishing a directory watched by n8n.
       await mkdir(archiveStagingRoot, { recursive: true });
       await cp(targetTemp, archiveTemp, { recursive: true, errorOnExist: true, force: false });
+      const verifyStarted = performance.now();
       checkpoint.files = await treeReceipts(targetTemp, true);
+      for (const [relativePath, expected] of copiedMediaReceipts) {
+        const actual = checkpoint.files.find((file) => file.relativePath === relativePath);
+        if (!actual || actual.sizeBytes !== expected.sizeBytes || actual.sha256 !== expected.sha256) {
+          throw new AppError('VERIFY_FAILED', '目标包图片内容校验失败', { relativePath });
+        }
+      }
       const archiveFiles = await treeReceipts(archiveTemp, true);
       if (JSON.stringify(archiveFiles) !== JSON.stringify(checkpoint.files)) throw new AppError('VERIFY_FAILED', '归档暂存包校验失败');
+      addReviewOperationPhase('verifyMs', performance.now() - verifyStarted);
       checkpoint.phase = 'VERIFIED';
       await this.saveCheckpoint(checkpoint);
       await this.setProgress(batchId, pending.id, { step: SUBMISSION_STEPS[6] });
@@ -398,12 +411,14 @@ export class SubmissionService {
   }
 
   private async saveCheckpoint(checkpoint: DeliveryCheckpoint): Promise<void> {
+    const started = performance.now();
     checkpoint.updatedAt = new Date().toISOString();
     await this.store.updateSections(['deliveryCheckpoints'], (db) => {
       const rows = db.deliveryCheckpoints ||= [];
       const index = rows.findIndex((row) => row.submissionId === checkpoint.submissionId);
       if (index < 0) rows.push(structuredClone(checkpoint)); else rows[index] = structuredClone(checkpoint);
     });
+    addReviewOperationPhase('checkpointMs', performance.now() - started);
   }
 
   private async reconcile(checkpoint: DeliveryCheckpoint): Promise<SubmissionResult | null> {

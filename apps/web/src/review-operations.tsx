@@ -1,35 +1,52 @@
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, Button, Card, Progress, Space, Tag, Typography } from 'antd';
-import { api, connectReviewOperationEvents } from './api/client';
+import { api, connectReviewOperationEvents, type ReviewOperationView } from './api/client';
 
 const labels = { QUEUED: '等待处理', RUNNING: '处理中', RETRY_WAIT: '等待重试', NEEDS_ATTENTION: '需要核对', SUCCEEDED: '已完成', PARTIAL_SUCCESS: '部分完成', FAILED: '处理失败' };
 const finalStates = new Set(['SUCCEEDED', 'PARTIAL_SUCCESS', 'FAILED', 'NEEDS_ATTENTION']);
 export function ReviewOperationsPanel() {
   const client = useQueryClient();
   const seen = useRef(new Map<string, string>());
-  const query = useQuery({ queryKey: ['review-operations'], queryFn: api.reviewOperations, refetchInterval: 2000 });
+  const hydrated = useRef(false);
+  const [eventsConnected, setEventsConnected] = useState(false);
+  const query = useQuery({ queryKey: ['review-operations'], queryFn: api.reviewOperations, refetchInterval: eventsConnected ? false : 30_000 });
   const retry = useMutation({ mutationFn: api.retryReviewOperation, onSuccess: () => client.invalidateQueries({ queryKey: ['review-operations'] }) });
-  useEffect(() => {
-    const refresh = () => { void client.invalidateQueries({ queryKey: ['review-operations'] }); };
-    const close = connectReviewOperationEvents(refresh, refresh);
-    window.addEventListener('merchroute-review-operation-accepted', refresh);
-    return () => { close(); window.removeEventListener('merchroute-review-operation-accepted', refresh); };
+  const invalidateTerminalResult = useCallback((operation: ReviewOperationView) => {
+    void client.invalidateQueries({ queryKey: ['pending'] });
+    void client.invalidateQueries({ queryKey: ['history'] });
+    void client.invalidateQueries({ queryKey: ['stages'] });
+    for (const subject of operation.subjectKeys.filter((key) => key.startsWith('task:'))) {
+      void client.invalidateQueries({ queryKey: ['task', subject.slice(5)] });
+    }
   }, [client]);
   useEffect(() => {
+    const refresh = () => { void client.invalidateQueries({ queryKey: ['review-operations'] }); };
+    const close = connectReviewOperationEvents((operation) => {
+      const previous = seen.current.get(operation.operationId);
+      seen.current.set(operation.operationId, operation.status);
+      if (finalStates.has(operation.status) && previous !== operation.status) invalidateTerminalResult(operation);
+      client.setQueryData<{ items: Array<typeof operation> }>(['review-operations'], (current) => {
+        const items = [operation, ...(current?.items || []).filter((item) => item.operationId !== operation.operationId)]
+          .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+        return { items };
+      });
+    }, () => setEventsConnected(true), () => setEventsConnected(false));
+    window.addEventListener('merchroute-review-operation-accepted', refresh);
+    return () => { close(); window.removeEventListener('merchroute-review-operation-accepted', refresh); };
+  }, [client, invalidateTerminalResult]);
+  useEffect(() => {
+    if (!hydrated.current) {
+      for (const row of query.data?.items || []) seen.current.set(row.operationId, row.status);
+      if (query.data) hydrated.current = true;
+      return;
+    }
     for (const row of query.data?.items || []) {
       const previous = seen.current.get(row.operationId);
       seen.current.set(row.operationId, row.status);
-      if (finalStates.has(row.status) && previous !== row.status) {
-        void client.invalidateQueries({ queryKey: ['pending'] });
-        void client.invalidateQueries({ queryKey: ['history'] });
-        void client.invalidateQueries({ queryKey: ['stages'] });
-        for (const subject of row.subjectKeys.filter((key) => key.startsWith('task:'))) {
-          void client.invalidateQueries({ queryKey: ['task', subject.slice(5)] });
-        }
-      }
+      if (finalStates.has(row.status) && previous !== row.status) invalidateTerminalResult(row);
     }
-  }, [client, query.data]);
+  }, [invalidateTerminalResult, query.data]);
   const active = (query.data?.items || []).filter((row) => row.status !== 'SUCCEEDED' && (row.status !== 'FAILED' || Date.now() - Date.parse(row.updatedAt) < 86400_000));
   const recent = (query.data?.items || []).filter((row) => row.status === 'SUCCEEDED').slice(0, 1);
   const items = [...active, ...recent];

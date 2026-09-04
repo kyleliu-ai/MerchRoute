@@ -59,7 +59,7 @@ test.describe('关键字段一键复制', () => {
       selectedImageCount: 1, productSku: '0000019', productNameSnapshot: '投递历史复制测试',
       status: 'SUCCESS', createdAt: new Date().toISOString(), completedAt: new Date().toISOString()
     };
-    await page.route('**/api/v1/submissions/history*', async (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [record] }) }));
+    await page.route('**/api/v1/submissions/history*', async (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [record], total: 1, page: 1, pageSize: 20 }) }));
     await page.goto('/history');
 
     const row = page.locator('.ant-table-tbody tr').filter({ hasText: record.submissionId });
