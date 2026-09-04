@@ -2,6 +2,7 @@ import { mkdir, writeFile, rename } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { developmentHome, registration, readBatch, assertBatch, sourceIdentity, git, atomicJson, withCommandLock, requireApply, readJson, recoverCommandLock } from './workflow/state.mjs';
+import { createRuntimeEndpoint } from './lib/runtime-endpoint.mjs';
 
 export function parseOptions(args) {
   const options={}; const positional=[];
@@ -44,7 +45,8 @@ export async function runWorkflow(args,{root=path.resolve(import.meta.dirname,'.
   const config=await registration(root,home);
   if(command==='recover-lock')return recoverCommandLock(home,options);
   if(command==='status'){
-    let production;try{const response=await fetch('http://127.0.0.1:4173/api/v1/about/version',{signal:AbortSignal.timeout(15000)});if(!response.ok)throw new Error();const result=await response.json();production={current:result.current,runtimeStatus:result.runtimeStatus,syncStatus:result.syncStatus};}catch{production={unavailable:true};}
+    const endpoint=createRuntimeEndpoint(config.production?.port||43173);
+    let production;try{const response=await fetch(endpoint.origin+'/api/v1/about/version',{signal:AbortSignal.timeout(15000)});if(!response.ok)throw new Error();const result=await response.json();production={current:result.current,runtimeStatus:result.runtimeStatus,syncStatus:result.syncStatus,runtimeEndpoint:endpoint};}catch{production={unavailable:true,runtimeEndpoint:endpoint};}
     return {source:sourceIdentity(root),batch:await readBatch(home),baseline:config.baseline,github:config.github,production};
   }
   return withCommandLock(home,async()=>{

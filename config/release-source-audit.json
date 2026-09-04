@@ -325,7 +325,7 @@
     },
     {
       "id": "isolated-runtime",
-      "description": "隔离端口 API/DOM/320px 回读，不切换 4173"
+      "description": "隔离端口 API/DOM/320px 回读，不切换发布绑定的正式端口"
     }
   ],
   "features": [

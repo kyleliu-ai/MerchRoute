@@ -1,6 +1,7 @@
-import { statSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import dotenv from 'dotenv';
+import { resolveRuntimeEndpoint, type RuntimeEndpoint } from './runtime-endpoint.js';
 
 const REQUIRED_RUNTIME_VARIABLES = [
   'MERCHROUTE_RUNTIME_KEY',
@@ -21,6 +22,7 @@ export type RuntimeEnvironmentResult = {
   projectEnvFile: string;
   runtimeEnvFile: string;
   runtimeEnvLoaded: boolean;
+  runtimeEndpoint: RuntimeEndpoint;
 };
 
 export function loadRuntimeEnvironment(options: RuntimeEnvironmentOptions): RuntimeEnvironmentResult {
@@ -41,7 +43,25 @@ export function loadRuntimeEnvironment(options: RuntimeEnvironmentOptions): Runt
   const runtimeEnvFile = configuredRuntimeEnvFile
     ? path.resolve(configuredRuntimeEnvFile)
     : path.join(projectRoot, '.env.runtime');
-  const runtimeEnvLoaded = loadEnvFile(runtimeEnvFile, env, Boolean(configuredRuntimeEnvFile));
+  const runtimeFileValues = readEnvFile(runtimeEnvFile, Boolean(configuredRuntimeEnvFile));
+  const runtimeEnvLoaded = Boolean(runtimeFileValues);
+  if (runtimeFileValues) applyEnvValues(runtimeFileValues, env);
+
+  const runtimeEndpoint = resolveRuntimeEndpoint(env);
+  for (const [key, expected] of Object.entries({
+    HOST: runtimeEndpoint.host,
+    PORT: String(runtimeEndpoint.port),
+    MERCHROUTE_PORT: String(runtimeEndpoint.port),
+    MERCHROUTE_RUNTIME_BASE_URL: runtimeEndpoint.origin
+  })) {
+    const rawFromFile = String(runtimeFileValues?.[key] || '').trim();
+    const fromFile = key === 'MERCHROUTE_RUNTIME_BASE_URL' ? rawFromFile.replace(/\/$/, '') : rawFromFile;
+    if (fromFile && fromFile !== expected) throw new Error(`${key} 与已验收发布绑定不一致`);
+  }
+  env.HOST = runtimeEndpoint.host;
+  env.PORT = String(runtimeEndpoint.port);
+  env.MERCHROUTE_PORT = String(runtimeEndpoint.port);
+  env.MERCHROUTE_RUNTIME_BASE_URL = runtimeEndpoint.origin;
 
   for (const variable of REQUIRED_RUNTIME_VARIABLES) {
     if (!String(env[variable] || '').trim()) {
@@ -57,26 +77,31 @@ export function loadRuntimeEnvironment(options: RuntimeEnvironmentOptions): Runt
     }
   }
 
-  return { projectEnvFile, runtimeEnvFile, runtimeEnvLoaded };
+  return { projectEnvFile, runtimeEnvFile, runtimeEnvLoaded, runtimeEndpoint };
 }
 
 function loadEnvFile(filePath: string, env: NodeJS.ProcessEnv, required: boolean): boolean {
+  const values = readEnvFile(filePath, required);
+  if (!values) return false;
+  applyEnvValues(values, env);
+  return true;
+}
+
+function readEnvFile(filePath: string, required: boolean): Record<string, string> | undefined {
   try {
     const info = statSync(filePath);
     if (!info.isFile()) throw new Error(`环境配置路径不是普通文件：${filePath}`);
   } catch (error: any) {
-    if (!required && error?.code === 'ENOENT') return false;
+    if (!required && error?.code === 'ENOENT') return undefined;
     if (error?.code === 'ENOENT') throw new Error(`环境配置文件不存在：${filePath}`);
     throw error;
   }
-  const result = dotenv.config({
-    path: filePath,
-    processEnv: env as Record<string, string>,
-    override: false,
-    quiet: true
-  });
-  if (result.error) throw new Error(`环境配置文件无法读取：${filePath}`);
-  return true;
+  try { return dotenv.parse(readFileSync(filePath)); }
+  catch { throw new Error(`环境配置文件无法读取：${filePath}`); }
+}
+
+function applyEnvValues(values: Record<string, string>, env: NodeJS.ProcessEnv): void {
+  for (const [key, value] of Object.entries(values)) if (env[key] === undefined) env[key] = value;
 }
 
 function assertCredentialEncryptionKey(value: string): void {

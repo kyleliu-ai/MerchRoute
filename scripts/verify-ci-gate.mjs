@@ -100,7 +100,7 @@ async function main() {
     localAudit: 'NOT_APPLICABLE', candidateValidated: false, releaseReady: false, published: false,
     ciChecksPassed: validation.ok,
     checks: records.map(({ id, status, summary, logSha256 }) => ({ id, status, summary, logSha256 })),
-    notices: ['CI evidence binds this exact committed source; it does not publish main, a GitHub Release or the local 4173 service.', 'Raw test output remains in runner temp and is not uploaded.']
+    notices: ['CI evidence binds this exact committed source; it does not publish main, a GitHub Release or the configured local production service.', 'Raw test output remains in runner temp and is not uploaded.']
   };
   await writeFile(options.output, JSON.stringify(report, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
   console.log(JSON.stringify(report, null, 2));

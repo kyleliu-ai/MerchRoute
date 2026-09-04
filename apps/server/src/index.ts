@@ -7,16 +7,14 @@ const projectRoot = path.resolve(import.meta.dirname, '../../..');
 if (process.env.MERCHROUTE_INSTALLED_MANIFEST_SHA256 || existsSync(path.join(projectRoot, 'installed-release.json'))) {
   await verifyInstalledRelease(projectRoot, process.env.MERCHROUTE_INSTALLED_MANIFEST_SHA256);
 }
-loadRuntimeEnvironment({ projectRoot });
+const { runtimeEndpoint } = loadRuntimeEnvironment({ projectRoot });
 
 const { buildApp } = await import('./app.js');
 
-const host = process.env.HOST || '127.0.0.1';
-if (host === '0.0.0.0' && process.env.ALLOW_REMOTE !== 'true') throw new Error('默认禁止监听 0.0.0.0；如确有需要请显式设置 ALLOW_REMOTE=true');
-const port = Number(process.env.PORT || 4173);
+const { host, port } = runtimeEndpoint;
 const app = await buildApp();
 await app.listen({ host, port });
-app.log.info({ host, port }, `n8n 产品图片审核与投递管理工具已启动：http://${host}:${port}`);
+app.log.info({ host, port }, `MerchRoute 已启动：${runtimeEndpoint.origin}`);
 
 const shutdown = async (signal: string): Promise<void> => {
   app.log.info({ signal }, '正在安全关闭服务');

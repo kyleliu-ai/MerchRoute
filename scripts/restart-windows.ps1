@@ -5,8 +5,12 @@
 
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
-$Port = 4173
-if ($env:PORT) { $Port = [int]$env:PORT }
+$RuntimeEnvFile=if($env:MERCHROUTE_ENV_FILE){$env:MERCHROUTE_ENV_FILE}elseif($env:MERCHROUTE_RUNTIME_ENV_FILE){$env:MERCHROUTE_RUNTIME_ENV_FILE}else{Join-Path $ProjectRoot '.env.runtime'}
+function Get-RuntimeSetting([string]$Name){$value=[Environment]::GetEnvironmentVariable($Name,'Process');if($value){return $value.Trim()};if(Test-Path -LiteralPath $RuntimeEnvFile){$prefix="$Name=";$line=Get-Content -LiteralPath $RuntimeEnvFile|Where-Object{$_.StartsWith($prefix,[StringComparison]::Ordinal)}|Select-Object -First 1;if($line){return $line.Substring($prefix.Length).Trim()}};return ''}
+$PortValue=Get-RuntimeSetting 'MERCHROUTE_PORT';if(-not $PortValue){$PortValue=Get-RuntimeSetting 'PORT'};if(-not $PortValue){$PortValue='43173'}
+$Port=[int]$PortValue
+if($Port -lt 1024 -or $Port -gt 49151 -or @(4183,4184,5173,5432,5678,8000) -contains $Port){throw 'MERCHROUTE_PORT is invalid or reserved'}
+$ExpectedOrigin="http://127.0.0.1:$Port";$ConfiguredOrigin=Get-RuntimeSetting 'MERCHROUTE_RUNTIME_BASE_URL';if($ConfiguredOrigin -and $ConfiguredOrigin.TrimEnd('/') -ne $ExpectedOrigin){throw 'MERCHROUTE_RUNTIME_BASE_URL does not match MERCHROUTE_PORT'}
 
 $listener = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($listener) {

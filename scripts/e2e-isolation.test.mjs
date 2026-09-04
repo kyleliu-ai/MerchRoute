@@ -25,7 +25,7 @@ test('replaces inherited production roots, keys and build overrides without keep
     MERCHROUTE_RUNTIME_KEY: 'synthetic-inherited-runtime-value',
     MERCHROUTE_CREDENTIAL_ENCRYPTION_KEY: Buffer.alloc(32, 1).toString('base64'),
     MERCHROUTE_OZON_MULTISTORE_FLEET_READY: 'true', MERCHROUTE_OZON_SOURCE_MEDIA_CLEANUP_ENABLED: 'true',
-    HOST: '0.0.0.0', PORT: '4173', DOWNLOAD_CONFIG_SYNC: 'true'
+    HOST: '0.0.0.0', PORT: '43173', DOWNLOAD_CONFIG_SYNC: 'true'
   };
   configureE2eEnvironment(env, { root, databaseUrl: database.toString() });
   assert.equal(env.PATH, 'preserved-toolchain-path');
@@ -59,7 +59,7 @@ test('rejects non-isolated database URLs or production HTTP port before changing
     assert.throws(() => configureE2eEnvironment(env, { root, databaseUrl }), /isolated schema/);
     assert.deepEqual(env, { SENTINEL: 'unchanged' });
   }
-  assert.throws(() => configureE2eEnvironment({}, { root, databaseUrl: database.toString(), port: 4173 }), /never production port 4173/);
+  assert.throws(() => configureE2eEnvironment({}, { root, databaseUrl: database.toString(), port: 43173 }), /production runtime port/);
 });
 
 test('blocks n8n and marketplace HTTP calls without invoking the underlying fetch or leaking URL secrets', async () => {
@@ -147,7 +147,7 @@ test('E2E shutdown rejects a mismatched instance, PID or schema acknowledgement'
 
 test('E2E lifecycle rejects production port, foreign schema, wrong control directory and missing server identity', async (t) => {
   const fixture = await lifecycleFixture(t);
-  await assert.rejects(startE2eLifecycle({ ...fixture, port: 4173, close: async () => {} }), /production port 4173/);
+  await assert.rejects(startE2eLifecycle({ ...fixture, port: 43173, close: async () => {} }), /production runtime port/);
   await assert.rejects(startE2eLifecycle({ ...fixture, root: path.dirname(fixture.root), close: async () => {} }), /real .e2e-data/);
   await assert.rejects(requestE2eShutdown(fixture), /identity does not match/);
   const lifecycle = await startE2eLifecycle({ ...fixture, close: async () => {} });

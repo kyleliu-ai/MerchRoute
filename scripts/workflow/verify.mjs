@@ -36,13 +36,41 @@ export async function withTestPostgres(action) {
     let ready=false;
     for(let attempt=0;attempt<60;attempt++){try{docker(['exec',id,'pg_isready','-U','merchroute_ci','-d','merchroute_ci_test']);ready=true;break;}catch{await new Promise(resolve=>setTimeout(resolve,500));}}
     if(!ready)throw new Error('Isolated PostgreSQL did not become ready');
+    // Parallel repository suites may otherwise race on PostgreSQL's extension
+    // catalog even when every migration uses CREATE EXTENSION IF NOT EXISTS.
+    // Install the shared extension once before any test worker is started.
+    docker(['exec',id,'psql','-U','merchroute_ci','-d','merchroute_ci_test','-v','ON_ERROR_STOP=1','-c','CREATE EXTENSION IF NOT EXISTS pg_trgm']);
     docker(['exec',id,'psql','-U','merchroute_ci','-d','merchroute_ci_test','-v','ON_ERROR_STOP=1','-c',"CREATE DATABASE merchroute_ci_cleanup_test TEMPLATE template0 ENCODING 'UTF8' LOCALE_PROVIDER icu ICU_LOCALE 'und'"]);
     const state=JSON.parse(docker(['inspect',id]))[0];
     const port=state.NetworkSettings.Ports['5432/tcp'][0].HostPort;
-    return await action('postgresql://merchroute_ci@127.0.0.1:'+port+'/merchroute_ci_test','postgresql://merchroute_ci@127.0.0.1:'+port+'/merchroute_ci_cleanup_test');
+    return await action('postgresql://merchroute_ci@127.0.0.1:'+port+'/merchroute_ci_test','postgresql://merchroute_ci@127.0.0.1:'+port+'/merchroute_ci_cleanup_test',id);
   }finally{
     if(id){const owned=JSON.parse(docker(['inspect',id]))[0];assert.equal(owned.Config.Labels['merchroute.owner'],name,'Refusing to clean an unowned test container');docker(['rm','--force',id]);}
   }
+}
+
+export function fixedPortE2eDockerArgs({archive,evidenceDirectory,postgresContainer,databaseUrl}) {
+  if(!path.isAbsolute(archive)||!path.isAbsolute(evidenceDirectory)||!/^[a-f0-9]{64}$/.test(postgresContainer))throw new Error('Fixed-port E2E container inputs are invalid');
+  const database=new URL(databaseUrl);database.hostname='127.0.0.1';database.port='5432';
+  const command=[
+    'set -euo pipefail','mkdir -p /work/repo','tar -xf /input/source.tar -C /work/repo','cd /work/repo',
+    'npm ci --no-audit --no-fund','npm run build -w packages/shared','npm run build -w apps/web','npm run build -w apps/server',
+    `DATABASE_URL=${JSON.stringify(database.toString())} PLAYWRIGHT_JSON_OUTPUT_FILE=/evidence/playwright.json npm run test:e2e -- --reporter=list,json`
+  ].join(' && ');
+  return ['docker','run','--rm','--network','container:'+postgresContainer,
+    '--mount',`type=bind,source=${archive},target=/input/source.tar,readonly`,
+    '--mount',`type=bind,source=${evidenceDirectory},target=/evidence`,
+    '--tmpfs','/work:exec,size=4294967296','merchroute-e2e:node22.23.1-playwright1.61.1','bash','-lc',command];
+}
+
+function prepareFixedPortE2eContainer(root,out) {
+  const image='merchroute-e2e:node22.23.1-playwright1.61.1';
+  execFileSync('docker',['build','--pull=false','--tag',image,'--file',path.join(root,'deployment','Dockerfile.e2e'),path.join(root,'deployment')],{cwd:root,encoding:'utf8',windowsHide:true,stdio:['ignore','pipe','pipe'],maxBuffer:32*1024*1024});
+  const version=execFileSync('docker',['run','--rm',image,'node','--version'],{encoding:'utf8',windowsHide:true,stdio:['ignore','pipe','pipe']}).trim();
+  if(version!=='v22.23.1')throw new Error('Fixed-port E2E image does not contain Node 22.23.1');
+  const archive=path.join(out,'e2e-source.tar');
+  execFileSync('git',['-C',root,'archive','--format=tar','--output',archive,'HEAD'],{windowsHide:true,stdio:['ignore','pipe','pipe']});
+  return archive;
 }
 export async function verifyBatch(root,home,options) {
   const identity=sourceIdentity(root);
@@ -71,16 +99,19 @@ export async function verifyBatch(root,home,options) {
     return {ok:true,level:'quick',identity,records,publishable:false};
   }
   let acceptedCandidate;
-  await withTestPostgres(async(database,cleanup)=>{
+  await withTestPostgres(async(database,cleanup,postgresContainer)=>{
     const env=testEnvironment(process.env,database,cleanup);
     env.PLAYWRIGHT_JSON_OUTPUT_FILE=path.join(out,'playwright.json');
     await run('check',['npm','run','check'],env,'tests');
     await run('postgres-integration',['node','node_modules/vitest/vitest.mjs','run','.integration.test.ts','--root','apps/server','--maxWorkers=2','--reporter=verbose'],env,'tests');
     // Browser bundles must have real production rc-select IDs, never test IDs.
     await run('browser-build',['npm','run','build'],{...env,NODE_ENV:'production'});
-    await run('e2e',['npm','run','test:e2e','--','--reporter=list,json'],env,'e2e');
+    if(process.platform==='win32'){
+      const archive=prepareFixedPortE2eContainer(root,out);
+      await run('e2e',fixedPortE2eDockerArgs({archive,evidenceDirectory:out,postgresContainer,databaseUrl:database}),env,'e2e');
+    }else await run('e2e',['npm','run','test:e2e','--','--reporter=list,json'],env,'e2e');
     await run('jimeng',['node','--import','tsx','scripts/ci-regression-tests.mjs','--suite','jimeng'],{...env,MERCHROUTE_LOCAL_REGRESSION:'1'},'tests');
-    await run('isolated-runtime',['node','--import','tsx','scripts/isolated-runtime-package.mjs',home],env);
+    await run('isolated-runtime',['node','--import','tsx','scripts/isolated-runtime-package.mjs',home],{...env,MERCHROUTE_ISOLATED_PACKAGE_PORT:'44183'});
     acceptedCandidate=candidateSnapshot(await readJson(path.join(home,'candidate.json')));
     if(acceptedCandidate.sourceCommit!==identity.commit||acceptedCandidate.sourceTree!==identity.tree)throw new Error('Runtime acceptance belongs to another source');
   });

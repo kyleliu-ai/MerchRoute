@@ -28,7 +28,7 @@
   },
   "historicalAudit": {
     "path": "config/release-source-audit.json",
-    "sha256": "92012880075cfcdb4f817c6085ab6b121fcfd06d59a88ea61b2388532a14a9cf"
+    "sha256": "13368df6d6f1ae3d9a95c68119e50f062c767681f380c2798801271c426f0701"
   },
   "completedBatches": [],
   "branches": [
@@ -331,7 +331,7 @@
     },
     {
       "id": "isolated-runtime",
-      "description": "隔离端口 API/DOM/320px 回读，不切换 4173"
+      "description": "隔离端口 API/DOM/320px 回读，不切换发布绑定的正式端口"
     }
   ],
   "features": [
@@ -630,7 +630,7 @@
         "gitleaks",
         "diff-check"
       ],
-      "sourceDocumentSha256": "72d285b11fb4acae0057daef254829f3c2c000bc50a0abd62dcb4227c4d0adeb"
+      "sourceDocumentSha256": "38eba5263926d661c8006a658196f09c380cf7ad2b909eaae3b7a8ccc6837fd4"
     },
     {
       "id": "review-delivery-reliability",

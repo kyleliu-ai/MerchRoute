@@ -59,7 +59,8 @@ mkdir -p "$APP_HOME/logs"
 nohup node deployment/scripts/start-merchroute.mjs >"$APP_HOME/logs/merchroute.out.log" 2>"$APP_HOME/logs/merchroute.err.log" &
 nohup node deployment/scripts/start-n8n.mjs >"$APP_HOME/logs/n8n.out.log" 2>"$APP_HOME/logs/n8n.err.log" &
 
-for health in http://127.0.0.1:4173/api/v1/health http://127.0.0.1:5678/healthz http://127.0.0.1:8000/ping; do
+MERCHROUTE_PORT="${MERCHROUTE_PORT:-43173}"
+for health in "http://127.0.0.1:${MERCHROUTE_PORT}/api/v1/health" http://127.0.0.1:5678/healthz http://127.0.0.1:8000/ping; do
   ready=0
   for _ in {1..60}; do curl -fsS "$health" >/dev/null && { ready=1; break; }; sleep 3; done
   [[ "$ready" == '1' ]] || { echo "Health check failed: $health" >&2; exit 1; }

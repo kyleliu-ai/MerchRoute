@@ -35,14 +35,17 @@ describe('loadRuntimeEnvironment', () => {
     expect(result).toEqual({
       projectEnvFile: path.join(root, '.env'),
       runtimeEnvFile: path.join(root, '.env.runtime'),
-      runtimeEnvLoaded: true
+      runtimeEnvLoaded: true,
+      runtimeEndpoint: { host: '127.0.0.1', port: 43173, origin: 'http://127.0.0.1:43173' }
     });
     expect(env).toMatchObject({
       DATABASE_URL: 'postgresql://example.invalid/db',
       MERCHROUTE_RUNTIME_KEY: 'injected-runtime-key',
       MERCHROUTE_CREDENTIAL_ENCRYPTION_KEY: credentialKey,
       MERCHROUTE_OZON_MULTISTORE_FLEET_READY: 'true',
-      MERCHROUTE_OZON_SOURCE_MEDIA_CLEANUP_ENABLED: 'true'
+      MERCHROUTE_OZON_SOURCE_MEDIA_CLEANUP_ENABLED: 'true',
+      MERCHROUTE_PORT: '43173',
+      MERCHROUTE_RUNTIME_BASE_URL: 'http://127.0.0.1:43173'
     });
   });
 
@@ -166,6 +169,37 @@ describe('loadRuntimeEnvironment', () => {
         MERCHROUTE_CREDENTIAL_ENCRYPTION_KEY: credentialKey
       }
     })).toThrow(/环境配置文件不存在/);
+  });
+
+  it('requires the external runtime URL and port to match exactly', async () => {
+    await writeFile(path.join(root, '.env.runtime'), [
+      'MERCHROUTE_RUNTIME_KEY=runtime-key',
+      `MERCHROUTE_CREDENTIAL_ENCRYPTION_KEY=${credentialKey}`,
+      'MERCHROUTE_PORT=43173',
+      'MERCHROUTE_RUNTIME_BASE_URL=http://127.0.0.1:4173',
+      ''
+    ].join('\n'), 'utf8');
+    expect(() => loadRuntimeEnvironment({ projectRoot: root, env: {} })).toThrow(/必须与端口一致/);
+
+    const env: NodeJS.ProcessEnv = { MERCHROUTE_PORT: '18080', MERCHROUTE_RUNTIME_BASE_URL: 'http://127.0.0.1:18080' };
+    await writeFile(path.join(root, '.env.runtime'), [
+      'MERCHROUTE_RUNTIME_KEY=runtime-key',
+      `MERCHROUTE_CREDENTIAL_ENCRYPTION_KEY=${credentialKey}`,
+      'MERCHROUTE_PORT=43173',
+      'MERCHROUTE_RUNTIME_BASE_URL=http://127.0.0.1:43173',
+      ''
+    ].join('\n'), 'utf8');
+    expect(() => loadRuntimeEnvironment({ projectRoot: root, env })).toThrow(/已验收发布绑定不一致/);
+
+    await writeFile(path.join(root, '.env.runtime'), [
+      'MERCHROUTE_RUNTIME_KEY=runtime-key',
+      `MERCHROUTE_CREDENTIAL_ENCRYPTION_KEY=${credentialKey}`,
+      'PORT=4173',
+      'MERCHROUTE_PORT=43173',
+      'MERCHROUTE_RUNTIME_BASE_URL=http://127.0.0.1:43173',
+      ''
+    ].join('\n'), 'utf8');
+    expect(() => loadRuntimeEnvironment({ projectRoot: root, env: {} })).toThrow(/PORT 与已验收发布绑定不一致/);
   });
 
   it('requires an absolute custom runtime file path', () => {

@@ -185,7 +185,7 @@
       ],
       "parameters": {
         "method": "POST",
-        "url": "={{ String($env.MERCHROUTE_RUNTIME_BASE_URL || 'http://127.0.0.1:4173').replace(/\\/+$/, '') + '/api/v1/ozon/internal/intake/verify' }}",
+        "url": "={{ (() => { const base = String($env.MERCHROUTE_RUNTIME_BASE_URL || '').trim().replace(/\\/+$/, ''); if (!base) throw new Error('MERCHROUTE_RUNTIME_BASE_URL 未配置，禁止发出 MerchRoute runtime 请求'); return base; })() + '/api/v1/ozon/internal/intake/verify' }}",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [

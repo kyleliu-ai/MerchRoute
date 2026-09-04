@@ -47,17 +47,34 @@ if (-not [string]::IsNullOrWhiteSpace($FleetCapabilityValue)) {
   [Environment]::SetEnvironmentVariable($FleetCapabilityVariable, $FleetCapabilityValue, 'Process')
 }
 
-$Port = 4173
-if ($env:PORT) {
+function Get-RuntimeSetting([string]$Name) {
+  $processValue=[Environment]::GetEnvironmentVariable($Name,'Process')
+  if(-not [string]::IsNullOrWhiteSpace($processValue)){return $processValue.Trim()}
+  $prefix="$Name="
+  $line=Get-Content -LiteralPath $RuntimeEnvFile | Where-Object {$_.StartsWith($prefix,[StringComparison]::Ordinal)} | Select-Object -First 1
+  if($line){return $line.Substring($prefix.Length).Trim()}
+  return ''
+}
+$PortValue=Get-RuntimeSetting 'MERCHROUTE_PORT'
+if(-not $PortValue){$PortValue=Get-RuntimeSetting 'PORT'}
+if(-not $PortValue){$PortValue='43173'}
+$Port = 0
+if ($PortValue) {
   $ParsedPort = 0
-  if (-not [int]::TryParse($env:PORT, [ref]$ParsedPort) -or $ParsedPort -lt 1 -or $ParsedPort -gt 65535) {
-    Write-Host "PORT must be an integer between 1 and 65535. Current value: $($env:PORT)" -ForegroundColor Red
+  if (-not [int]::TryParse($PortValue, [ref]$ParsedPort) -or $ParsedPort -lt 1024 -or $ParsedPort -gt 49151 -or @(4183,4184,5173,5432,5678,8000) -contains $ParsedPort) {
+    Write-Host "MERCHROUTE_PORT must be an unreserved integer between 1024 and 49151. Current value: $PortValue" -ForegroundColor Red
     exit 1
   }
   $Port = $ParsedPort
 }
 
 $Url = "http://127.0.0.1:$Port"
+$ConfiguredBaseUrl=Get-RuntimeSetting 'MERCHROUTE_RUNTIME_BASE_URL'
+if($ConfiguredBaseUrl -and $ConfiguredBaseUrl.TrimEnd('/') -ne $Url){throw "MERCHROUTE_RUNTIME_BASE_URL must equal $Url"}
+$env:HOST='127.0.0.1'
+$env:PORT=[string]$Port
+$env:MERCHROUTE_PORT=[string]$Port
+$env:MERCHROUTE_RUNTIME_BASE_URL=$Url
 $HealthUrl = "$Url/api/v1/health"
 
 function Open-ReviewCenter {
@@ -103,7 +120,7 @@ $PortOwner = Get-ListeningProcess
 if ($PortOwner) {
   Write-Host "Port $Port is already in use by $($PortOwner.ProcessName) (PID $($PortOwner.Id))." -ForegroundColor Red
   Write-Host "The process is not MerchRoute, or its health check failed. It was not stopped." -ForegroundColor Yellow
-  Write-Host "Stop that process or set a different PORT, then run start-windows.cmd again." -ForegroundColor Yellow
+  Write-Host "Stop that process or explicitly update both MERCHROUTE_PORT and MERCHROUTE_RUNTIME_BASE_URL. No automatic port was selected." -ForegroundColor Yellow
   exit 1
 }
 
@@ -129,6 +146,14 @@ if ($NodeVersion -ne '22.23.1') {
   Write-Host "Node.js $NodeVersion is active. This project requires Node.js 22.23.1." -ForegroundColor Red
   exit 1
 }
+
+foreach($Family in @('ipv4','ipv6')){
+  $ExcludedOutput=& netsh.exe interface $Family show excludedportrange protocol=tcp
+  foreach($line in $ExcludedOutput){if($line -match '^\s*(\d+)\s+(\d+)'){if($Port -ge [int]$Matches[1] -and $Port -le [int]$Matches[2]){throw "Port $Port is in the Windows $Family excluded range $($Matches[1])-$($Matches[2])."}}}
+}
+$Probe=[Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback,$Port)
+$Probe.Server.ExclusiveAddressUse=$true
+try{$Probe.Start()}catch{throw "Port $Port failed the exclusive bind test: $($_.Exception.Message)"}finally{$Probe.Stop()}
 
 $NpmCommand = Get-Command npm.cmd -ErrorAction SilentlyContinue
 if (-not $NpmCommand) {

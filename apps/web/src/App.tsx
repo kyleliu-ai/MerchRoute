@@ -570,7 +570,7 @@ export function App() {
           onClick={({ key }) => { navigate(key); if (narrowNavigation) setCollapsed(true); }}
           items={navigationItems}
         />
-        <div className="sider-foot">{!collapsed && <>本地服务<br />127.0.0.1:4173</>}</div>
+        <div className="sider-foot">{!collapsed && <>本地服务<br />{window.location.host}</>}</div>
       </Sider>
       <Layout>
         <Header className="app-header">
