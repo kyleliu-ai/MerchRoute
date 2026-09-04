@@ -53,7 +53,7 @@ npm start
 scripts\start-windows.cmd
 ```
 
-启动脚本会检查 Node.js、依赖和构建产物，然后打开 `http://127.0.0.1:4173`。
+启动脚本会检查 Node.js、依赖、构建产物和发布绑定，然后打开实际 `runtimeEndpoint`；新安装默认为 `http://127.0.0.1:43173`。
 
 ## 4. 首次设置
 
@@ -65,4 +65,4 @@ scripts\start-windows.cmd
 4. 保存配置后回到工作台。
 5. 在“WB上品设置”中录入各店铺 Token；Token 只写入加密凭据库，不会回显。
 
-防火墙无需开放 4173 端口；应用默认只接受本机连接。
+防火墙无需开放 MerchRoute 端口；应用只允许绑定 `127.0.0.1`。

@@ -1,4 +1,4 @@
-const baseUrl = String(process.env.MERCHROUTE_BASE_URL || 'http://127.0.0.1:4173').replace(/\/$/, '');
+const baseUrl = String(process.env.MERCHROUTE_BASE_URL || process.env.MERCHROUTE_RUNTIME_BASE_URL || 'http://127.0.0.1:43173').replace(/\/$/, '');
 const prefix = `Codex验收临时预设-${Date.now()}`;
 const createdIds = new Set();
 let baselineDefaultId;

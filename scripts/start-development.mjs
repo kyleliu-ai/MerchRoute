@@ -31,4 +31,4 @@ function stop(code){if(stopping)return;stopping=true;for(const child of children
 for(const signal of ['SIGINT','SIGTERM'])process.once(signal,()=>stop(0));
 start(['--import','tsx','scripts/development-server.mjs']);
 if(!serverOnly)start(['node_modules/vite/bin/vite.js','--config','apps/web/vite.config.ts','apps/web']);
-console.log('MerchRoute isolated development: UI 5173, API 4184; production 4173 is untouched.');
+console.log('MerchRoute isolated development: UI 5173, API 4184; configured production runtime is untouched.');

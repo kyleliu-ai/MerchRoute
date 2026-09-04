@@ -31,7 +31,7 @@ export const CREDENTIAL_DEFINITIONS = Object.freeze({
     type: 'httpHeaderAuth',
     displayName: 'MerchRoute / Runtime API',
     fields: [{ name: 'runtimeKey', required: true, secret: true, generated: true, description: '从 MERCHROUTE_RUNTIME_KEY 自动读取' }],
-    probe: { kind: 'merchroute-runtime-read', method: 'GET', url: 'http://127.0.0.1:4173/api/v1/wb/runtime/config', sideEffect: 'none' },
+    probe: { kind: 'merchroute-runtime-read', method: 'GET', url: 'http://127.0.0.1:43173/api/v1/wb/runtime/config', sideEffect: 'none' },
   },
   'wb-seller-api': {
     credentialId: 'mrWbSellerApi001',

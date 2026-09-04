@@ -3,10 +3,12 @@ import { statfs } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { canListen } from './preflight-lib.mjs';
+import { createRuntimeEndpoint, assertNotWindowsExcluded } from '../../scripts/lib/runtime-endpoint.mjs';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const dryRun = process.argv.includes('--dry-run');
 const checks = [];
+const runtimeEndpoint = createRuntimeEndpoint(process.env.MERCHROUTE_PORT || 43173);
 
 function commandVersion(command, args = ['--version']) {
   try {
@@ -49,13 +51,24 @@ for (const [name, command, args] of [
 
 for (const service of [
   { name: 'postgres', port: 5432 },
-  { name: 'merchroute', port: 4173, url: 'http://127.0.0.1:4173/api/v1/health', expected: 'ok' },
+  { name: 'merchroute', port: runtimeEndpoint.port, url: runtimeEndpoint.origin + '/api/v1/health', expected: 'ok' },
   { name: 'n8n', port: 5678, url: 'http://127.0.0.1:5678/healthz', expected: 'ok' },
   { name: 'jimeng', port: 8000, url: 'http://127.0.0.1:8000/ping', expected: 'pong' },
 ]) {
   const free = await canListen(service.port);
   const recognized = !free && (service.url ? await knownService(service.url, service.expected) : knownPostgresContainer());
   checks.push({ name: `${service.name}-port-${service.port}`, ok: free || recognized, state: free ? 'free' : recognized ? 'known-service' : 'occupied' });
+  if (service.name === 'merchroute' && process.platform === 'win32') {
+    try {
+      for (const family of ['ipv4', 'ipv6']) {
+        const excluded = execFileSync('netsh.exe', ['interface', family, 'show', 'excludedportrange', 'protocol=tcp'], { encoding: 'utf8', windowsHide: true });
+        assertNotWindowsExcluded(runtimeEndpoint, excluded);
+      }
+      checks.push({ name: `merchroute-port-${service.port}-not-excluded`, ok: true });
+    } catch (error) {
+      checks.push({ name: `merchroute-port-${service.port}-not-excluded`, ok: false, error: error instanceof Error ? error.message : String(error) });
+    }
+  }
 }
 
 const failed = checks.filter((item) => !item.ok);

@@ -15,8 +15,8 @@ export function configureE2eEnvironment(env, { root, databaseUrl, port = 4183 })
     || !/^-c search_path=pixroute_e2e_[a-f0-9]{32},public$/.test(database.searchParams.get('options') || '')) {
     throw new Error('E2E requires an explicit loopback database URL with its generated isolated schema');
   }
-  if (!Number.isInteger(port) || port < 1 || port > 65535 || port === 4173) {
-    throw new Error('E2E requires an isolated valid HTTP port, never production port 4173');
+  if (!Number.isInteger(port) || port < 1 || port > 65535 || [4173, 43173].includes(port)) {
+    throw new Error('E2E requires an isolated valid HTTP port, never a production runtime port');
   }
   for (const key of Object.keys(env)) {
     const name = key.toUpperCase();

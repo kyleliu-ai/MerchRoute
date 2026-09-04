@@ -158,13 +158,64 @@ export function sanitizeWorkflow(rawWorkflow, catalogEntry) {
 }
 
 export function applyWorkflowDeploymentContract(workflow, catalogEntry) {
-  return {
+  return normalizeMerchRouteRuntimeUrls({
     ...workflow,
     settings: {
       ...(workflow.settings || {}),
       ...(catalogEntry.deploymentSettings || {}),
     },
+  });
+}
+
+const LEGACY_RUNTIME_ORIGIN = 'http://127.0.0.1:4173';
+const RUNTIME_BASE_EXPRESSION = `(() => { const base = String($env.MERCHROUTE_RUNTIME_BASE_URL || '').trim().replace(/\\/+$/, ''); if (!base) throw new Error('MERCHROUTE_RUNTIME_BASE_URL 未配置，禁止发出 MerchRoute runtime 请求'); return base; })()`;
+const RUNTIME_BASE_HELPER = `function merchrouteRuntimeBaseUrl() {\n  const base = String($env.MERCHROUTE_RUNTIME_BASE_URL || '').trim().replace(/\\/+$/, '');\n  if (!base) throw new Error('MERCHROUTE_RUNTIME_BASE_URL 未配置，禁止发出 MerchRoute runtime 请求');\n  return base;\n}\n`;
+
+function normalizeRuntimeString(value, key) {
+  if (!value.includes(LEGACY_RUNTIME_ORIGIN)) return value;
+  const fallback = `String($env.MERCHROUTE_RUNTIME_BASE_URL || '${LEGACY_RUNTIME_ORIGIN}').replace(/\\/+$/, '')`;
+  let next = value.split(fallback).join(RUNTIME_BASE_EXPRESSION);
+  if (!next.includes(LEGACY_RUNTIME_ORIGIN)) return next;
+  if (key === 'jsCode') {
+    next = next.replaceAll(`'${LEGACY_RUNTIME_ORIGIN}`, `merchrouteRuntimeBaseUrl() + '`).replaceAll(`"${LEGACY_RUNTIME_ORIGIN}`, `merchrouteRuntimeBaseUrl() + "`);
+    return next.includes('function merchrouteRuntimeBaseUrl()') ? next : `\n${RUNTIME_BASE_HELPER}${next.replace(/^\n/, '')}`;
+  }
+  if (next === LEGACY_RUNTIME_ORIGIN || next.startsWith(`${LEGACY_RUNTIME_ORIGIN}/`)) {
+    return `={{ ${RUNTIME_BASE_EXPRESSION} + ${JSON.stringify(next.slice(LEGACY_RUNTIME_ORIGIN.length))} }}`;
+  }
+  return next.replace(/(['"])http:\/\/127\.0\.0\.1:4173/g, `${RUNTIME_BASE_EXPRESSION} + $1`);
+}
+
+function normalizeRuntimeParameters(value, key = '') {
+  if (typeof value === 'string') return normalizeRuntimeString(value, key);
+  if (Array.isArray(value)) return value.map((item) => normalizeRuntimeParameters(item));
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value).map(([childKey, childValue]) => [childKey, normalizeRuntimeParameters(childValue, childKey)]));
+}
+
+export function normalizeMerchRouteRuntimeUrls(workflow) {
+  return {
+    ...workflow,
+    nodes: Array.isArray(workflow.nodes) ? workflow.nodes.map((node) => ({
+      ...node,
+      parameters: normalizeRuntimeParameters(node.parameters || {})
+    })) : workflow.nodes
   };
+}
+
+export function findRuntimeEndpointContractViolations(workflow) {
+  const findings = [];
+  const visit = (value, location) => {
+    if (typeof value === 'string') {
+      if (value.includes(LEGACY_RUNTIME_ORIGIN)) findings.push(`${location}: 仍固定使用 4173`);
+      if (value.includes('MERCHROUTE_RUNTIME_BASE_URL') && !value.includes('MERCHROUTE_RUNTIME_BASE_URL 未配置')) findings.push(`${location}: 缺少发送前空值门禁`);
+      return;
+    }
+    if (Array.isArray(value)) return value.forEach((item, index) => visit(item, `${location}[${index}]`));
+    if (value && typeof value === 'object') for (const [key, child] of Object.entries(value)) visit(child, `${location}.${key}`);
+  };
+  for (const [index, node] of (workflow.nodes || []).entries()) visit(node.parameters || {}, `nodes[${index}].parameters`);
+  return findings;
 }
 
 function inspectValue(value, path, findings, key = '') {
@@ -222,7 +273,7 @@ export function validateWorkflowShape(workflow, expectedId) {
   if (!Array.isArray(workflow.nodes)) findings.push('nodes 不是数组');
   if (!workflow.connections || typeof workflow.connections !== 'object' || Array.isArray(workflow.connections)) findings.push('connections 不是对象');
   if (!workflow.settings || typeof workflow.settings !== 'object' || Array.isArray(workflow.settings)) findings.push('settings 不是对象');
-  return [...findings, ...findUnsafeWorkflowContent(workflow)];
+  return [...findings, ...findUnsafeWorkflowContent(workflow), ...findRuntimeEndpointContractViolations(workflow)];
 }
 
 export function collectWorkflowDependencies(workflow, knownIds) {

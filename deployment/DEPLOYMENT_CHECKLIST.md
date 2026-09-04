@@ -16,7 +16,8 @@
 
 ## 服务
 
-- [ ] MerchRoute `127.0.0.1:4173` 健康。
+- [ ] MerchRoute 仓库外 `merchroute.env` 已同时写入 `MERCHROUTE_PORT` 和一致的 `MERCHROUTE_RUNTIME_BASE_URL`，新安装默认 `127.0.0.1:43173` 健康。
+- [ ] 已检查端口监听进程、Windows IPv4/IPv6 排除区间（若适用）及真实独占绑定；失败时未自动换端口。
 - [ ] 全局 n8n `127.0.0.1:5678` 健康，owner 已在本机浏览器创建。
 - [ ] `n8n.env` 含 `N8N_LISTEN_ADDRESS=127.0.0.1`、`NODES_EXCLUDE=[]`、`N8N_GRACEFUL_SHUTDOWN_TIMEOUT=1200`。
 - [ ] Jimeng `127.0.0.1:8000/ping` 返回 `pong`，`/app/data` 使用外部卷。

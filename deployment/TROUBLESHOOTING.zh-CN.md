@@ -4,13 +4,13 @@
 
 ## 端口冲突
 
-标准端口为 PostgreSQL `5432`、MerchRoute `4173`、n8n `5678`、Jimeng `8000`。运行：
+标准端口为 PostgreSQL `5432`、MerchRoute `43173`、n8n `5678`、Jimeng `8000`。MerchRoute 可在仓库外 `merchroute.env` 中通过 `MERCHROUTE_PORT` 覆盖，但 `MERCHROUTE_RUNTIME_BASE_URL` 必须与之完全一致。运行：
 
 ```bash
 node deployment/scripts/preflight.mjs
 ```
 
-`known-service` 表示检测到本部署的健康端点；`occupied` 表示未知进程占用，必须先确认进程归属再停止或改端口。不要盲目结束系统服务。PostgreSQL 只有带 Compose 项目标签 `merchroute-postgres` 的容器才视为可安全重用。
+`known-service` 表示检测到本部署的健康端点；`occupied` 表示未知进程占用。Windows 还必须检查 `netsh interface ipv4/ipv6 show excludedportrange protocol=tcp`，所有系统均要执行真实 Node 独占绑定测试。任一失败均停止并报告端口、占用 PID 或排除区间，禁止自动漂移、改 HNS/WinNAT 或停 Docker 规避。PostgreSQL 只有带 Compose 项目标签 `merchroute-postgres` 的容器才视为可安全重用。
 
 ## Docker Desktop 未就绪
 

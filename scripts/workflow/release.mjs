@@ -11,8 +11,10 @@ import { inspectBusinessIdle } from './business-gate.mjs';
 import { verifyLegacyRelease } from './legacy-release.mjs';
 import { probeReadOnlyPages } from './read-only-pages.mjs';
 import { assertAcceptedCandidate } from './candidate-acceptance.mjs';
+import { createRuntimeEndpoint, runtimeEndpointFromBinding } from '../lib/runtime-endpoint.mjs';
 
 export async function releaseCommand(command,{root,home,config,options}) {
+  const configuredEndpoint=createRuntimeEndpoint(config.production?.port||43173);
   if(command==='prepare'){
     const identity=sourceIdentity(root);
     if(identity.status)throw new Error('Commit and build the clean local candidate before preparing a release');
@@ -27,7 +29,7 @@ export async function releaseCommand(command,{root,home,config,options}) {
   const approval=await readJson(options['approval-file']);
   if(approval.operation!==command||approval.productionRestartApproved!==true||approval.releasePublishedApproved!==true
     ||!Number.isFinite(Date.parse(approval.expiresAt))||Date.parse(approval.expiresAt)<Date.now())throw new Error('Cutover authorization is missing or expired');
-  const previous=await readJson(command==='rollback'?path.join(config.runtimeHome,'current-release.json'):path.join(home,'runtime-before-switch.json'));
+  let previous=await readJson(command==='rollback'?path.join(config.runtimeHome,'current-release.json'):path.join(home,'runtime-before-switch.json'));
   let candidate=await readJson(path.join(home,'candidate.json'));
   if(command==='rollback'){
     const saved=await readJson(path.join(home,'previous-release.json'));candidate=saved;
@@ -48,12 +50,14 @@ export async function releaseCommand(command,{root,home,config,options}) {
       const response=await fetch(asset.browser_download_url,{signal:AbortSignal.timeout(60000)});
       if(!response.ok||digest(Buffer.from(await response.arrayBuffer()))!==artifact.sha256)throw new Error('Published asset differs from the accepted local build');
     }
-    candidate={schemaVersion:1,...candidate,nodePath:config.nodePath,nodeSha256:config.nodeSha256,
+    candidate={schemaVersion:2,...candidate,nodePath:config.nodePath,nodeSha256:config.nodeSha256,runtimeEndpoint:configuredEndpoint,
       ...config.production,releaseTag:'v'+candidate.productVersion,logDirectory:path.join(config.runtimeHome,'logs'),
       launcherSha256:digest(await readFile(path.join(candidate.root,'scripts/release-runtime.mjs'))),publicCommit:published.sha};
     candidate.bootstrapHashes={};
     for(const file of ['scripts/release-runtime.mjs','scripts/lib/installed-release.mjs','scripts/workflow/development.mjs','scripts/workflow/state.mjs'])candidate.bootstrapHashes[file]=digest(await readFile(path.join(candidate.root,file)));
   }
+  if(previous.legacy===true){previous={...previous,schemaVersion:2,runtimeEndpoint:configuredEndpoint};}
+  if(candidate.legacy===true){candidate={...candidate,schemaVersion:2,runtimeEndpoint:configuredEndpoint};}
   if(approval.expectedCurrentCommit!==previous.sourceCommit||approval.targetCommit!==candidate.sourceCommit)throw new Error('Approval is not bound to the current and target builds');
   const verifyTarget=binding=>binding.legacy?verifyLegacyRelease(binding):verifyInstalledRelease(binding.root,binding.manifestSha256);
   await verifyTarget(candidate);await verifyTarget(previous);
@@ -68,31 +72,34 @@ export async function releaseCommand(command,{root,home,config,options}) {
   if(previous.legacy)previous.shortcutBackups=shortcuts;
   async function windows(action,data){const file=path.join(outside,'windows-input.json');await atomicJson(file,data);const result=execFileSync('powershell.exe',['-NoProfile','-File',path.join(root,'scripts/release-windows.ps1'),'-Action',action,'-InputFile',file],{encoding:'utf8',windowsHide:true});return result.trim()?JSON.parse(result):null;}
   const active=new Map();
-  async function inspect(binding){return windows('Inspect',{entry:path.join(binding.root,'apps/server/dist/index.js'),nodePath:binding.nodePath});}
+  async function inspect(binding){return windows('Inspect',{entry:path.join(binding.root,'apps/server/dist/index.js'),nodePath:binding.nodePath,runtimeEndpoint:runtimeEndpointFromBinding(binding,{allowLegacy:true})});}
   const fixedLauncher=path.join(config.runtimeHome,'Start-MerchRoute.ps1'),pointer=path.join(config.runtimeHome,'current-release.json');
   return switchRelease({previous,candidate,
-    check:async(old,next)=>{await inspectBusinessIdle(old);const live=await inspect(old);if(live.stopped||live.pid!==approval.expectedPid)throw new Error('Production process changed');active.set(old.root,live);await verifyTarget(next);},
+    check:async(old,next)=>{await inspectBusinessIdle(old);const live=await inspect(old);if(live.stopped){if(approval.expectedStopped!==true)throw new Error('Production process unexpectedly stopped');}else{if(live.pid!==approval.expectedPid)throw new Error('Production process changed');active.set(old.root,live);}await verifyTarget(next);},
     stop:async(binding)=>{const live=await inspect(binding);if(live.stopped)return;const expected=active.get(binding.root);if(!expected||expected.pid!==live.pid)throw new Error('Refusing to stop an unowned process');await inspectBusinessIdle(binding);await windows('Stop',live);},
     bind:async(binding)=>{
       if(binding.legacy){await windows('RestoreShortcuts',{shortcuts:binding.shortcutBackups});await atomicJson(pointer,binding);return;}
       await copyFile(path.join(binding.root,'scripts/Start-MerchRoute.ps1'),fixedLauncher);
       await atomicJson(pointer,binding);
-      await windows('Bind',{launcher:fixedLauncher,launcherSha256:digest(await readFile(fixedLauncher)),shortcuts:config.production.shortcuts});
+      const shortcutBindings=config.production.shortcuts.map(file=>({path:file,openBrowser:!file.toLowerCase().includes('\\startup\\')}));
+      await windows('Bind',{launcher:fixedLauncher,launcherSha256:digest(await readFile(fixedLauncher)),shortcuts:shortcutBindings});
     },
     start:async(binding)=>{
       const started=binding.legacy?(await windows('StartLegacy',binding),null):await startBoundRelease(binding);
       for(let i=0;i<60;i++){await new Promise(resolve=>setTimeout(resolve,1000));const live=await inspect(binding);if(!live.stopped){if(started&&live.pid!==started.pid)throw new Error('Unexpected runtime PID');active.set(binding.root,live);return live;}}
-      throw new Error('New runtime did not listen on 4173');
+      throw new Error('New runtime did not listen on '+runtimeEndpointFromBinding(binding,{allowLegacy:true}).port);
     },
     probe:async(binding,running,cycle)=>{
       if(cycle===2)await new Promise(resolve=>setTimeout(resolve,15000));
       const live=await inspect(binding);if(live.pid!==running.pid)throw new Error('Runtime did not remain alive');
       await verifyTarget(binding);
-      const health=await fetch('http://127.0.0.1:4173/api/v1/health',{signal:AbortSignal.timeout(30000)});
+      const endpoint=runtimeEndpointFromBinding(binding,{allowLegacy:true});
+      const health=await fetch(endpoint.origin+'/api/v1/health',{signal:AbortSignal.timeout(30000)});
       if(!health.ok)throw new Error('Read-only health check failed');
-      await probeReadOnlyPages('http://127.0.0.1:4173');
-      const about=await (await fetch('http://127.0.0.1:4173/api/v1/about/version',{signal:AbortSignal.timeout(60000)})).json();
-      if(about.current.commitSha!==binding.sourceCommit||about.current.productVersion!==binding.productVersion||about.runtimeStatus!=='CURRENT')throw new Error('About identity mismatch');
+      await probeReadOnlyPages(endpoint.origin);
+      const about=await (await fetch(endpoint.origin+'/api/v1/about/version',{signal:AbortSignal.timeout(60000)})).json();
+      if(about.current.commitSha!==binding.sourceCommit||about.current.productVersion!==binding.productVersion||about.runtimeStatus!=='CURRENT'
+        ||about.current.runtimeEndpoint?.origin!==endpoint.origin)throw new Error('About identity mismatch');
     },
     accept:async(binding,running)=>{
       const accepted=await readJson(config.acceptedReleaseFile);

@@ -113,7 +113,8 @@ New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
 Start-Process -FilePath $Node -ArgumentList 'deployment/scripts/start-merchroute.mjs' -WorkingDirectory $ProjectRoot -WindowStyle Hidden -RedirectStandardOutput (Join-Path $LogDir 'merchroute.out.log') -RedirectStandardError (Join-Path $LogDir 'merchroute.err.log')
 Start-Process -FilePath $Node -ArgumentList 'deployment/scripts/start-n8n.mjs' -WorkingDirectory $ProjectRoot -WindowStyle Hidden -RedirectStandardOutput (Join-Path $LogDir 'n8n.out.log') -RedirectStandardError (Join-Path $LogDir 'n8n.err.log')
 
-foreach ($Health in @('http://127.0.0.1:4173/api/v1/health','http://127.0.0.1:5678/healthz','http://127.0.0.1:8000/ping')) {
+$MerchRoutePort=if($env:MERCHROUTE_PORT){[int]$env:MERCHROUTE_PORT}else{43173}
+foreach ($Health in @(('http://127.0.0.1:'+$MerchRoutePort+'/api/v1/health'),'http://127.0.0.1:5678/healthz','http://127.0.0.1:8000/ping')) {
   $Ready = $false
   for ($Attempt = 1; $Attempt -le 60; $Attempt += 1) {
     try { $Response = Invoke-WebRequest -UseBasicParsing -Uri $Health -TimeoutSec 3; if ($Response.StatusCode -eq 200) { $Ready = $true; break } } catch {}

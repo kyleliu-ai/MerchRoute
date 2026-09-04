@@ -53,6 +53,14 @@ $script:TargetPath = 'G:\01_MerchRoute'
 $script:N8nUserDataPath = 'D:\globle_n8n-data'
 $script:MerchRouteAppDataPath = 'C:\Users\kylel\AppData\Roaming\n8n-media-review-center'
 $script:MerchRouteEnvPath = 'C:\Users\kylel\AppData\Local\MerchRoute\secrets\merchroute.env'
+$script:MerchRoutePort = 43173
+if ($env:MERCHROUTE_PORT) { $script:MerchRoutePort = [int]$env:MERCHROUTE_PORT }
+elseif (Test-Path -LiteralPath $script:MerchRouteEnvPath) {
+  $portLine = Get-Content -LiteralPath $script:MerchRouteEnvPath | Where-Object { $_ -match '^MERCHROUTE_PORT=' } | Select-Object -First 1
+  if (-not $portLine) { $portLine = Get-Content -LiteralPath $script:MerchRouteEnvPath | Where-Object { $_ -match '^PORT=' } | Select-Object -First 1 }
+  if ($portLine) { $script:MerchRoutePort = [int]($portLine -replace '^[^=]+=', '') }
+}
+if ($script:MerchRoutePort -lt 1024 -or $script:MerchRoutePort -gt 49151 -or @(4183,4184,5173,5432,5678,8000) -contains $script:MerchRoutePort) { throw 'MerchRoute runtime port is invalid or reserved' }
 $script:N8nEnvPath = 'D:\globle_n8n-data\.n8n\.env'
 $script:N8nLauncherPath = 'G:\01_MerchRoute\启动n8n.bat'
 $script:StartupDirectory = 'C:\Users\kylel\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup'
@@ -1092,7 +1100,7 @@ SELECT json_build_object(
 }
 
 function Get-LegacyCompatibilityReadiness {
-  $response = Invoke-RestMethod -Method Get -Uri 'http://127.0.0.1:4173/api/v1/config' -TimeoutSec 10
+  $response = Invoke-RestMethod -Method Get -Uri ("http://127.0.0.1:$script:MerchRoutePort/api/v1/config") -TimeoutSec 10
   if (-not $response.readiness.complete) { throw 'MerchRoute readiness 不完整' }
   $legacy = $response.readiness.legacyRootCompatibility
   if (-not $legacy -or $legacy.status -ne 'READY' -or -not $legacy.mappingSelfTest -or -not $legacy.canonicalRootReady) {
@@ -1107,7 +1115,7 @@ function Get-LegacyCompatibilityReadiness {
 
 function Assert-LiveRuntimeMatchesRelease {
   param([Parameter(Mandatory)]$Release)
-  $version = Invoke-RestMethod -Method Get -Uri 'http://127.0.0.1:4173/api/v1/about/version' -TimeoutSec 30
+  $version = Invoke-RestMethod -Method Get -Uri ("http://127.0.0.1:$script:MerchRoutePort/api/v1/about/version") -TimeoutSec 30
   if (-not [string]::Equals([string]$version.current.commitSha, [string]$Release.Head, [StringComparison]::OrdinalIgnoreCase) -or
       [bool]$version.current.dirty) {
     throw "当前 MerchRoute 运行构建不是任务分支干净 HEAD：runtime=$($version.current.commitSha) expected=$($Release.Head) dirty=$($version.current.dirty)"
@@ -1129,7 +1137,7 @@ function Assert-LiveAppDataPath {
 
 function Get-HealthGate {
   $n8n = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:5678/healthz' -TimeoutSec 10
-  $merchRoute = Invoke-RestMethod -Method Get -Uri 'http://127.0.0.1:4173/api/v1/health' -TimeoutSec 10
+  $merchRoute = Invoke-RestMethod -Method Get -Uri ("http://127.0.0.1:$script:MerchRoutePort/api/v1/health") -TimeoutSec 10
   if ($n8n.StatusCode -ne 200 -or $merchRoute.status -ne 'ok') { throw '健康检查未返回 200/ok' }
   $appDataPath = Assert-LiveAppDataPath $merchRoute
   [pscustomobject]@{ N8nStatus = $n8n.StatusCode; MerchRouteStatus = 200; AppDataPath = $appDataPath }
@@ -1137,7 +1145,7 @@ function Get-HealthGate {
 
 function Get-ListeningPortOwners {
   $result = @()
-  foreach ($port in @(4173, 5678, 5679)) {
+  foreach ($port in @($script:MerchRoutePort, 5678, 5679)) {
     foreach ($connection in @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)) {
       $process = Get-CimInstance Win32_Process -Filter "ProcessId=$($connection.OwningProcess)"
       $owner = if ($process) { Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid } else { $null }
@@ -1159,15 +1167,15 @@ function Assert-ExpectedPortOwners {
   param([object[]]$Owners, [switch]$RequireAllPorts)
   $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
   if ($RequireAllPorts) {
-    foreach ($requiredPort in @(4173, 5678, 5679)) {
+    foreach ($requiredPort in @($script:MerchRoutePort, 5678, 5679)) {
       if (-not ($Owners | Where-Object Port -eq $requiredPort)) { throw "预期监听端口缺失：$requiredPort" }
     }
   }
   foreach ($owner in $Owners) {
     if ($owner.OwnerSid -ne $currentSid) { throw "端口 $($owner.Port) 不属于当前运行账户" }
     if ($owner.Name -ne 'node.exe') { throw "端口 $($owner.Port) 不是预期 Node 进程" }
-    if ($owner.Port -eq 4173 -and $owner.CommandLine -notmatch '(?i)(?:^|[\\/"\s])(?:apps[\\/]server[\\/])?dist[\\/]index\.js(?:$|["\s])') {
-      throw '4173 端口命令行不是 MerchRoute dist/index.js'
+    if ($owner.Port -eq $script:MerchRoutePort -and $owner.CommandLine -notmatch '(?i)(?:^|[\\/"\s])(?:apps[\\/]server[\\/])?dist[\\/]index\.js(?:$|["\s])') {
+      throw "MerchRoute 端口 $script:MerchRoutePort 的命令行不是 dist/index.js"
     }
     if ($owner.Port -in @(5678, 5679) -and $owner.CommandLine -notmatch '(?i)(node_modules[\\/](?:n8n|@n8n)|[\\/]n8n[\\/]bin[\\/]n8n|task[-_ ]runner|runners)') {
       throw "端口 $($owner.Port) 命令行不是本机全局 n8n"
@@ -1188,21 +1196,21 @@ function Stop-VerifiedRuntime {
     Start-Sleep -Milliseconds 250
     $remaining = @(Get-ListeningPortOwners)
   } while ($remaining.Count -gt 0 -and [DateTimeOffset]::Now -lt $deadline)
-  if ($remaining.Count -gt 0) { throw '4173/5678/5679 未在 30 秒内全部退出' }
+  if ($remaining.Count -gt 0) { throw "$script:MerchRoutePort/5678/5679 未在 30 秒内全部退出" }
   return $owners
 }
 
 function Stop-VerifiedMerchRoute {
-  $owners = @(Get-ListeningPortOwners | Where-Object Port -eq 4173)
-  if ($owners.Count -ne 1) { throw "4173 端口监听数量不是 1：$($owners.Count)" }
+  $owners = @(Get-ListeningPortOwners | Where-Object Port -eq $script:MerchRoutePort)
+  if ($owners.Count -ne 1) { throw "$script:MerchRoutePort 端口监听数量不是 1：$($owners.Count)" }
   Assert-ExpectedPortOwners $owners
   Stop-Process -Id $owners[0].Pid -Force -ErrorAction Stop
   $deadline = [DateTimeOffset]::Now.AddSeconds(30)
   do {
     Start-Sleep -Milliseconds 250
-    $remaining = @(Get-ListeningPortOwners | Where-Object Port -eq 4173)
+    $remaining = @(Get-ListeningPortOwners | Where-Object Port -eq $script:MerchRoutePort)
   } while ($remaining.Count -gt 0 -and [DateTimeOffset]::Now -lt $deadline)
-  if ($remaining.Count -gt 0) { throw '4173 未在 30 秒内退出' }
+  if ($remaining.Count -gt 0) { throw "$script:MerchRoutePort 未在 30 秒内退出" }
   return $owners[0]
 }
 
@@ -1352,7 +1360,7 @@ function Start-NewRuntime {
   try {
     $env:MERCHROUTE_ENV_FILE = $script:MerchRouteEnvPath
     $env:NO_OPEN_BROWSER = '1'
-    if (-not ($listening | Where-Object Port -eq 4173)) {
+    if (-not ($listening | Where-Object Port -eq $script:MerchRoutePort)) {
       Start-Process -FilePath $pwsh -ArgumentList $arguments -WorkingDirectory $script:ProjectRoot -WindowStyle Hidden `
         -RedirectStandardOutput $capture.StandardOutput -RedirectStandardError $capture.StandardError
     }
@@ -1377,7 +1385,7 @@ function Start-RestoredRuntime {
   $capture = $null
   if ($listening.Count -gt 0) { Assert-ExpectedPortOwners $listening }
   [void](Start-N8nRuntime $RecoveryPoint)
-  if (-not ($listening | Where-Object Port -eq 4173)) {
+  if (-not ($listening | Where-Object Port -eq $script:MerchRoutePort)) {
     $shell = New-Object -ComObject WScript.Shell
     $shortcut = $shell.CreateShortcut($script:MerchRouteShortcutPath)
     $launcher = Get-NormalizedLiteralPath $shortcut.TargetPath
@@ -1428,13 +1436,13 @@ function Enter-Maintenance {
     })
   }
   try {
-    $merchRouteOwners = @(Get-ListeningPortOwners | Where-Object Port -eq 4173)
+    $merchRouteOwners = @(Get-ListeningPortOwners | Where-Object Port -eq $script:MerchRoutePort)
     if ($merchRouteOwners.Count -eq 0) { return }
     $deadline = [DateTimeOffset]::Now.AddSeconds(15)
     do {
       Start-Sleep -Milliseconds 500
       try {
-        $config = Invoke-RestMethod -Method Get -Uri 'http://127.0.0.1:4173/api/v1/config' -TimeoutSec 3
+        $config = Invoke-RestMethod -Method Get -Uri ("http://127.0.0.1:$script:MerchRoutePort/api/v1/config") -TimeoutSec 3
         $maintenanceReady = $config.readiness.maintenanceMode -and $config.readiness.maintenanceMode.acceptingNewTasks -eq $false
       } catch { $maintenanceReady = $false }
     } while (-not $maintenanceReady -and [DateTimeOffset]::Now -lt $deadline)
