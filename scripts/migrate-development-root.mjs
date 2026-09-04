@@ -40,8 +40,13 @@ export async function preflightDevelopmentRootMigration(root, home, options) {
 
   const githubCommit = required(options, 'github-main-commit');
   const githubTree = required(options, 'github-main-tree');
-  if (git(fromRoot, 'rev-parse', `${githubCommit}^{tree}`) !== githubTree || githubTree !== identity.tree) {
-    throw new Error('GitHub main and the local authoritative source tree must match before migration');
+  const baseCommit = required(options, 'base-commit');
+  const baseTree = required(options, 'base-tree');
+  if (git(fromRoot, 'rev-parse', `${githubCommit}^{tree}`) !== githubTree
+    || git(fromRoot, 'rev-parse', `${baseCommit}^{tree}`) !== baseTree
+    || githubTree !== baseTree
+    || !isAncestor(fromRoot, baseCommit, identity.commit)) {
+    throw new Error('GitHub main and the approved local branch base must match before migration');
   }
 
   const nextBatch = {
@@ -61,6 +66,7 @@ export async function preflightDevelopmentRootMigration(root, home, options) {
     recoveryDirectory,
     source: identity,
     github: { repository: config.github.repository, mainCommit: githubCommit, mainTree: githubTree },
+    branchBase: { commit: baseCommit, tree: baseTree },
     previousBatch,
     nextBatch,
     mergedPr: Number(required(options, 'merged-pr')),
@@ -171,6 +177,15 @@ function assertAsciiPath(value) {
 function assertSameVolume(left, right) {
   if (process.platform === 'win32' && path.parse(left).root.toLocaleLowerCase('en-US') !== path.parse(right).root.toLocaleLowerCase('en-US')) {
     throw new Error('Development-root migration must stay on one volume for an atomic directory move');
+  }
+}
+
+function isAncestor(root, ancestor, descendant) {
+  try {
+    git(root, 'merge-base', '--is-ancestor', ancestor, descendant);
+    return true;
+  } catch {
+    return false;
   }
 }
 

@@ -56,6 +56,8 @@ async function fixture(t) {
     'expected-tree': tree,
     'github-main-commit': commit,
     'github-main-tree': tree,
+    'base-commit': commit,
+    'base-tree': tree,
     'merged-pr': '29',
     name: 'english-path-migration',
     'task-id': 'english-path-migration-20260904-2242'
