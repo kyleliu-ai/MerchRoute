@@ -6,6 +6,7 @@
 - [ ] Node.js 22.23.1、npm 10.9.8、全局 n8n 2.32.6 回读一致。
 - [ ] PostgreSQL 18.4、Playwright 1.61.1、Jimeng 固定版本与 `runtime-versions.json` 一致。
 - [ ] `npm run versions:check:full`、`npm run deployment:verify`、`npm run check` 通过。
+- [ ] E2E 始终使用隔离 `4183`；Windows 如排除该端口，只允许使用受控 Docker E2E 运行器在容器网络内保留 `4183`，不得修改 HNS/WinNAT 或自动换端口。
 
 ## 外部数据与数据库
 

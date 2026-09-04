@@ -14,7 +14,7 @@ import { validateV012Rollover } from './publish.mjs';
 import { assertNoActivity } from './business-gate.mjs';
 import { validateManifest, compareBranchInventory } from '../verify-release-completeness.mjs';
 import { candidateSnapshot, verifyAcceptedCandidate } from './candidate-acceptance.mjs';
-import { commandTranscript } from './verify.mjs';
+import { commandTranscript, fixedPortE2eDockerArgs } from './verify.mjs';
 import { captureCommand } from '../run-ci-check.mjs';
 
 test('silent successful commands keep actual capture metadata and failing output is preserved',async()=>{
@@ -153,6 +153,11 @@ test('isolated PostgreSQL installs pg_trgm before parallel integration workers s
   const extension=source.indexOf("CREATE EXTENSION IF NOT EXISTS pg_trgm");
   const action=source.indexOf("return await action(");
   assert.ok(extension>0&&action>extension,'pg_trgm must be installed before test workers receive the database URL');
+});
+test('Windows E2E container keeps port 4183 inside the PostgreSQL network namespace',()=>{
+  const args=fixedPortE2eDockerArgs({archive:path.resolve('source.tar'),evidenceDirectory:path.resolve('evidence'),postgresContainer:'a'.repeat(64),databaseUrl:'postgresql://merchroute_ci@127.0.0.1:55555/merchroute_ci_test'});
+  assert.equal(args[0],'docker');assert.ok(args.includes('container:'+'a'.repeat(64)));
+  const command=args.at(-1);assert.match(command,/127\.0\.0\.1:5432/);assert.match(command,/npm run test:e2e/);assert.doesNotMatch(command,/55555/);
 });
 test('historical audit retains thirty source branches and thirteen feature groups without fake local refs',async()=>{
   const root=path.resolve(import.meta.dirname,'../..');const manifest=JSON.parse(await readFile(path.join(root,'config/release-features.json'))),historical=await readFile(path.join(root,manifest.historicalAudit.path));
