@@ -14,14 +14,42 @@ import { testEnvironment } from './verify.mjs';
 import { probeReadOnlyPages } from './read-only-pages.mjs';
 import { candidateSnapshot, assertAcceptedCandidate } from './candidate-acceptance.mjs';
 import { switchRelease } from './release-transaction.mjs';
-import { assertAboutIdentity, assertRecoverablePreStopJournal, stopProcessInput } from './release.mjs';
+import { assertAboutIdentity, assertRecoverablePreStopJournal, assertV014OperatorHardening, createPublishedBinding, downloadAcceptedArtifact, stopProcessInput } from './release.mjs';
 
 test('release stop payload retains the verified runtime endpoint',()=>{
-  const binding={schemaVersion:2,runtimeEndpoint:{host:'127.0.0.1',port:43173,origin:'http://127.0.0.1:43173'}};
-  const live={pid:1234,createdAt:'2026-09-04T00:00:00.000Z',entry:'C:/release/apps/server/dist/index.js',nodePath:'C:/node.exe'};
-  assert.deepEqual(stopProcessInput(binding,live),{...live,runtimeEndpoint:binding.runtimeEndpoint});
+  const binding={schemaVersion:2,root:'C:/发布包',nodePath:'C:/工具/node.exe',runtimeEndpoint:{host:'127.0.0.1',port:43173,origin:'http://127.0.0.1:43173'}};
+  const live={pid:1234,createdAt:'2026-09-04T00:00:00.000Z',entry:'C:/release/apps/server/dist/index.js',nodePath:'C:/wrong/node.exe'};
+  assert.deepEqual(stopProcessInput(binding,live),{
+    pid:live.pid,createdAt:live.createdAt,entry:path.join(binding.root,'apps/server/dist/index.js'),nodePath:binding.nodePath,runtimeEndpoint:binding.runtimeEndpoint
+  });
   assert.equal(live.runtimeEndpoint,undefined,'the inspected process record must remain immutable');
   assert.throws(()=>stopProcessInput(binding,{...live,createdAt:''}),/incomplete/);
+});
+
+test('v0.1.4 operator hardening accepts only the exact local release-tool patch',()=>{
+  const commit='2b4d9ff3c9cd479bb8be3a4e726c0f2db30adb3b',tree='8793bb5338ed659748afae6e4ad68db3a9a90114';
+  const status=['M AGENTS.md',' M scripts/release-windows.ps1',' M scripts/workflow/launcher.test.mjs',' M scripts/workflow/publish.mjs',' M scripts/workflow/release.mjs'].join('\n');
+  const identity={commit,tree,status},candidate={sourceCommit:commit,sourceTree:tree,productVersion:'0.1.4'};
+  assert.equal(assertV014OperatorHardening(identity,candidate,'v0.1.4-prestop-unicode').length,5);
+  assert.throws(()=>assertV014OperatorHardening({...identity,status:status+'\n M apps/server/src/app.ts'},candidate,'v0.1.4-prestop-unicode'),/outside/);
+  assert.throws(()=>assertV014OperatorHardening(identity,candidate,'wrong-mode'),/not bound/);
+});
+
+test('published binding upgrades a schema v1 candidate after all spread fields are applied',()=>{
+  const endpoint={host:'127.0.0.1',port:43173,origin:'http://127.0.0.1:43173'};
+  const binding=createPublishedBinding({schemaVersion:1,productVersion:'0.1.4'},{schemaVersion:1,runtimeEndpoint:endpoint,nodePath:'C:/node.exe'});
+  assert.equal(binding.schemaVersion,2);assert.deepEqual(binding.runtimeEndpoint,endpoint);
+  assert.throws(()=>createPublishedBinding({schemaVersion:1},{}),/explicit runtime endpoint/);
+});
+
+test('release asset download retries transient failures but never retries a hash mismatch',async()=>{
+  const bytes=Buffer.from('accepted asset'),artifact={sha256:digest(bytes)},asset={browser_download_url:'https://example.invalid/asset'};
+  let attempts=0;
+  const fetchImpl=async()=>{attempts++;if(attempts<3)throw new Error('temporary network failure');return new Response(bytes)};
+  assert.deepEqual(await downloadAcceptedArtifact(asset,artifact,{fetchImpl,sleep:async()=>{}}),{attempts:3,bytes:bytes.length});
+  attempts=0;
+  await assert.rejects(downloadAcceptedArtifact(asset,artifact,{fetchImpl:async()=>{attempts++;return new Response('tampered')},sleep:async()=>{}}),/differs/);
+  assert.equal(attempts,1);
 });
 
 test('legacy rollback accepts an old About response without runtimeEndpoint but new releases do not',()=>{
@@ -111,8 +139,9 @@ if(process.platform==='win32')for(const shell of ['powershell.exe','pwsh']){
     assert.match(run(),/Launcher binding verified/);await writeFile(path.join(root,'scripts/lib/installed-release.mjs'),'changed verifier');assert.throws(run);
   });
 }
-if(process.platform==='win32')test('Windows release adapter stops only the inspected process with the retained endpoint',async t=>{
-  const root=await mkdtemp(path.join(os.tmpdir(),'merchroute-stop-adapter-'));t.after(()=>rm(root,{recursive:true,force:true}));
+if(process.platform==='win32')for(const shell of ['powershell.exe','pwsh'])test('Windows release adapter preserves Chinese paths and stops only the inspected process in '+shell,async t=>{
+  const temporaryRoot=await mkdtemp(path.join(os.tmpdir(),'merchroute-stop-adapter-'));t.after(()=>rm(temporaryRoot,{recursive:true,force:true}));
+  const root=path.join(temporaryRoot,'中文路径');await mkdir(root);
   let port=0;
   for(let candidate=43800;candidate<43900&&!port;candidate++){
     const server=createServer();
@@ -120,18 +149,18 @@ if(process.platform==='win32')test('Windows release adapter stops only the inspe
     finally{if(server.listening)await new Promise(resolve=>server.close(resolve));}
   }
   assert.ok(port,'no bounded fixture port is available');
-  const entry=path.join(root,'fixture-server.mjs');
+  const entry=path.join(root,'apps/server/dist/index.js');await mkdir(path.dirname(entry),{recursive:true});
   await writeFile(entry,"import{createServer}from'node:net';createServer((_q,r)=>r.end('ok')).listen(Number(process.argv[2]),'127.0.0.1',()=>console.log('READY'));\n");
   const child=spawn(process.execPath,[entry,String(port)],{windowsHide:true,stdio:['ignore','pipe','pipe']});
   t.after(()=>{if(child.exitCode===null)child.kill();});
   await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('fixture server did not start')),10000);child.once('error',reject);child.stdout.on('data',data=>{if(data.toString().includes('READY')){clearTimeout(timer);resolve();}});});
-  const binding={schemaVersion:2,runtimeEndpoint:{host:'127.0.0.1',port,origin:'http://127.0.0.1:'+port}};
+  const binding={schemaVersion:2,root,nodePath:process.execPath,runtimeEndpoint:{host:'127.0.0.1',port,origin:'http://127.0.0.1:'+port}};
   const inspectFile=path.join(root,'inspect.json');await atomicJson(inspectFile,{entry,nodePath:process.execPath,runtimeEndpoint:binding.runtimeEndpoint});
   const adapter=path.resolve(import.meta.dirname,'../release-windows.ps1');
-  const live=JSON.parse(execFileSync('powershell.exe',['-NoProfile','-File',adapter,'-Action','Inspect','-InputFile',inspectFile],{encoding:'utf8',windowsHide:true}));
+  const live=JSON.parse(execFileSync(shell,['-NoProfile','-File',adapter,'-Action','Inspect','-InputFile',inspectFile],{encoding:'utf8',windowsHide:true}));
   assert.equal(live.pid,child.pid);
   const stopFile=path.join(root,'stop.json');await atomicJson(stopFile,stopProcessInput(binding,live));
-  execFileSync('powershell.exe',['-NoProfile','-File',adapter,'-Action','Stop','-InputFile',stopFile],{encoding:'utf8',windowsHide:true});
+  execFileSync(shell,['-NoProfile','-File',adapter,'-Action','Stop','-InputFile',stopFile],{encoding:'utf8',windowsHide:true});
   await new Promise(resolve=>child.once('exit',resolve));
   assert.notEqual(child.exitCode,null);
 });
