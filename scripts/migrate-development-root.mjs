@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { copyFile, lstat, mkdir, readFile, readdir, realpath, rename } from 'node:fs/promises';
+import { copyFile, lstat, mkdir, readFile, readdir, realpath, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -42,9 +42,11 @@ export async function preflightDevelopmentRootMigration(root, home, options) {
   const githubTree = required(options, 'github-main-tree');
   const baseCommit = required(options, 'base-commit');
   const baseTree = required(options, 'base-tree');
+  const previousBatchHead = git(fromRoot, 'rev-parse', `refs/heads/${previousBatch.branch}`);
   if (git(fromRoot, 'rev-parse', `${githubCommit}^{tree}`) !== githubTree
     || git(fromRoot, 'rev-parse', `${baseCommit}^{tree}`) !== baseTree
     || githubTree !== baseTree
+    || previousBatchHead !== baseCommit
     || !isAncestor(fromRoot, baseCommit, identity.commit)) {
     throw new Error('GitHub main and the approved local branch base must match before migration');
   }
@@ -67,6 +69,7 @@ export async function preflightDevelopmentRootMigration(root, home, options) {
     source: identity,
     github: { repository: config.github.repository, mainCommit: githubCommit, mainTree: githubTree },
     branchBase: { commit: baseCommit, tree: baseTree },
+    previousBatchHead,
     previousBatch,
     nextBatch,
     mergedPr: Number(required(options, 'merged-pr')),
@@ -157,12 +160,25 @@ export async function finalizeDevelopmentRootMigration(root, home, options) {
     supersededBy: intent.nextBatch.taskId,
     transitionedAt: new Date().toISOString()
   };
+  const featureManifestPath = path.join(resolvedRoot, 'config', 'release-features.json');
+  const featureManifest = await readJson(featureManifestPath);
+  featureManifest.completedBatches ||= [];
+  if (featureManifest.branches?.some((item) => item.name === intent.previousBatch.branch)
+    || featureManifest.completedBatches.some((item) => item.name === intent.previousBatch.branch)) {
+    throw new Error('Previous batch already exists in the retained branch ledger');
+  }
+  featureManifest.completedBatches.push({
+    name: intent.previousBatch.branch,
+    head: intent.previousBatchHead,
+    featureId: 'project-release-guardrails'
+  });
   const completed = { ...intent, status: 'COMPLETED', finalizedAt: new Date().toISOString() };
   const result = {
     dryRun: !options.apply,
     machine: nextMachine,
     archivedBatch,
     activeBatch: intent.nextBatch,
+    featureManifest,
     completed
   };
   if (!options.apply) return result;
@@ -174,6 +190,7 @@ export async function finalizeDevelopmentRootMigration(root, home, options) {
   for (const item of previousBatchState) {
     await rename(item.source, path.join(completedDirectory, `${intent.previousBatch.name}-${item.name}`));
   }
+  await writeFile(featureManifestPath, `${JSON.stringify(featureManifest, null, 2)}\n`);
   await atomicJson(machinePath, nextMachine);
   await atomicJson(batchPath, intent.nextBatch);
   await atomicJson(path.join(intent.recoveryDirectory, COMPLETED_NAME), completed);

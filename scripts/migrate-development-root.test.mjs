@@ -27,6 +27,7 @@ async function fixture(t) {
   await writeFile(path.join(oldRoot, 'packages', 'shared', 'package.json'), '{"name":"@n8n-media-review/shared"}\n');
   git(oldRoot, 'add', '.gitignore', 'package.json', 'config/release-features.json', 'packages/shared/package.json');
   git(oldRoot, 'commit', '-m', 'fixture');
+  git(oldRoot, 'branch', 'work/previous');
   git(oldRoot, 'switch', '-c', 'work/english-path-migration-20260904-2242');
   const commit = git(oldRoot, 'rev-parse', 'HEAD');
   const tree = git(oldRoot, 'rev-parse', 'HEAD^{tree}');
@@ -104,6 +105,12 @@ test('preflight, atomic move and finalize preserve identity and roll the active 
     await assert.rejects(readFile(path.join(fixtureValue.home, name)), /ENOENT/);
     await readFile(path.join(fixtureValue.home, 'completed', `previous-${name}`));
   }
+  const featureManifest = JSON.parse(await readFile(path.join(fixtureValue.newRoot, 'config', 'release-features.json'), 'utf8'));
+  assert.deepEqual(featureManifest.completedBatches, [{
+    name: 'work/previous',
+    head: fixtureValue.commit,
+    featureId: 'project-release-guardrails'
+  }]);
   await registration(fixtureValue.newRoot, fixtureValue.home);
 });
 

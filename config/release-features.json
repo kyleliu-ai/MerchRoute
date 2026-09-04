@@ -30,7 +30,13 @@
     "path": "config/release-source-audit.json",
     "sha256": "13368df6d6f1ae3d9a95c68119e50f062c767681f380c2798801271c426f0701"
   },
-  "completedBatches": [],
+  "completedBatches": [
+    {
+      "name": "work/solo-dev-migration-20260903-2050",
+      "head": "bdd6f75361e940e33bce2e6f23265907ee59f631",
+      "featureId": "project-release-guardrails"
+    }
+  ],
   "branches": [
     {
       "name": "agent/docs-workflow-parameter-options",

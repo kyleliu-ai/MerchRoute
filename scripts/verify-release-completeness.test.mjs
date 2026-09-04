@@ -105,7 +105,7 @@ test('两种模式共用不可删减的 13 项关键功能与本机 11 类检查
 
 test('当前候选以真实提交绑定；历史移动、缺失或未知新提交仍阻断', () => {
   const legacyManifest=structuredClone(manifest);delete legacyManifest.policy.branchInventory;
-  const branches = manifest.branches.map(({ name, head }) => ({ name, head }));
+  const branches = [...manifest.branches, ...(manifest.completedBatches || [])].map(({ name, head }) => ({ name, head }));
   branches.push({ name: candidateBranch, head: exampleIdentity.commit });
   const inspect = (items, current = candidateBranch, expected = exampleIdentity.commit) => compareBranchInventory(legacyManifest, items, current, expected);
   assert.deepEqual(inspect(branches), []);
