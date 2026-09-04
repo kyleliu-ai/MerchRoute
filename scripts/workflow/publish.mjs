@@ -18,6 +18,15 @@ export function validateV012Rollover(previous,{main,baseTree,oldPr,oldRelease,ol
   }
   return {publication:previous,main,tree:baseTree,releaseTag:'v0.1.2',status:'PUBLISHED_NOT_ACTIVATED',reason:'PORT_EXCLUDED'};
 }
+export function validateV013Rollover(previous,{main,baseTree,oldPr,oldRelease,oldPublishedTree}){
+  if(!previous||previous.number!==27||previous.sourceCommit!=='360bc9557df5c902af6da0d3d048bde7f0029c51')throw new Error('GitHub main moved outside the approved v0.1.3 rollover; inspect without overwriting local code');
+  if(oldPr?.merged!==true||oldPr?.state!=='closed'||oldPr?.base?.ref!=='main'||oldPr?.head?.sha!==previous.publicCommit
+    ||oldRelease?.draft!==false||oldRelease?.prerelease!==false||oldRelease?.tag_name!=='v0.1.3'
+    ||baseTree!==previous.tree||oldPublishedTree!==previous.tree){
+    throw new Error('PR #27, v0.1.3, GitHub main and the accepted local v0.1.3 tree are not aligned');
+  }
+  return {publication:previous,main,tree:baseTree,releaseTag:'v0.1.3',status:'PUBLISHED_NOT_ACTIVATED',reason:'RELEASE_TOOL_PRE_STOP_PAYLOAD_BUG'};
+}
 export async function requireVerified(root,home){
   await verifyDevelopmentDatabase(root,home);
   const identity=sourceIdentity(root), record=await readJson(path.join(home,'verified.json'));
@@ -71,17 +80,19 @@ export async function publishBatch(root,home,config,batch,options){
   let intent=null;try{intent=await readJson(path.join(home,'publication-intent.json'));}catch(error){if(error.code!=='ENOENT')throw error;}
   let rollover=null;
   if(main!==config.github.baselineCommit||base.tree.sha!==config.github.baselineTree){
-    if(!previous||previous.number!==26||previous.sourceCommit!=='922b08f444977edd480d1a020cf4a90c4f513809')throw new Error('GitHub main moved outside the approved v0.1.2 rollover; inspect without overwriting local code');
+    if(!previous||![26,27].includes(previous.number))throw new Error('GitHub main moved outside the approved release rollover; inspect without overwriting local code');
     const oldPr=githubJson(config,prefix+'/pulls/'+previous.number);
-    const oldRelease=githubJson(config,prefix+'/releases/tags/v0.1.2');
-    const oldPublished=githubJson(config,prefix+'/commits/v0.1.2');
-    rollover=validateV012Rollover(previous,{main,baseTree:base.tree.sha,oldPr,oldRelease,oldPublishedTree:oldPublished.commit.tree.sha});
+    const priorVersion=previous.number===27?'0.1.3':'0.1.2';
+    const oldRelease=githubJson(config,prefix+'/releases/tags/v'+priorVersion);
+    const oldPublished=githubJson(config,prefix+'/commits/v'+priorVersion);
+    const input={main,baseTree:base.tree.sha,oldPr,oldRelease,oldPublishedTree:oldPublished.commit.tree.sha};
+    rollover=previous.number===27?validateV013Rollover(previous,input):validateV012Rollover(previous,input);
     previous=null;
     if(intent?.sourceCommit!==identity.commit)intent=null;
-  }else if(previous?.number===26){
-    throw new Error('Merged PR #26 requires the explicit v0.1.2 rollover contract before another publication');
+  }else if([26,27].includes(previous?.number)){
+    throw new Error('Merged release PR requires the explicit publication rollover contract before another publication');
   }
-  const defaultPublicBranch='work/configurable-runtime-port-v013-'+new Date().toISOString().replace(/[-:TZ.]/g,'').slice(0,12);
+  const defaultPublicBranch='work/release-tool-fix-v014-'+new Date().toISOString().replace(/[-:TZ.]/g,'').slice(0,12);
   const publicBranch=intent?.branch||defaultPublicBranch;
   const resumable=intent?.sourceCommit===identity.commit&&intent?.tree===identity.tree&&intent?.branch===publicBranch&&intent?.parent===(previous?.publicCommit||main);
   if(previous&&previous.localBatchBranch!==batch.branch)throw new Error('Publication state belongs to another batch');
@@ -89,7 +100,7 @@ export async function publishBatch(root,home,config,batch,options){
   if(previous?.sourceCommit===identity.commit)return {unchanged:true,...previous};
   if(options['dry-run'])return {dryRun:true,sourceCommit:identity.commit,sourceTree:identity.tree,publicParent:previous?.publicCommit||main,branch:publicBranch,base:'main',draft:true,rollover};
   requireApply(options);
-  if(rollover)await atomicJson(path.join(home,'completed','v0.1.2-publication-not-activated.json'),{...rollover,archivedAt:new Date().toISOString()});
+  if(rollover)await atomicJson(path.join(home,'completed',rollover.releaseTag.slice(1)+'-publication-not-activated.json'),{...rollover,archivedAt:new Date().toISOString()});
   const user=githubJson(config,'user');
   const expectedEmail=user.id+'+'+user.login+'@users.noreply.github.com';
   if(git(root,'config','user.email')!==expectedEmail)throw new Error('Public commits require the verified GitHub noreply email');
@@ -99,10 +110,10 @@ export async function publishBatch(root,home,config,batch,options){
   const changed=git(root,'diff','--name-only','-z',main,identity.commit).split('\0').filter(Boolean).sort();
   if(!changed.length)throw new Error('No source changes; refusing an empty PR');
   if(changed.some(f=>isForbiddenPackagePath(f)))throw new Error('Public candidate contains a forbidden path');
-  const message='fix(runtime): configurable production endpoint for v0.1.3\n\nLocal source: '+identity.commit+'\nExact source tree: '+identity.tree+'\nLocal authority; public history only.\n';
+  const message='fix(release): preserve runtime endpoint during v0.1.4 cutover\n\nLocal source: '+identity.commit+'\nExact source tree: '+identity.tree+'\nLocal authority; public history only.\n';
   const publicCommit=resumable?intent.publicCommit:execFileSync('git',['-C',root,'commit-tree',identity.tree,'-p',parent],{input:message,encoding:'utf8',windowsHide:true}).trim();
   if(git(root,'show','-s','--format=%T',publicCommit)!==identity.tree||git(root,'show','-s','--format=%P',publicCommit)!==parent)throw new Error('Publication recovery identity is invalid');
-  git(root,'update-ref','refs/merchroute/publications/'+batch.name+'-v013',publicCommit);
+  git(root,'update-ref','refs/merchroute/publications/'+batch.name+'-v014',publicCommit);
   await atomicJson(path.join(home,'publication-intent.json'),{branch:publicBranch,localBatchBranch:batch.branch,publicCommit,parent,sourceCommit:identity.commit,tree:identity.tree,changed});
   git(root,'push','origin',publicCommit+':refs/heads/'+publicBranch);
   const remote=githubJson(config,prefix+'/git/commits/'+publicCommit);
@@ -111,8 +122,8 @@ export async function publishBatch(root,home,config,batch,options){
   if(!number){const existing=githubJson(config,prefix+'/pulls?state=open&head='+encodeURIComponent(user.login+':'+publicBranch));if(existing.length>1)throw new Error('Ambiguous existing PR');number=existing[0]?.number;}
   if(!number){
     const body=path.join(home,'pr-body.md');await mkdir(home,{recursive:true});
-    await writeFile(body,'## 本机权威候选\n\nMerchRoute v0.1.3 将正式端口改为仓库外可配置，新默认为 43173，严格禁止自动漂移。\n\n本机提交：'+identity.commit+'；源码树：'+identity.tree+'。\n\n包含 schema v2 发布绑定、启动/回滚/探测、About 动态地址和 36 个脱敏 n8n 工作流。v0.1.2 保留为已发布但未激活版本。\n\n完整检查、PostgreSQL、E2E、Jimeng、Gitleaks 和禁入扫描通过后才可合并。保持 Draft，不直接推送或合并 main；用户合并并发布 v0.1.3 后另行正式切换。\n');
-    const url=github(config,['pr','create','--repo',repository,'--head',publicBranch,'--base','main','--draft','--title','fix(runtime): 可配置正式端口并发布 v0.1.3','--body-file',body]);
+    await writeFile(body,'## 本机权威候选\n\nMerchRoute v0.1.4 修复正式切换时停止进程遗漏 `runtimeEndpoint`，并允许旧版回滚在 About 尚未提供端点字段时完成严格身份验收。\n\n本机提交：'+identity.commit+'；源码树：'+identity.tree+'。\n\n本次不改写 v0.1.3 标签或资产，不改业务逻辑、n8n 工作流、数据库或 43173 配置；v0.1.3 记录为已发布但因发布工具预停止阶段缺陷未激活。\n\n完整检查、PostgreSQL、E2E、Jimeng、Gitleaks 和禁入扫描通过后才可合并。保持 Draft，不直接推送或合并 main；用户合并并发布 v0.1.4 后另行正式切换。\n');
+    const url=github(config,['pr','create','--repo',repository,'--head',publicBranch,'--base','main','--draft','--title','fix(release): 修复 v0.1.4 正式切换工具','--body-file',body]);
     number=Number(url.match(/\/pull\/(\d+)/)?.[1]);if(!number)throw new Error('Cannot resolve created PR');
   }
   const pr=JSON.parse(github(config,['pr','view',String(number),'--repo',repository,'--json','isDraft,state,baseRefName,headRefOid,files,url']));

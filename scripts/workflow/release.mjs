@@ -13,6 +13,19 @@ import { probeReadOnlyPages } from './read-only-pages.mjs';
 import { assertAcceptedCandidate } from './candidate-acceptance.mjs';
 import { createRuntimeEndpoint, runtimeEndpointFromBinding } from '../lib/runtime-endpoint.mjs';
 
+export function stopProcessInput(binding, live) {
+  if(!live||live.stopped||!Number.isInteger(live.pid)||!live.createdAt)throw new Error('Live process identity is incomplete');
+  return {...live,runtimeEndpoint:runtimeEndpointFromBinding(binding,{allowLegacy:true})};
+}
+
+export function assertAboutIdentity(binding,about) {
+  const endpoint=runtimeEndpointFromBinding(binding,{allowLegacy:true});
+  const endpointMatches=binding.legacy===true||about?.current?.runtimeEndpoint?.origin===endpoint.origin;
+  if(about?.current?.commitSha!==binding.sourceCommit||about?.current?.productVersion!==binding.productVersion
+    ||about?.runtimeStatus!=='CURRENT'||!endpointMatches)throw new Error('About identity mismatch');
+  return true;
+}
+
 export async function releaseCommand(command,{root,home,config,options}) {
   const configuredEndpoint=createRuntimeEndpoint(config.production?.port||43173);
   if(command==='prepare'){
@@ -76,7 +89,7 @@ export async function releaseCommand(command,{root,home,config,options}) {
   const fixedLauncher=path.join(config.runtimeHome,'Start-MerchRoute.ps1'),pointer=path.join(config.runtimeHome,'current-release.json');
   return switchRelease({previous,candidate,
     check:async(old,next)=>{await inspectBusinessIdle(old);const live=await inspect(old);if(live.stopped){if(approval.expectedStopped!==true)throw new Error('Production process unexpectedly stopped');}else{if(live.pid!==approval.expectedPid)throw new Error('Production process changed');active.set(old.root,live);}await verifyTarget(next);},
-    stop:async(binding)=>{const live=await inspect(binding);if(live.stopped)return;const expected=active.get(binding.root);if(!expected||expected.pid!==live.pid)throw new Error('Refusing to stop an unowned process');await inspectBusinessIdle(binding);await windows('Stop',live);},
+    stop:async(binding)=>{const live=await inspect(binding);if(live.stopped)return;const expected=active.get(binding.root);if(!expected||expected.pid!==live.pid)throw new Error('Refusing to stop an unowned process');await inspectBusinessIdle(binding);await windows('Stop',stopProcessInput(binding,live));},
     bind:async(binding)=>{
       if(binding.legacy){await windows('RestoreShortcuts',{shortcuts:binding.shortcutBackups});await atomicJson(pointer,binding);return;}
       await copyFile(path.join(binding.root,'scripts/Start-MerchRoute.ps1'),fixedLauncher);
@@ -98,8 +111,7 @@ export async function releaseCommand(command,{root,home,config,options}) {
       if(!health.ok)throw new Error('Read-only health check failed');
       await probeReadOnlyPages(endpoint.origin);
       const about=await (await fetch(endpoint.origin+'/api/v1/about/version',{signal:AbortSignal.timeout(60000)})).json();
-      if(about.current.commitSha!==binding.sourceCommit||about.current.productVersion!==binding.productVersion||about.runtimeStatus!=='CURRENT'
-        ||about.current.runtimeEndpoint?.origin!==endpoint.origin)throw new Error('About identity mismatch');
+      assertAboutIdentity(binding,about);
     },
     accept:async(binding,running)=>{
       const accepted=await readJson(config.acceptedReleaseFile);

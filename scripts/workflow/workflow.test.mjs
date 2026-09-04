@@ -10,7 +10,7 @@ import { atomicJson, git, withCommandLock, registration } from './state.mjs';
 import { developmentEnvironment, blockDevelopmentOutbound, assertPortFree } from './development.mjs';
 import { inventoryRelease, verifyInstalledRelease, digest, gitBlob, safeRelative } from '../lib/installed-release.mjs';
 import { switchRelease } from './release-transaction.mjs';
-import { validateV012Rollover } from './publish.mjs';
+import { validateV012Rollover, validateV013Rollover } from './publish.mjs';
 import { assertNoActivity } from './business-gate.mjs';
 import { validateManifest, compareBranchInventory } from '../verify-release-completeness.mjs';
 import { candidateSnapshot, verifyAcceptedCandidate } from './candidate-acceptance.mjs';
@@ -93,7 +93,7 @@ test('port conflict is an error and never falls through to production',async()=>
 });
 
 async function installedFixture(t){
-  const root=await temporary(t),version='0.1.3',commit='a'.repeat(40),builtAt='2026-09-03T00:00:00.000Z';
+  const root=await temporary(t),version='0.1.4',commit='a'.repeat(40),builtAt='2026-09-03T00:00:00.000Z';
   const data=Buffer.from(JSON.stringify({name:'fixture',version}));await writeFile(path.join(root,'package.json'),data);
   await mkdir(path.join(root,'apps/server/dist'),{recursive:true});
   await atomicJson(path.join(root,'apps/server/dist/build-info.json'),{productVersion:version,commitSha:commit,dirty:false,builtAt});
@@ -103,7 +103,7 @@ async function installedFixture(t){
   return {root,manifest,pin:digest(await readFile(path.join(root,'installed-release.json')))};
 }
 test('Git-free release verification reads actual files and rejects missing/extra/modified files or manifest',async t=>{
-  const {root,pin}=await installedFixture(t);assert.equal((await verifyInstalledRelease(root,pin)).manifest.productVersion,'0.1.3');
+  const {root,pin}=await installedFixture(t);assert.equal((await verifyInstalledRelease(root,pin)).manifest.productVersion,'0.1.4');
   await assert.rejects(verifyInstalledRelease(root),/externally pinned/);
   await writeFile(path.join(root,'rogue.js'),'bad');await assert.rejects(verifyInstalledRelease(root,pin),/undeclared/);await rm(path.join(root,'rogue.js'));
   const bytes=await readFile(path.join(root,'package.json'));await writeFile(path.join(root,'package.json'),'{}');await assert.rejects(verifyInstalledRelease(root,pin),/changed/);await writeFile(path.join(root,'package.json'),bytes);
@@ -146,6 +146,16 @@ test('v0.1.2 rollover requires the exact merged PR, final release and accepted t
   assert.equal(validateV012Rollover(previous,input).status,'PUBLISHED_NOT_ACTIVATED');
   assert.throws(()=>validateV012Rollover(previous,{...input,oldPublishedTree:'d'.repeat(40)}),/not aligned/);
   assert.throws(()=>validateV012Rollover({...previous,number:25},input),/outside the approved/);
+});
+
+test('v0.1.3 rollover requires PR #27, the immutable final release and the exact accepted tree',()=>{
+  const previous={number:27,sourceCommit:'360bc9557df5c902af6da0d3d048bde7f0029c51',publicCommit:'a'.repeat(40),tree:'b'.repeat(40)};
+  const input={main:'c'.repeat(40),baseTree:previous.tree,oldPr:{merged:true,state:'closed',base:{ref:'main'},head:{sha:previous.publicCommit}},oldRelease:{draft:false,prerelease:false,tag_name:'v0.1.3'},oldPublishedTree:previous.tree};
+  const rollover=validateV013Rollover(previous,input);
+  assert.equal(rollover.status,'PUBLISHED_NOT_ACTIVATED');
+  assert.equal(rollover.reason,'RELEASE_TOOL_PRE_STOP_PAYLOAD_BUG');
+  assert.throws(()=>validateV013Rollover(previous,{...input,oldRelease:{...input.oldRelease,tag_name:'v0.1.4'}}),/not aligned/);
+  assert.throws(()=>validateV013Rollover({...previous,number:26},input),/outside the approved/);
 });
 
 test('isolated PostgreSQL installs pg_trgm before parallel integration workers start',async()=>{
