@@ -1,10 +1,12 @@
 import type { ServerResponse } from 'node:http';
-import type { MediaIndexState } from '@n8n-media-review/shared';
+import type { MediaIndexState, StageSummary } from '@n8n-media-review/shared';
 
 export type MediaIndexEvent = {
   type: 'connected' | 'index-changed' | 'review-state-changed';
   stageId?: string;
   state?: MediaIndexState;
+  summary?: StageSummary;
+  affectedTaskIds?: string[];
   reason?: string;
   at: string;
 };

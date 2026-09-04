@@ -248,6 +248,22 @@ test.describe.serial('v002 review and delivery', () => {
     await expect(page).toHaveURL(/\/task\/[a-f0-9]+$/);
   });
 
+  test('opens a stable E005 workbench without duplicate stage, task or operation requests', async ({ page }) => {
+    const counts = { stages: 0, tasks: 0, operations: 0 };
+    page.on('request', (request) => {
+      const url = new URL(request.url());
+      if (url.pathname === '/api/v1/stages') counts.stages += 1;
+      if (url.pathname === '/api/v1/stages/E005/tasks') counts.tasks += 1;
+      if (url.pathname === '/api/v1/review-operations') counts.operations += 1;
+    });
+
+    await page.goto('/review/E005', { waitUntil: 'domcontentloaded' });
+    await expect(page.getByRole('radio', { name: '表格' })).toBeChecked();
+    await page.waitForTimeout(1_200);
+
+    expect(counts).toEqual({ stages: 1, tasks: 1, operations: 1 });
+  });
+
   test('keeps stage configuration and workflow parameter pages independent', async ({ page }) => {
     await page.goto('/settings');
     await expect(page.locator('.page-title').getByRole('button', { name: '导出配置' })).toBeVisible();

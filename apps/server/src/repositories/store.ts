@@ -24,6 +24,7 @@ export class StateStore {
   private identityFingerprint = '';
   private statusCache?: Map<string, ReviewStatus>;
   private reviewIndex = new Map<string, ReviewRecord>();
+  private serializedSections = new Map<Section, string>();
   private revision = 0;
   private writeFailure?: Error;
   constructor(
@@ -47,6 +48,7 @@ export class StateStore {
       if (parsed[key] !== undefined && !Array.isArray(parsed[key])) throw new AppError('STATE_STORE_UNAVAILABLE', '审核状态文件结构异常，已停止写入', { section: key }, 503);
     }
     this.data = deepFreeze({ ...structuredClone(EMPTY_DB), ...parsed } as AppDatabase);
+    this.serializedSections = new Map(SECTIONS.map((key) => [key, JSON.stringify(this.data[key])]));
     this.identityFingerprint = identityFingerprint(this.data);
     this.reviewIndex = new Map(this.data.reviews.map((row) => [row.taskId, row]));
   }
@@ -96,18 +98,23 @@ export class StateStore {
       for (const key of sections) (draft as any)[key] = structuredClone(before[key]);
       mutator(draft);
       for (const key of SECTIONS) if (!sections.includes(key) && draft[key] !== before[key]) throw new Error('Undeclared state section: ' + key);
-      const changed = sections.filter((key) => JSON.stringify(draft[key]) !== JSON.stringify(before[key]));
+      const serialized = new Map<Section, string>();
+      const changed = [...new Set(sections)];
+      for (const key of changed) serialized.set(key, JSON.stringify(draft[key]));
       this.assertSubjectsUnlocked(before, draft, changed);
       this.advanceVersions(draft, before, changed);
       const nextFingerprint = changed.some((key) => key === 'reviews' || key === 'submissionHistory') ? identityFingerprint(draft) : this.identityFingerprint;
       const aliases = nextFingerprint === this.identityFingerprint ? this.aliases : this.buildAliases(draft);
-      for (const key of changed) this.canonicalizeRead(draft[key]);
+      for (const key of changed) {
+        this.canonicalizeRead(draft[key]);
+        serialized.set(key, JSON.stringify(draft[key]));
+      }
       const stageIds = changedStages(before, draft, changed);
       if ((draft.reviewOperations?.length || draft.deliveryCheckpoints?.length || draft.deliveryOutbox?.length) && draft.schemaVersion === '1.0') {
         await copyFile(this.file, path.join(this.appDataDir, 'db.before-review-operations-v1.json'), 1).catch((error: any) => { if (error?.code !== 'EEXIST') throw error; });
         draft.schemaVersion = '1.1';
       }
-      try { await this.write(draft); this.writeFailure = undefined; }
+      try { await this.write(draft, serialized); this.writeFailure = undefined; }
       catch (error) { this.writeFailure = error as Error; throw error; }
       this.data = deepFreeze(draft);
       if (changed.includes('reviews')) this.reviewIndex = new Map(this.data.reviews.map((row) => [row.taskId, row]));
@@ -189,7 +196,14 @@ export class StateStore {
       }
     }
   }
-  private async write(value: AppDatabase): Promise<void> { await (this.options.write || atomicWriteWithRetry)(this.file, JSON.stringify(value, null, 2) + '\n'); }
+  private async write(value: AppDatabase, changed = new Map<Section, string>()): Promise<void> {
+    const next = new Map(this.serializedSections);
+    for (const key of SECTIONS) if (!next.has(key)) next.set(key, JSON.stringify(value[key]));
+    for (const [key, serialized] of changed) next.set(key, serialized);
+    const content = `{"schemaVersion":${JSON.stringify(value.schemaVersion)},${SECTIONS.map((key) => `${JSON.stringify(key)}:${next.get(key)}`).join(',')}}\n`;
+    await (this.options.write || atomicWriteWithRetry)(this.file, content);
+    this.serializedSections = next;
+  }
 }
 export const operationIsActive = (operation: ReviewOperation): boolean => ['QUEUED', 'RUNNING', 'RETRY_WAIT', 'NEEDS_ATTENTION'].includes(operation.status);
 function identityFingerprint(data: AppDatabase): string {

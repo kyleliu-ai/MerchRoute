@@ -576,7 +576,17 @@ export type ReviewOperation = {
   attempt: number;
   nextAttemptAt?: string;
   result?: unknown;
+  metrics?: ReviewOperationMetrics;
   error?: { code: string; message: string; statusCode?: number; details?: unknown };
+};
+
+export type ReviewOperationMetrics = {
+  queueMs?: number;
+  executionMs?: number;
+  totalMs?: number;
+  fileCount?: number;
+  totalBytes?: number;
+  phases?: Record<string, number>;
 };
 
 export type ReviewOperationProgress = {

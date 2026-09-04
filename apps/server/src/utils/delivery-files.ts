@@ -9,6 +9,9 @@ import { AppError } from '@n8n-media-review/shared';
 
 // Shared by all batches and both terminal platforms in this process.
 export const deliveryIoLimit = pLimit(2);
+// Bound independent file work across deliveries so small-file batches can
+// overlap fsync/readback without flooding the disk or real-time scanner.
+export const deliveryFileIoLimit = pLimit(2);
 export type FileReceipt = { relativePath: string; sizeBytes: number; sha256: string };
 
 export async function fileHash(file: string): Promise<string> {
@@ -27,7 +30,18 @@ export async function syncDirectory(directory: string): Promise<void> {
   const handle = await open(directory, 'r');
   try { await handle.sync(); } finally { await handle.close(); }
 }
-export async function copyVerified(source: string, destination: string, progress?: (bytes: number) => void): Promise<FileReceipt> {
+export async function syncTreeDirectories(root: string): Promise<void> {
+  const walk = async (directory: string): Promise<void> => {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      if (entry.isSymbolicLink()) throw new AppError('VERIFY_FAILED', '交付包中不允许符号链接');
+      if (entry.isDirectory()) await walk(path.join(directory, entry.name));
+    }
+    await syncDirectory(directory);
+  };
+  await walk(root);
+}
+export type CopyVerifiedOptions = { deferDestinationReadback?: boolean };
+export async function copyVerified(source: string, destination: string, progress?: (bytes: number) => void, options: CopyVerifiedOptions = {}): Promise<FileReceipt> {
   const before = await lstat(source);
   if (!before.isFile() || before.isSymbolicLink() || before.size <= 0) throw new AppError('SOURCE_FILE_MISSING', '来源必须是非空普通文件');
   await mkdir(path.dirname(destination), { recursive: true });
@@ -38,27 +52,28 @@ export async function copyVerified(source: string, destination: string, progress
   await syncFile(destination);
   const after = await lstat(source);
   const sha256 = hash.digest('hex');
-  if (before.size !== bytes || before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ino !== after.ino || sha256 !== await fileHash(destination)) {
+  if (before.size !== bytes || before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ino !== after.ino
+    || (!options.deferDestinationReadback && sha256 !== await fileHash(destination))) {
     throw new AppError('FILE_CHANGED', '拷贝期间来源发生变化或复制校验失败');
   }
   return { relativePath: path.basename(destination), sizeBytes: bytes, sha256 };
 }
 export async function treeReceipts(root: string, flush = false): Promise<FileReceipt[]> {
-  const files: FileReceipt[] = [];
-  const walk = async (directory: string): Promise<void> => {
-    for (const entry of (await readdir(directory, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
+  const walk = async (directory: string): Promise<FileReceipt[]> => {
+    const results = await settleAll((await readdir(directory, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name)).map(async (entry) => {
       const file = path.join(directory, entry.name);
       if (entry.isSymbolicLink()) throw new AppError('VERIFY_FAILED', '交付包中不允许符号链接');
-      if (entry.isDirectory()) await walk(file);
-      else if (entry.isFile()) {
+      if (entry.isDirectory()) return walk(file);
+      if (!entry.isFile()) throw new AppError('VERIFY_FAILED', '交付包包含不支持的文件类型');
+      return deliveryFileIoLimit(async () => {
         if (flush) await syncFile(file);
-        files.push({ relativePath: path.relative(root, file).split(path.sep).join('/'), sizeBytes: (await lstat(file)).size, sha256: await fileHash(file) });
-      } else throw new AppError('VERIFY_FAILED', '交付包包含不支持的文件类型');
-    }
+        return [{ relativePath: path.relative(root, file).split(path.sep).join('/'), sizeBytes: (await lstat(file)).size, sha256: await fileHash(file) }];
+      });
+    }));
     if (flush) await syncDirectory(directory);
+    return results.flat();
   };
-  await walk(root);
-  return files;
+  return walk(root);
 }
 export async function verifyTree(root: string, expected: FileReceipt[]): Promise<boolean> {
   try { return JSON.stringify(await treeReceipts(root)) === JSON.stringify(expected); }
@@ -76,4 +91,11 @@ export async function withDeliveryNamespace<T>(namespace: string, action: () => 
   const run = previous.catch(() => undefined).then(action);
   namespaceTails.set(key, run);
   try { return await run; } finally { if (namespaceTails.get(key) === run) namespaceTails.delete(key); }
+}
+
+async function settleAll<T>(promises: Promise<T>[]): Promise<T[]> {
+  const results = await Promise.allSettled(promises);
+  const failure = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+  if (failure) throw failure.reason;
+  return results.map((result) => (result as PromiseFulfilledResult<T>).value);
 }

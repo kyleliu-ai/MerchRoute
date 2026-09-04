@@ -231,71 +231,44 @@ function useMediaIndexEvents(): void {
   const client = useQueryClient();
   useEffect(() => {
     let connected = false;
-    let quickInvalidationTimer: number | undefined;
-    let settledIndexTimer: number | undefined;
-    const invalidateConsumers = () => {
-      void client.invalidateQueries({ queryKey: STAGES_QUERY_KEY });
-      void client.invalidateQueries({ queryKey: ['tasks'] });
-      void client.invalidateQueries({ queryKey: ['task'] });
-    };
-    const scheduleQuickInvalidation = () => {
-      if (settledIndexTimer !== undefined) {
-        window.clearTimeout(settledIndexTimer);
-        settledIndexTimer = undefined;
-      }
-      if (quickInvalidationTimer !== undefined) window.clearTimeout(quickInvalidationTimer);
-      quickInvalidationTimer = window.setTimeout(() => {
-        quickInvalidationTimer = undefined;
-        invalidateConsumers();
-      }, 100);
-    };
-    const scheduleSettledIndexInvalidation = (snapshot: StagesResponse | undefined) => {
-      if (settledIndexTimer !== undefined) window.clearTimeout(settledIndexTimer);
-      settledIndexTimer = undefined;
-      if (!snapshot) return;
-      const activeStages = snapshot.stages.filter((stage) => stage.enabled && stage.reviewEnabled);
-      const settled = activeStages.length > 0 && activeStages.every((stage) => stage.index
-        && !['WARMING', 'REFRESHING'].includes(stage.index.status)
-        && stage.index.pendingReconciliations === 0);
-      if (!settled) return;
-      if (quickInvalidationTimer !== undefined) {
-        window.clearTimeout(quickInvalidationTimer);
-        quickInvalidationTimer = undefined;
-      }
-      settledIndexTimer = window.setTimeout(() => {
-        settledIndexTimer = undefined;
-        invalidateConsumers();
-      }, 500);
+    let invalidationTimer: number | undefined;
+    const pendingStages = new Set<string>();
+    const scheduleTaskInvalidation = (stageId: string) => {
+      pendingStages.add(stageId);
+      if (invalidationTimer !== undefined) window.clearTimeout(invalidationTimer);
+      invalidationTimer = window.setTimeout(() => {
+        invalidationTimer = undefined;
+        for (const id of pendingStages) void client.invalidateQueries({ queryKey: ['tasks', id] });
+        pendingStages.clear();
+      }, 400);
     };
     const disconnect = api.connectMediaIndexEvents({
-      onOpen: () => {
-        if (connected) return;
-        connected = true;
-        scheduleQuickInvalidation();
-      },
+      onOpen: () => { connected = true; },
       onError: () => { connected = false; },
-      onState: ({ type, stageId, state }) => {
-        const updated = client.setQueryData<StagesResponse>(STAGES_QUERY_KEY, (current) => current ? {
+      onState: ({ type, stageId, state, summary, affectedTaskIds }) => {
+        client.setQueryData<StagesResponse>(STAGES_QUERY_KEY, (current) => current ? {
           ...current,
-          stages: current.stages.map((stage) => stage.id === stageId ? { ...stage, index: state } : stage)
+          stages: current.stages.map((stage) => stage.id === stageId ? { ...stage, index: state, ...(summary ? { summary } : {}) } : stage)
         } : current);
-        if (type === 'index-changed') scheduleSettledIndexInvalidation(updated);
-        else scheduleQuickInvalidation();
+        for (const taskId of affectedTaskIds || []) void client.invalidateQueries({ queryKey: ['task', taskId] });
+        if (type === 'review-state-changed' || (!['WARMING', 'REFRESHING'].includes(state.status) && state.pendingReconciliations === 0)) scheduleTaskInvalidation(stageId);
       }
     });
     const handleVisibility = () => {
-      if (document.visibilityState === 'visible' && !connected) scheduleQuickInvalidation();
+      if (document.visibilityState === 'visible' && !connected) void client.invalidateQueries({ queryKey: STAGES_QUERY_KEY });
     };
     document.addEventListener('visibilitychange', handleVisibility);
     const fallbackPoll = window.setInterval(() => {
-      if (document.visibilityState === 'visible' && !connected) scheduleQuickInvalidation();
+      if (document.visibilityState === 'visible' && !connected) {
+        void client.invalidateQueries({ queryKey: STAGES_QUERY_KEY });
+        void client.invalidateQueries({ queryKey: ['tasks'] });
+      }
     }, 30_000);
     return () => {
       disconnect();
       document.removeEventListener('visibilitychange', handleVisibility);
       window.clearInterval(fallbackPoll);
-      if (quickInvalidationTimer !== undefined) window.clearTimeout(quickInvalidationTimer);
-      if (settledIndexTimer !== undefined) window.clearTimeout(settledIndexTimer);
+      if (invalidationTimer !== undefined) window.clearTimeout(invalidationTimer);
     };
   }, [client]);
 }
@@ -1259,17 +1232,19 @@ function ReviewDetail() {
 
 function PendingPage() {
   const client = useQueryClient();
-  const query = useQuery({ queryKey: ['pending'], queryFn: api.pending });
+  const [page, setPage] = useState(1);
+  const query = useQuery({ queryKey: ['pending', page], queryFn: () => api.pending(page, 20) });
   const workflowShortcuts = useWorkflowShortcutData();
   const [selected, setSelected] = useState<React.Key[]>([]);
+  const [selectedVersions, setSelectedVersions] = useState<Record<string, number>>({});
   const [policy, setPolicy] = useState<'skip' | 'new-revision'>('new-revision');
   const [parameterRecord, setParameterRecord] = useState<PendingView>();
   const [parameterDraftRows, setParameterDraftRows] = useState<WorkflowParameterDraftRow[]>([]);
   const submit = useMutation({
-    mutationFn: () => api.submitBatch(`BATCH-${crypto.randomUUID()}`, selected.map(String), policy, Object.fromEntries((query.data?.items || []).filter((item) => selected.includes(item.id)).map((item) => [item.id, item.version || 0]))),
-    onSuccess: () => { message.success('投递请求已接收，处理进度会自动更新'); setSelected([]); void client.invalidateQueries({ queryKey: ['review-operations'] }); }, onError: (error) => message.error(error.message)
+    mutationFn: () => api.submitBatch(`BATCH-${crypto.randomUUID()}`, selected.map(String), policy, selectedVersions),
+    onSuccess: () => { message.success('投递请求已接收，处理进度会自动更新'); setSelected([]); setSelectedVersions({}); void client.invalidateQueries({ queryKey: ['review-operations'] }); }, onError: (error) => message.error(error.message)
   });
-  const remove = useMutation({ mutationFn: api.deletePending, onSuccess: () => void client.invalidateQueries({ queryKey: ['pending'] }) });
+  const remove = useMutation({ mutationFn: api.deletePending, onSuccess: (_result, id) => { setSelected((current) => current.filter((key) => String(key) !== id)); setSelectedVersions((current) => { const next = { ...current }; delete next[id]; return next; }); void client.invalidateQueries({ queryKey: ['pending'] }); } });
   const parameterDefaults = useQuery({ queryKey: ['workflow-parameters', parameterRecord?.targetStageId], queryFn: () => api.workflowParameters(parameterRecord!.targetStageId), enabled: Boolean(parameterRecord) });
   const saveParameters = useMutation({
     mutationFn: ({ parameters, parameterOptions }: { parameters: WorkflowParameters; parameterOptions: WorkflowParameterOptions }) => api.updatePending(parameterRecord!.id, { n8nTaskParameters: parameters, n8nTaskParameterOptions: parameterOptions }),
@@ -1288,8 +1263,10 @@ function PendingPage() {
   const items = query.data?.items || [];
   const enabledItems = items.filter((item) => !item.disabledReason && item.status !== 'PACKAGING');
   useEffect(() => {
+    const currentPageIds = new Set(items.map((item) => item.id));
     const enabledIds = new Set(enabledItems.map((item) => item.id));
-    setSelected((current) => current.filter((key) => enabledIds.has(String(key))));
+    setSelected((current) => current.filter((key) => !currentPageIds.has(String(key)) || enabledIds.has(String(key))));
+    if (query.data && page > 1 && (page - 1) * 20 >= query.data.total) setPage(Math.max(1, Math.ceil(query.data.total / 20)));
   }, [query.data]);
   const targetStage = workflowShortcuts.stageDefinitions.find((stage) => stage.id === parameterRecord?.targetStageId);
   const columns = [
@@ -1308,7 +1285,7 @@ function PendingPage() {
       <WorkflowShortcuts context="pending" data={workflowShortcuts} />
     </div>
     <Card className="batch-toolbar"><Flex justify="space-between" align="center" wrap gap={12}><Space><Text strong>已选择 {selected.length} 项</Text><Select value={policy} onChange={setPolicy} options={[{ value: 'skip', label: '目标重名：跳过' }, { value: 'new-revision', label: '目标重名：创建修订版本' }]} /></Space><Button type="primary" icon={<CloudUploadOutlined />} disabled={!selected.length || submit.isPending} loading={submit.isPending} onClick={() => submit.mutate()}>批量投递</Button></Flex></Card>
-    <Table rowKey="id" loading={query.isLoading} dataSource={items} columns={columns} rowClassName={(record) => record.disabledReason ? 'pending-stage-disabled' : ''} rowSelection={{ selectedRowKeys: selected, onChange: setSelected, getCheckboxProps: (record) => ({ disabled: Boolean(record.disabledReason) || record.status === 'PACKAGING', title: record.disabledReason }) }} scroll={{ x: 1180 }} />
+    <Table rowKey="id" loading={query.isLoading} dataSource={items} columns={columns} rowClassName={(record) => record.disabledReason ? 'pending-stage-disabled' : ''} pagination={{ current: page, pageSize: 20, total: query.data?.total || 0, showSizeChanger: false, onChange: setPage }} rowSelection={{ selectedRowKeys: selected, preserveSelectedRowKeys: true, onChange: (keys) => { setSelected(keys); const selectedIds = new Set(keys.map(String)); setSelectedVersions((current) => { const next = Object.fromEntries(Object.entries(current).filter(([id]) => selectedIds.has(id))); for (const item of items) if (selectedIds.has(item.id)) next[item.id] = item.version || 0; return next; }); }, getCheckboxProps: (record) => ({ disabled: Boolean(record.disabledReason) || record.status === 'PACKAGING', title: record.disabledReason }) }} scroll={{ x: 1180 }} />
     <Modal
       className="task-parameter-modal"
       width={760}
@@ -1336,6 +1313,7 @@ function PendingPage() {
 
 function HistoryPage() {
   const client = useQueryClient();
+  const [page, setPage] = useState(1);
   const [skuDraft, setSkuDraft] = useState('');
   const [datePresetDraft, setDatePresetDraft] = useState<SubmissionHistoryDatePreset>('ALL');
   const [customDateRangeDraft, setCustomDateRangeDraft] = useState<SubmissionHistoryDateRange>(null);
@@ -1343,7 +1321,7 @@ function HistoryPage() {
   const [appliedDateLabel, setAppliedDateLabel] = useState<string>();
   const [queryRevision, setQueryRevision] = useState(0);
   const [filterError, setFilterError] = useState<string>();
-  const query = useQuery({ queryKey: ['history', appliedFilters, queryRevision], queryFn: () => api.history(appliedFilters), retry: false });
+  const query = useQuery({ queryKey: ['history', appliedFilters, page, queryRevision], queryFn: () => api.history(appliedFilters, page, 20), retry: false });
   const workflowShortcuts = useWorkflowShortcutData();
   const retry = useMutation({ mutationFn: api.retry, onSuccess: () => { message.success('重试请求已接收，请查看处理进度'); void client.invalidateQueries({ queryKey: ['history'] }); void client.invalidateQueries({ queryKey: ['pending'] }); }, onError: (error) => message.error(error.message) });
   const applyHistoryFilters = () => {
@@ -1361,6 +1339,7 @@ function HistoryPage() {
     setFilterError(undefined);
     setAppliedFilters({ ...(sku ? { sku } : {}), ...dateBounds });
     setAppliedDateLabel(submissionHistoryDateLabel(datePresetDraft, customDateRangeDraft));
+    setPage(1);
     setQueryRevision((current) => current + 1);
   };
   const clearHistoryFilters = () => {
@@ -1370,6 +1349,7 @@ function HistoryPage() {
     setFilterError(undefined);
     setAppliedFilters({});
     setAppliedDateLabel(undefined);
+    setPage(1);
     setQueryRevision((current) => current + 1);
   };
   const hasAppliedFilters = Boolean(appliedFilters.sku || appliedFilters.completedFrom || appliedFilters.completedTo);
@@ -1416,11 +1396,11 @@ function HistoryPage() {
       <Button aria-label="查询" type="primary" onClick={applyHistoryFilters}>查询</Button>
       <Button disabled={!canClearFilters} onClick={clearHistoryFilters}>清除筛选</Button>
       <Text className="history-filter-summary" type={filterError ? 'danger' : 'secondary'} role={filterError ? 'alert' : undefined}>
-        {filterError || <>{appliedFilters.sku && <>SKU <span className="mono-badge">{appliedFilters.sku}</span> · </>}{appliedDateLabel && <>完成日期 {appliedDateLabel} · </>}共 {query.data?.items.length || 0} 条记录</>}
+        {filterError || <>{appliedFilters.sku && <>SKU <span className="mono-badge">{appliedFilters.sku}</span> · </>}{appliedDateLabel && <>完成日期 {appliedDateLabel} · </>}共 {query.data?.total || 0} 条记录</>}
       </Text>
     </Flex></Card>
     {query.isError && <Alert type="error" showIcon message="投递历史加载失败" description={query.error.message} action={<Button size="small" onClick={() => void query.refetch()}>重新加载</Button>} />}
-    <Table rowKey="submissionId" loading={query.isFetching} dataSource={query.data?.items || []} locale={{ emptyText: hasAppliedFilters ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={appliedFilters.sku && !appliedDateLabel ? `SKU ${appliedFilters.sku} 暂无投递记录` : '当前筛选条件暂无投递记录'} /> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无投递记录" /> }} expandable={{ expandedRowRender: (record) => <Descriptions bordered size="small" column={1} items={[
+    <Table rowKey="submissionId" loading={query.isFetching} dataSource={query.data?.items || []} pagination={{ current: page, pageSize: 20, total: query.data?.total || 0, showSizeChanger: false, onChange: setPage }} locale={{ emptyText: hasAppliedFilters ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={appliedFilters.sku && !appliedDateLabel ? `SKU ${appliedFilters.sku} 暂无投递记录` : '当前筛选条件暂无投递记录'} /> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无投递记录" /> }} expandable={{ expandedRowRender: (record) => <Descriptions bordered size="small" column={1} items={[
       { key: 'identity', label: '最终产品身份', children: record.productSku ? `${record.productSku} · ${record.productNameSnapshot || '历史名称缺失'}${record.variantName ? ` · ${record.variantName}` : ''}` : '旧记录未保存' }, { key: 'source', label: '来源目录', children: record.sourceFolder }, { key: 'target', label: '目标目录', children: record.targetFolder || '未生成' }, { key: 'archive', label: '审核归档', children: record.archiveFolder || '未生成' },
       { key: 'error', label: '失败信息', children: record.errorCode ? `${record.errorCode}: ${record.errorMessage}` : '无' }
     ]} /> }} columns={[

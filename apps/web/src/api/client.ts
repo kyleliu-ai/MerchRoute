@@ -52,6 +52,7 @@ import type {
   ShippingCalculationInput,
   ShippingTemplateDefinitionV1,
   ShippingVersionStatus,
+  StageSummary,
   StageView,
   SubmissionBatchRecord,
   SubmissionRecord,
@@ -854,7 +855,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   return data as T;
 }
 
-export type MediaIndexEventPayload = { type?: string; stageId: string; state: MediaIndexState; at?: string };
+export type MediaIndexEventPayload = { type?: string; stageId: string; state: MediaIndexState; summary?: StageSummary; affectedTaskIds?: string[]; at?: string };
 type MediaIndexStateWire = Omit<MediaIndexState, 'revision'> & { revision?: unknown };
 type StageViewWire = Omit<StageView, 'index'> & { index?: MediaIndexStateWire };
 type MediaIndexEventPayloadWire = Omit<MediaIndexEventPayload, 'state'> & { state: MediaIndexStateWire };
@@ -948,10 +949,14 @@ async function acceptReviewOperation(url: string, body: unknown, key = stableOpe
   window.dispatchEvent(new Event('merchroute-review-operation-accepted'));
   return result;
 }
-export function connectReviewOperationEvents(onState: () => void, onError: () => void): () => void {
+export function connectReviewOperationEvents(onState: (operation: ReviewOperationView) => void, onOpen: () => void, onError: () => void): () => void {
   if (typeof EventSource === 'undefined') { onError(); return () => undefined; }
   const source = new EventSource('/api/v1/review-operations/events');
-  source.addEventListener('review-operation', onState);
+  source.addEventListener('review-operation', (event) => {
+    try { onState(JSON.parse((event as MessageEvent<string>).data) as ReviewOperationView); }
+    catch { onError(); }
+  });
+  source.addEventListener('open', onOpen);
   source.onerror = onError;
   return () => source.close();
 }
@@ -1021,7 +1026,7 @@ export const api = {
   saveDraft: (taskId: string, selectedRelativePaths: string[], selectedTargets: string[], variantSelectionGroups?: VariantSelectionGroup[]) => request(`/api/v1/tasks/${taskId}/draft`, { method: 'PUT', body: JSON.stringify({ selectedRelativePaths, selectedTargets, variantSelectionGroups }) }),
   approve: (taskId: string, selectedRelativePaths: string[], targetStageIds: string[], variantSelectionGroups?: VariantSelectionGroup[], expectedVersion?: number) => acceptReviewOperation(`/api/v1/tasks/${taskId}/approve`, { selectedRelativePaths, targetStageIds, variantSelectionGroups, expectedVersion }),
   reopen: (taskId: string) => request(`/api/v1/tasks/${taskId}/reopen`, { method: 'POST' }),
-  pending: () => request<{ items: PendingView[] }>('/api/v1/pending-submissions'),
+  pending: (page = 1, pageSize = 20) => request<{ items: PendingView[]; total: number; page: number; pageSize: number }>(`/api/v1/pending-submissions?page=${page}&pageSize=${pageSize}`),
   updatePending: (id: string, patch: { conflictPolicy?: PendingSubmission['conflictPolicy']; n8nTaskParameters?: WorkflowParameters; n8nTaskParameterOptions?: WorkflowParameterOptions }) => request(`/api/v1/pending-submissions/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   deletePending: (id: string) => request(`/api/v1/pending-submissions/${id}`, { method: 'DELETE' }),
   submitBatch: (_batchId: string, ids: string[], conflictPolicy: PendingSubmission['conflictPolicy'], expectedVersions?: Record<string, number>) => {
@@ -1029,16 +1034,18 @@ export const api = {
     return acceptReviewOperation('/api/v1/submissions/batch', { batchId: 'BATCH-' + key, pendingSubmissionIds: ids, conflictPolicy, expectedVersions }, key);
   },
   batch: (batchId: string) => request<SubmissionBatchRecord>(`/api/v1/submissions/batches/${batchId}`),
-  history: (filters: SubmissionHistoryQuery = {}) => {
+  history: (filters: SubmissionHistoryQuery = {}, page = 1, pageSize = 20) => {
     const params = new URLSearchParams();
     if (filters.sku) params.set('sku', filters.sku);
     if (filters.completedFrom) params.set('completedFrom', filters.completedFrom);
     if (filters.completedTo) params.set('completedTo', filters.completedTo);
+    params.set('page', String(page));
+    params.set('pageSize', String(pageSize));
     const query = params.toString();
-    return request<{ items: SubmissionRecord[] }>(`/api/v1/submissions/history${query ? `?${query}` : ''}`);
+    return request<{ items: SubmissionRecord[]; total: number; page: number; pageSize: number }>(`/api/v1/submissions/history${query ? `?${query}` : ''}`);
   },
   retry: (submissionId: string) => acceptReviewOperation(`/api/v1/submissions/${submissionId}/retry`, {}),
-  reviewOperations: () => request<{ items: ReviewOperationView[] }>('/api/v1/review-operations?active=false'),
+  reviewOperations: () => request<{ items: ReviewOperationView[] }>('/api/v1/review-operations?active=true&includeRecent=1'),
   retryReviewOperation: (operationId: string) => acceptReviewOperation(`/api/v1/review-operations/${operationId}/retry`, {}, crypto.randomUUID()),
   thumbnailCache: () => request<{ count: number; bytes: number }>('/api/v1/settings/thumbnail-cache'),
   clearThumbnailCache: () => request<{ removed: number }>('/api/v1/settings/thumbnail-cache', { method: 'DELETE' }),
