@@ -36,6 +36,10 @@ export async function withTestPostgres(action) {
     let ready=false;
     for(let attempt=0;attempt<60;attempt++){try{docker(['exec',id,'pg_isready','-U','merchroute_ci','-d','merchroute_ci_test']);ready=true;break;}catch{await new Promise(resolve=>setTimeout(resolve,500));}}
     if(!ready)throw new Error('Isolated PostgreSQL did not become ready');
+    // Parallel repository suites may otherwise race on PostgreSQL's extension
+    // catalog even when every migration uses CREATE EXTENSION IF NOT EXISTS.
+    // Install the shared extension once before any test worker is started.
+    docker(['exec',id,'psql','-U','merchroute_ci','-d','merchroute_ci_test','-v','ON_ERROR_STOP=1','-c','CREATE EXTENSION IF NOT EXISTS pg_trgm']);
     docker(['exec',id,'psql','-U','merchroute_ci','-d','merchroute_ci_test','-v','ON_ERROR_STOP=1','-c',"CREATE DATABASE merchroute_ci_cleanup_test TEMPLATE template0 ENCODING 'UTF8' LOCALE_PROVIDER icu ICU_LOCALE 'und'"]);
     const state=JSON.parse(docker(['inspect',id]))[0];
     const port=state.NetworkSettings.Ports['5432/tcp'][0].HostPort;

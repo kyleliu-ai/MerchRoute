@@ -147,6 +147,13 @@ test('v0.1.2 rollover requires the exact merged PR, final release and accepted t
   assert.throws(()=>validateV012Rollover(previous,{...input,oldPublishedTree:'d'.repeat(40)}),/not aligned/);
   assert.throws(()=>validateV012Rollover({...previous,number:25},input),/outside the approved/);
 });
+
+test('isolated PostgreSQL installs pg_trgm before parallel integration workers start',async()=>{
+  const source=await readFile(path.join(import.meta.dirname,'verify.mjs'),'utf8');
+  const extension=source.indexOf("CREATE EXTENSION IF NOT EXISTS pg_trgm");
+  const action=source.indexOf("return await action(");
+  assert.ok(extension>0&&action>extension,'pg_trgm must be installed before test workers receive the database URL');
+});
 test('historical audit retains thirty source branches and thirteen feature groups without fake local refs',async()=>{
   const root=path.resolve(import.meta.dirname,'../..');const manifest=JSON.parse(await readFile(path.join(root,'config/release-features.json'))),historical=await readFile(path.join(root,manifest.historicalAudit.path));
   assert.equal(digest(historical),manifest.historicalAudit.sha256);const audit=JSON.parse(historical);
