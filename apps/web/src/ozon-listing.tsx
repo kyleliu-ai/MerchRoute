@@ -2485,6 +2485,7 @@ function ListingEditor({ context, onClose, onChanged }: { context?: OzonListingE
             <Alert showIcon type="info" message="公共素材任务" description="这里只维护 MerchRoute 产品变体、可共享详情、图片、视频及顺序。类目、标题、属性、价格、VAT、包装、规格、库存和 Offer 由所选店铺的默认预设生成，并在发布计划中冻结。" />
             <OzonSourceMediaCleanupStatus summary={listingSourceMediaCleanup} />
             <Form.Item name="descriptionRu" label={<Flex align="center" justify="space-between" gap={12} wrap="wrap"><span>共享俄文商品详情</span><Button size="small" icon={<FileTextOutlined />} disabled={immutable} onClick={() => descriptionFileRef.current?.click()}>导入 UTF-8 TXT</Button><input ref={descriptionFileRef} hidden type="file" accept=".txt,text/plain" onChange={(event) => void importDescriptionFile(event.target.files?.[0])} /></Flex>} rules={[{ validator: ozonOptionalDescriptionContentValidator }]} extra="各产品变体可维护独立详情；留空时继承这里的共享详情。"><Input.TextArea maxLength={OZON_DESCRIPTION_MAX_LENGTH} showCount autoSize={{ minRows: 5, maxRows: 12 }} onChange={() => userTouchedInitializationFields.current.add('descriptionRu')} /></Form.Item>
+            <OzonDescriptionWarningAlerts warnings={item.data.descriptionWarnings} />
           </Card>}
 
           {mediaSuggestionReport && (mediaSuggestionReport.changed || mediaSuggestionReport.warnings.length > 0) && <Alert
