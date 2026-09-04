@@ -6,6 +6,8 @@ import {
   AppError,
   OZON_CONTENT_POLICY_V2,
   OZON_CONTENT_POLICY_VERSION,
+  ozonPreparationManualSuccessReconcileInputSchema,
+  ozonPreparationManualSuccessReconcilePlanInputSchema,
   ozonPreparationRecheckInputSchema,
   ozonPreparationRecheckPlanInputSchema,
   projectOzonPresetRequiredAttributeCoverage,
@@ -16,6 +18,8 @@ import {
   type OzonListingDraft,
   type OzonMediaAsset,
   type OzonPreparationRecoveryCapability,
+  type OzonPreparationManualSuccessReconcilePlan,
+  type OzonPreparationManualSuccessReconcileTarget,
   type OzonPreset,
   type OzonPublishJob,
   type PricingCalculationItem,
@@ -110,7 +114,7 @@ type OzonVariantPublicationScope = {
 type CoordinatorOptions = { historyReplay?: DeliveryReplayService; workerIntervalMs?: number; reconciliationIntervalMs?: number; stableProbeMs?: number; concurrency?: number };
 type OzonMultistoreAutoDependencies = {
   storeRepository: Pick<OzonStoreRepository,
-    'completeFanoutPreparation' | 'finalizeMediaFanoutBatch' | 'freezePreparationFanoutPlan' | 'getStore' | 'isFleetCapabilityReady' | 'listEligibleAutoStores' | 'listStores'>;
+    'completeFanoutPreparation' | 'finalizeMediaFanoutBatch' | 'freezePreparationFanoutPlan' | 'getStore' | 'isFleetCapabilityReady' | 'listEligibleAutoStores' | 'listPublications' | 'listStores'>;
   storeService: Pick<OzonStoreService,
     'automaticPublicationPlan' | 'createAutomaticPublications' | 'createAutomaticPublicationsFromFrozenPlan'>;
   /** Narrow, read-only dependency used only by PRE_PLAN recovery evidence. */
@@ -360,6 +364,115 @@ export class OzonAutoPublishingCoordinator {
   list(input: Parameters<OzonRepository['listJobs']>[0]) { return this.repository.listJobs({ ...input, source: 'AUTO' }); }
   get(id: string) { return this.repository.getJob(id, 'AUTO'); }
 
+  private async buildManualSuccessReconcilePlan(
+    job: OzonPublishJob,
+    eligibilityAt = new Date().toISOString()
+  ): Promise<OzonPreparationManualSuccessReconcilePlan> {
+    const blockers: string[] = [];
+    if (job.source !== 'AUTO') blockers.push('TASK_SOURCE_NOT_AUTO');
+    if (job.taskKind !== 'SHARED_PREPARATION') blockers.push('TASK_KIND_NOT_SHARED_PREPARATION');
+    if (!['NEEDS_ATTENTION', 'FAILED'].includes(job.state)) blockers.push('JOB_STATE_NOT_RECONCILABLE');
+    const [listing, database] = await Promise.all([
+      this.repository.getListing(job.sku),
+      this.repository.getAutomaticPreparationRecoveryEvidence(job.id)
+    ]);
+    if (listing.managementSource !== 'MANUAL') blockers.push('LISTING_NOT_MANUAL');
+    const expectedOfferIds = [...new Set(listing.data.offers.map((offer) => offer.offerId).filter(Boolean))].sort();
+    if (!expectedOfferIds.length) blockers.push('CURRENT_LISTING_OFFER_SET_EMPTY');
+    if (database.publicationCount) blockers.push('AUTO_PREPARATION_PUBLICATION_PRESENT');
+    if (database.gatewayRequestCount) blockers.push('AUTO_PREPARATION_GATEWAY_EVIDENCE_PRESENT');
+    if (database.productLinkCount || database.importIntentPresent || database.platformWriteAttempted) {
+      blockers.push('AUTO_PREPARATION_REMOTE_EVIDENCE_PRESENT');
+    }
+    if (database.activeLease || database.activeSlot || database.activeStatusRefresh) blockers.push('AUTO_PREPARATION_LEASE_ACTIVE');
+    if (!this.multistore) blockers.push('MULTISTORE_SERVICE_UNAVAILABLE');
+
+    const [eligibleStores, publications] = this.multistore
+      ? await Promise.all([
+          this.multistore.storeRepository.listEligibleAutoStores(eligibilityAt),
+          this.multistore.storeRepository.listPublications({ sku: job.sku })
+        ])
+      : [[], []];
+    if (!eligibleStores.length) blockers.push('CURRENT_ELIGIBLE_STORE_SET_EMPTY');
+    const targetStores: OzonPreparationManualSuccessReconcileTarget[] = [];
+    for (const store of [...eligibleStores].sort((left, right) => left.id.localeCompare(right.id))) {
+      const publication = publications.find((candidate) => candidate.storeId === store.id
+        && candidate.source === 'MANUAL'
+        && candidate.status === 'SUCCEEDED'
+        && stableJson([...candidate.offerIds].sort()) === stableJson(expectedOfferIds)
+        && candidate.productIds.length === expectedOfferIds.length
+        && candidate.productLinks.length === expectedOfferIds.length
+        && Boolean(candidate.completedAt)
+        && candidate.preparationJobId !== job.id);
+      if (!publication) {
+        blockers.push(`MANUAL_SUCCESS_PUBLICATION_MISSING:${store.id}`);
+        continue;
+      }
+      if (!publication.plannedJobId) {
+        blockers.push(`MANUAL_SUCCESS_JOB_ID_MISSING:${store.id}`);
+        continue;
+      }
+      let manualJob: OzonPublishJob;
+      try {
+        manualJob = await this.repository.getJob(publication.plannedJobId, 'MANUAL');
+      } catch {
+        blockers.push(`MANUAL_SUCCESS_JOB_MISSING:${store.id}`);
+        continue;
+      }
+      const linksComplete = manualJob.ozonProductLinks.length === expectedOfferIds.length
+        && manualJob.ozonProductLinks.every((link) => Boolean(link.ozonProductId && link.url && link.lastVerifiedAt)
+          && link.displayState === 'ON_SALE');
+      if (manualJob.taskKind !== 'STORE_PUBLICATION'
+        || manualJob.state !== 'SUCCEEDED'
+        || manualJob.publicationId !== publication.id
+        || stableJson([...manualJob.offerIds].sort()) !== stableJson(expectedOfferIds)
+        || stableJson(manualJob.ozonProductLinks.map((link) => link.url).sort()) !== stableJson([...publication.productLinks].sort())
+        || !linksComplete) {
+        blockers.push(`MANUAL_SUCCESS_EVIDENCE_MISMATCH:${store.id}`);
+        continue;
+      }
+      targetStores.push({
+        storeId: store.id,
+        storeAlias: store.storeAlias,
+        storeDisplayName: store.displayName,
+        publicationId: publication.id,
+        publicationRowVersion: publication.rowVersion,
+        manualJobId: manualJob.id,
+        manualJobRowVersion: manualJob.rowVersion,
+        offerIds: expectedOfferIds,
+        productLinks: manualJob.ozonProductLinks,
+        completedAt: publication.completedAt!
+      });
+    }
+    if (targetStores.length !== eligibleStores.length) blockers.push('MANUAL_SUCCESS_STORE_SET_INCOMPLETE');
+    const canonical = {
+      schemaVersion: 1,
+      jobId: job.id,
+      jobRowVersion: job.rowVersion,
+      listingRowVersion: listing.rowVersion,
+      listingRevision: listing.revision,
+      expectedOfferIds,
+      targetStores
+    };
+    const planHash = `sha256:${stableHash(canonical)}`;
+    const canReconcileManualSuccess = blockers.length === 0;
+    return {
+      rowVersion: job.rowVersion,
+      listingRowVersion: listing.rowVersion,
+      listingRevision: listing.revision,
+      eligibilityAt,
+      planHash,
+      requestId: deterministicPreparationRequestId(job.id, planHash),
+      targetStores,
+      blockers,
+      canRecheck: false,
+      canManualTakeover: false,
+      canReconcileManualSuccess,
+      recoveryMode: canReconcileManualSuccess ? 'MANUAL_SUCCESS_RECONCILE' : 'READBACK_REQUIRED',
+      ...(!canReconcileManualSuccess ? { blockedReason: blockers.join(',') || 'MANUAL_SUCCESS_RECONCILIATION_NOT_PROVEN' } : {})
+    };
+  }
+
   async preparationTaskDetail(id: string) {
     const job = await this.repository.getJob(id, 'AUTO');
     if (job.taskKind !== 'SHARED_PREPARATION') {
@@ -367,7 +480,12 @@ export class OzonAutoPublishingCoordinator {
     }
     const fanoutPlan = asJsonRecord(job.payload?.fanoutPlan);
     const supersession = asJsonRecord(job.payload?.replanReplacement);
-    const recovery = String(supersession.replacementPreparationJobId || '')
+    const manualSuccessReconcilePlan = ['NEEDS_ATTENTION', 'FAILED'].includes(job.state)
+      ? await this.buildManualSuccessReconcilePlan(job)
+      : undefined;
+    const standardRecovery = manualSuccessReconcilePlan?.canReconcileManualSuccess
+      ? undefined
+      : String(supersession.replacementPreparationJobId || '')
       ? {
           canRecheck: false,
           canManualTakeover: false,
@@ -384,6 +502,14 @@ export class OzonAutoPublishingCoordinator {
           }
         : preparationRecoveryCapability(job, true)
       : (await this.buildPrePlanRecoveryEvidence(job, { proveRemote: false })).capability;
+    const recovery = manualSuccessReconcilePlan?.canReconcileManualSuccess
+      ? {
+          canRecheck: false,
+          canManualTakeover: false,
+          canReconcileManualSuccess: true,
+          recoveryMode: 'MANUAL_SUCCESS_RECONCILE' as const
+        }
+      : { ...standardRecovery!, canReconcileManualSuccess: false };
     const fanoutSummary = job.fanoutSummary || asJsonRecord(job.payload?.fanoutSummary);
     return {
       job,
@@ -400,8 +526,48 @@ export class OzonAutoPublishingCoordinator {
       },
       frozenContract: fanoutPlan,
       recovery,
+      ...(manualSuccessReconcilePlan ? { manualSuccessReconcilePlan } : {}),
       ...(String(supersession.replacementPreparationJobId || '') ? { supersession } : {})
     };
+  }
+
+  async preparationManualSuccessReconcilePlan(id: string, input: unknown) {
+    const parsed = ozonPreparationManualSuccessReconcilePlanInputSchema.safeParse(input);
+    if (!parsed.success) throw new AppError('CONFIG_INVALID', 'OZON 手动成功收口计划缺少 rowVersion', { issues: parsed.error.issues }, 400);
+    const job = await this.repository.getJob(id, 'AUTO');
+    if (job.rowVersion !== parsed.data.rowVersion || job.taskKind !== 'SHARED_PREPARATION') {
+      throw new AppError('TASK_LOCKED', 'OZON 共享准备任务已变化', { id }, 409);
+    }
+    return { plan: await this.buildManualSuccessReconcilePlan(job) };
+  }
+
+  async reconcilePreparationToManualSuccess(id: string, input: unknown) {
+    const parsed = ozonPreparationManualSuccessReconcileInputSchema.safeParse(input);
+    if (!parsed.success) throw new AppError('CONFIG_INVALID', 'OZON 手动成功收口合同无效', { issues: parsed.error.issues }, 400);
+    const job = await this.repository.getJob(id, 'AUTO');
+    if (job.rowVersion !== parsed.data.rowVersion || job.taskKind !== 'SHARED_PREPARATION') {
+      throw new AppError('TASK_LOCKED', 'OZON 共享准备任务已变化', { id }, 409);
+    }
+    const plan = await this.buildManualSuccessReconcilePlan(job);
+    if (!plan.canReconcileManualSuccess) {
+      throw new AppError('OZON_READBACK_REQUIRED', '当前手动发布证据不足，不能收口旧自动任务', {
+        id,
+        blockers: plan.blockers
+      }, 409);
+    }
+    if (plan.planHash !== parsed.data.planHash || plan.requestId !== parsed.data.requestId) {
+      throw new AppError('TASK_LOCKED', 'OZON 手动成功收口证据已变化，请重新读取计划', { id }, 409);
+    }
+    return this.repository.reconcileAutomaticPreparationToManualSuccess({
+      jobId: id,
+      expectedJobRowVersion: plan.rowVersion,
+      expectedListingRowVersion: plan.listingRowVersion,
+      expectedListingRevision: plan.listingRevision,
+      eligibilityAt: plan.eligibilityAt,
+      planHash: plan.planHash,
+      requestId: plan.requestId,
+      targetStores: plan.targetStores
+    });
   }
 
   async preparationMaterialSnapshot(id: string) {

@@ -8,6 +8,7 @@ import {
   OZON_CONTENT_POLICY_VERSION,
   OZON_CONTENT_POLICY_V2,
   OZON_CONTENT_POLICY_V3,
+  OZON_CONTENT_POLICY_V4,
   OZON_SHARED_MATERIAL_HASH_VERSION,
   OZON_TITLE_MAX_LENGTH,
   hasOzonCjk,
@@ -22,6 +23,7 @@ import {
   ozonCompatibleAppendPlanSchema,
   ozonGrossWeightResolutionSchema,
   ozonListingDraftInputSchema,
+  ozonDescriptionWarningSchema,
   ozonListingInitializationSchema,
   ozonOfferSchema,
   ozonPresetInputSchema,
@@ -42,6 +44,7 @@ import {
   findUncoveredOzonPresetRequiredAttributes,
   projectOzonPresetRequiredAttributeCoverage,
   projectOzonSharedMaterialDraft,
+  synchronizeOzonListingDescriptionPolicyWarnings,
   stableOzonOfferId
 } from './ozon.js';
 import {
@@ -114,7 +117,7 @@ describe('OZON shared contracts', () => {
     const result = validateOzonDescription(source);
     expect(OZON_DESCRIPTION_MAX_LENGTH).toBe(6_000);
     expect(OZON_DESCRIPTION_MAX_LENGTH_SOURCE).toBe('MERCHROUTE_SAFE_DEFAULT');
-    expect(OZON_CONTENT_POLICY_VERSION).toBe('merchroute-ozon-content-v3');
+    expect(OZON_CONTENT_POLICY_VERSION).toBe('merchroute-ozon-content-v4');
     expect(result).toMatchObject({ valid: true, normalizedForSubmission: 'Первая строка<br><ul><li>Преимущество</li></ul><br>Вторая строка' });
     expect(normalizeOzonDescriptionForValidation(source)).not.toBe(source);
     expect(validateOzonDescription('Описание<BR/><UL><LI>Пункт</LI></UL>')).toMatchObject({
@@ -126,12 +129,16 @@ describe('OZON shared contracts', () => {
     expect(validateOzonDescription('А'.repeat(OZON_DESCRIPTION_MAX_LENGTH + 1)).issues).toContain('TOO_LONG');
   });
 
-  it('executes frozen v2/v3 imitation rules and fails closed for unknown policy versions', () => {
+  it('executes frozen v2/v3/v4 imitation rules and fails closed for unknown policy versions', () => {
     for (const adjective of ['аналогичный', 'аналогичного', 'аналогичным']) {
       const phrase = `Описание с ${adjective} тисненым рисунком`;
       expect(validateOzonDescription(phrase, OZON_CONTENT_POLICY_V3)).toMatchObject({
         valid: true,
         policyVersion: OZON_CONTENT_POLICY_V3
+      });
+      expect(validateOzonDescription(phrase, OZON_CONTENT_POLICY_V4)).toMatchObject({
+        valid: true,
+        policyVersion: OZON_CONTENT_POLICY_V4
       });
       expect(validateOzonDescription(phrase, OZON_CONTENT_POLICY_V2).issues).toContain('IMITATION_CLAIM');
     }
@@ -163,14 +170,40 @@ describe('OZON shared contracts', () => {
     expect(validateOzonDescription('Описание реплика').issues).toContain('IMITATION_CLAIM');
     expect(validateOzonDescription('Описание\u00A0товара').issues).toContain('HIDDEN_CHARACTER');
     expect(validateOzonDescription('Описание 中文').issues).toContain('CJK');
-    expect(validateOzonDescription('сумка сумка сумка').issues).toContain('KEYWORD_STUFFING');
+    expect(validateOzonDescription('сумка сумка сумка')).toMatchObject({
+      valid: true,
+      issues: [],
+      warnings: expect.arrayContaining(['KEYWORD_STUFFING'])
+    });
     expect(validateOzonDescription('Размеры 20 x 30 x 10 мм').valid).toBe(true);
   });
 
   it('detects dense search mirrors inside a 12-word window without rejecting dispersed normal prose', () => {
-    expect(validateOzonDescription('Сумка сумка сумка').issues).toContain('KEYWORD_STUFFING');
-    expect(validateOzonDescription('Сумка женская через плечо сумка повседневная кожаная сумка').issues)
-      .toContain('KEYWORD_STUFFING');
+    for (const description of [
+      'Сумка сумка сумка',
+      'Сумка женская через плечо сумка повседневная кожаная сумка',
+      'Карман на молнии, открытый накладной карман для мелочей, на задней стенке предусмотрен дополнительный горизонтальный карман'
+    ]) {
+      expect(validateOzonDescription(description, OZON_CONTENT_POLICY_V3)).toMatchObject({
+        valid: false,
+        issues: expect.arrayContaining(['KEYWORD_STUFFING']),
+        warnings: []
+      });
+      expect(validateOzonDescription(description, OZON_CONTENT_POLICY_V4)).toMatchObject({
+        valid: true,
+        issues: [],
+        warnings: expect.arrayContaining(['KEYWORD_STUFFING'])
+      });
+    }
+    expect(ozonDescriptionWarningSchema.parse({
+      code: 'OZON_DESCRIPTION_KEYWORD_STUFFING',
+      fieldPath: 'offers.0.descriptionRu',
+      policyVersion: OZON_CONTENT_POLICY_V4
+    })).toEqual({
+      code: 'OZON_DESCRIPTION_KEYWORD_STUFFING',
+      fieldPath: 'offers.0.descriptionRu',
+      policyVersion: OZON_CONTENT_POLICY_V4
+    });
 
     const dispersed = [
       'Сумка', 'мягкая', 'фактура', 'золотистого', 'оттенка', 'удобные', 'ручки',
@@ -184,6 +217,26 @@ describe('OZON shared contracts', () => {
       valid: false,
       issues: expect.arrayContaining(['KEYWORD_STUFFING'])
     });
+  });
+
+  it('synchronizes the current keyword warning onto shared and variant descriptions', () => {
+    const descriptionRu = 'Карман на молнии, открытый накладной карман для мелочей, на задней стенке предусмотрен дополнительный горизонтальный карман';
+    const synchronized = synchronizeOzonListingDescriptionPolicyWarnings({
+      descriptionRu,
+      descriptionWarnings: [],
+      offers: [{ descriptionRu, descriptionWarnings: [] }]
+    } as any);
+
+    expect(synchronized.descriptionWarnings).toEqual([{
+      code: 'OZON_DESCRIPTION_KEYWORD_STUFFING',
+      fieldPath: 'descriptionRu',
+      policyVersion: OZON_CONTENT_POLICY_V4
+    }]);
+    expect(synchronized.offers[0]!.descriptionWarnings).toEqual([{
+      code: 'OZON_DESCRIPTION_KEYWORD_STUFFING',
+      fieldPath: 'offers.0.descriptionRu',
+      policyVersion: OZON_CONTENT_POLICY_V4
+    }]);
   });
 
   it('deterministically removes CJK fragments and their dangling Russian connector', () => {

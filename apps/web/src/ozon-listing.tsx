@@ -83,6 +83,7 @@ import {
   validateOzonTitle,
   type OzonActiveJobSummary,
   type OzonCategoryAttribute,
+  type OzonDescriptionWarning,
   type OzonJobRecovery,
   type OzonListingDraft,
   type OzonListingDraftInput,
@@ -111,6 +112,7 @@ import {
   type OzonManualJobDetail,
   type OzonPreset,
   type OzonFanoutSummary,
+  type OzonPreparationManualSuccessReconcilePlan,
   type OzonPreparationMaterialSnapshot,
   type OzonPublication,
   type OzonPublicationTaskDetail,
@@ -185,6 +187,25 @@ const ozonOptionalDescriptionContentValidator = async (_rule: unknown, value: un
   if (value === undefined || value === null || value === '') return;
   await ozonDescriptionContentValidator(_rule, value);
 };
+
+function OzonDescriptionWarningAlerts({ warnings }: { warnings?: readonly OzonDescriptionWarning[] }) {
+  const cleanupWarnings = (warnings || []).filter((warning) => warning.code === 'OZON_DESCRIPTION_CJK_REMOVED');
+  const keywordWarnings = (warnings || []).filter((warning) => warning.code === 'OZON_DESCRIPTION_KEYWORD_STUFFING');
+  return <>
+    {!!cleanupWarnings.length && <Alert
+      showIcon
+      type="warning"
+      message="历史详情清理记录"
+      description={`该记录来自旧版本，不代表当前会自动清理：${cleanupWarnings.flatMap((warning) => warning.removedFragments).join('、')}`}
+    />}
+    {!!keywordWarnings.length && <Alert
+      showIcon
+      type="warning"
+      message="详情重复词提醒"
+      description={`检测到高密度重复词，系统已允许继续上品，请人工确认不是搜索词堆砌。字段：${keywordWarnings.map((warning) => warning.fieldPath).join('、')}`}
+    />}
+  </>;
+}
 
 function ozonGrossWeightResolution(initialization: OzonListingDraft['data']['initialization'] | undefined): OzonGrossWeightResolution | undefined {
   return initialization?.grossWeightResolution;
@@ -742,6 +763,24 @@ function AutomaticJobsPanel({ initialJobId, initialStoreId, onOpenJob, onCloseJo
     },
     onError: showError
   });
+  const manualSuccessReconcile = useMutation({
+    mutationFn: async (target: OzonPublishJob) => {
+      const { plan } = await api.ozonPreparationManualSuccessReconcilePlan(target.id, target.rowVersion);
+      if (!plan.canReconcileManualSuccess) {
+        throw new Error(plan.blockedReason || '当前手动发布成功证据不足，不能收口旧自动任务');
+      }
+      return api.reconcileOzonPreparationToManualSuccess(target.id, {
+        rowVersion: plan.rowVersion,
+        planHash: plan.planHash,
+        requestId: plan.requestId
+      });
+    },
+    onSuccess: async ({ job: reconciledJob, reconciliation }) => {
+      message.success(`SKU ${reconciledJob.sku} 的旧自动任务已按 ${reconciliation.targetStores.length} 家店铺手动成功证据收口`);
+      await invalidateJobQueries(reconciledJob);
+    },
+    onError: showError
+  });
   const businessCounts = status.data?.businessCounts || status.data?.counts || {};
   const businessStatistics = ozonAutomaticTaskStatistics(businessCounts);
   const selectJob = (nextJob: OzonPublishJob) => {
@@ -797,6 +836,28 @@ function AutomaticJobsPanel({ initialJobId, initialStoreId, onOpenJob, onCloseJo
       okText: '转为手动处理',
       cancelText: '继续自动处理',
       onOk: () => manualTakeover.mutateAsync({ job, listing: listing.data!.listing })
+    });
+  };
+  const manualSuccessReconcilePlan = preparationDetail.data?.manualSuccessReconcilePlan;
+  const manualSuccessReconcileAllowed = Boolean(job
+    && ozonJobIsMultistorePreparation(job)
+    && manualSuccessReconcilePlan?.canReconcileManualSuccess);
+  const manualSuccessReconcileDisabledReason = manualSuccessReconcileAllowed
+    ? undefined
+    : manualSuccessReconcilePlan?.blockedReason || '需要全部当前参与自动上品的店铺均有完整手动成功证据';
+  const confirmManualSuccessReconcile = () => {
+    if (!job || !manualSuccessReconcilePlan) return;
+    Modal.confirm({
+      title: `按手动发布成功收口 SKU ${job.sku} 的旧自动任务？`,
+      icon: <CheckCircleOutlined />,
+      content: <Space direction="vertical" size={6}>
+        <span>旧自动任务将标记为“已取消”，不会冒充自动上品成功，也不会调用 n8n 或 OZON。</span>
+        <span>已核验店铺：{manualSuccessReconcilePlan.targetStores.map((target) => `${target.storeDisplayName}（${target.offerIds.length} 个 Offer）`).join('；')}</span>
+        <span>现有手动任务、publication、商品映射和媒体账本保持不变。</span>
+      </Space>,
+      okText: '确认收口',
+      cancelText: '保持现状',
+      onOk: () => manualSuccessReconcile.mutateAsync(job)
     });
   };
   const listingDisabledReason = !job ? '任务详情加载后可打开上品资料' : undefined;
@@ -902,6 +963,7 @@ function AutomaticJobsPanel({ initialJobId, initialStoreId, onOpenJob, onCloseJo
       extra={job && <Space className="ozon-auto-job-actions" size={8}>
         <Tooltip title={listingDisabledReason}><span className="ozon-auto-job-action-tooltip"><Button icon={<FileTextOutlined />} loading={preparationSelected ? preparationMaterial.isFetching : listing.isLoading} disabled={Boolean(listingDisabledReason)} onClick={openListing}>{preparationSelected ? '打开公共素材' : '打开上品资料'}</Button></span></Tooltip>
         {ozonJobIsMultistorePreparation(job) && <Tooltip title={manualTakeoverDisabledReason}><span className="ozon-auto-job-action-tooltip"><Button icon={<FormOutlined />} loading={manualTakeover.isPending} disabled={!manualTakeoverAllowed} onClick={confirmManualTakeover}>转为手动处理</Button></span></Tooltip>}
+        {ozonJobIsMultistorePreparation(job) && <Tooltip title={manualSuccessReconcileDisabledReason}><span className="ozon-auto-job-action-tooltip"><Button icon={<CheckCircleOutlined />} loading={manualSuccessReconcile.isPending} disabled={!manualSuccessReconcileAllowed} onClick={confirmManualSuccessReconcile}>按手动成功收口</Button></span></Tooltip>}
         <Tooltip title={recheckDisabledReason}><span className="ozon-auto-job-action-tooltip"><Button icon={<ReloadOutlined />} loading={recheck.isPending} disabled={!recheckAllowed} onClick={() => recheck.mutate(job)}>重新检测</Button></span></Tooltip>
         <Tooltip title={cancelDisabledReason}><span className="ozon-auto-job-action-tooltip"><Button danger icon={<StopOutlined />} loading={cancel.isPending} disabled={!cancelAllowed} onClick={confirmCancel}>取消自动任务</Button></span></Tooltip>
       </Space>}
@@ -910,6 +972,7 @@ function AutomaticJobsPanel({ initialJobId, initialStoreId, onOpenJob, onCloseJo
         {detailError && <Alert className="ozon-auto-job-fallback" showIcon type="warning" message="正在显示列表快照" description="完整事件暂时无法读取，可稍后重试。" action={<Button size="small" onClick={() => void refetchDetail()}>重试</Button>} />}
         <OzonSourceMediaCleanupStatus summary={sourceMediaCleanup} />
         <JobDetail job={job} />
+        {preparationDetail.data?.manualSuccessReconcilePlan && <OzonManualSuccessReconcilePlanDetails plan={preparationDetail.data.manualSuccessReconcilePlan} />}
       </> : null}
     </Drawer>
     <Drawer
@@ -1067,9 +1130,31 @@ function OzonFanoutSummaryDetails({ job }: { job: OzonPublishJob }) {
       { key: 'publications', label: '已建 publication', children: summary.publicationCount },
       { key: 'failures', label: '失败店铺', children: <Tag color={summary.failureCount ? 'volcano' : 'green'}>{summary.failureCount}</Tag> },
       { key: 'recovery', label: '恢复方式', children: summary.recoveryMode || '按冻结计划回读' },
-      { key: 'capabilities', label: '可用操作', children: <Space wrap>{summary.canRecheck && <Tag color="blue">可重检原任务</Tag>}{summary.canManualTakeover && <Tag>可转手动</Tag>}{!summary.canRecheck && !summary.canManualTakeover && <Text type="secondary">只读审计</Text>}</Space> }
+      { key: 'capabilities', label: '可用操作', children: <Space wrap>{summary.canRecheck && <Tag color="blue">可重检原任务</Tag>}{summary.canManualTakeover && <Tag>可转手动</Tag>}{summary.canReconcileManualSuccess && <Tag color="green">可按手动成功收口</Tag>}{!summary.canRecheck && !summary.canManualTakeover && !summary.canReconcileManualSuccess && <Text type="secondary">只读审计</Text>}</Space> }
     ]} />
     {summary.blockedReason && <Alert showIcon type="warning" message="协调任务被阻塞" description={summary.blockedReason} />}
+  </Card>;
+}
+
+function OzonManualSuccessReconcilePlanDetails({ plan }: { plan: OzonPreparationManualSuccessReconcilePlan }) {
+  return <Card size="small" title="手动成功收口证据">
+    <Space direction="vertical" size={8} style={{ width: '100%' }}>
+      <Alert
+        showIcon
+        type={plan.canReconcileManualSuccess ? 'success' : 'warning'}
+        message={plan.canReconcileManualSuccess ? '全部当前参与店铺均已手动发布成功' : '当前证据不足，保持旧自动任务只读'}
+        description={plan.canReconcileManualSuccess
+          ? '仅可将旧自动准备任务标记为已取消；不会修改任何手动发布结果。'
+          : plan.blockedReason || '请完成平台回读后重新检查。'}
+      />
+      {plan.targetStores.map((target) => <div key={target.storeId}>
+        <Space size={6} wrap>
+          <Tag color="green">{target.storeDisplayName}</Tag>
+          <Text code>{target.storeAlias}</Text>
+          <Text type="secondary">{target.offerIds.length} 个 Offer · {target.productLinks.length} 个已回读链接</Text>
+        </Space>
+      </div>)}
+    </Space>
   </Card>;
 }
 
@@ -1328,6 +1413,7 @@ export function ozonJobFanoutSummary(
     failureCount,
     canRecheck: source.canRecheck === true,
     canManualTakeover: source.canManualTakeover === true,
+    ...(source.canReconcileManualSuccess === true ? { canReconcileManualSuccess: true } : {}),
     recoveryMode: recoveryMode as OzonFanoutSummary['recoveryMode'],
     ...(ozonSnapshotString(source.blockedReason) ? { blockedReason: ozonSnapshotString(source.blockedReason) } : {})
   };
@@ -2353,8 +2439,8 @@ function ListingEditor({ context, onClose, onChanged }: { context?: OzonListingE
           {automaticSnapshotMode ? <><Card title={<Space><FormOutlined />产品资料</Space>}>
             <Row gutter={[14, 0]}><Col xs={24} md={12}><Form.Item name="categoryKey" label="OZON 类目模板" rules={[{ required: true, message: '请选择类目模板' }]}><Select aria-label="OZON 类目模板" showSearch optionFilterProp="label" placeholder="选择已发布的类目" onChange={() => form.setFieldsValue({ sharedAttributeValues: {}, offers: watchedOffers.map((offer) => ({ ...offer, offerAttributeValues: {} })) })} options={(categories.data?.items || []).filter((category) => category.publishedVersion).map((category) => ({ value: category.categoryKey, label: `${category.nameZh || category.nameRu}${category.nameZh && category.nameRu ? ` / ${category.nameRu}` : ''} · ${category.descriptionCategoryId}/${category.typeId} · V${category.publishedVersion!.versionNo}` }))} /></Form.Item></Col><Col xs={24} md={12}><Form.Item name="brand" label="品牌（允许留空）"><Input placeholder="留空时不写入品牌文本" /></Form.Item></Col></Row>
             <Form.Item name="titleRu" label="俄文商品标题" rules={[{ required: true, whitespace: true }, { validator: ozonTitleContentValidator }]}><Input maxLength={OZON_TITLE_MAX_LENGTH} showCount onChange={() => userTouchedInitializationFields.current.add('titleRu')} /></Form.Item>
-            <Form.Item name="descriptionRu" label={<Flex align="center" justify="space-between" gap={12} wrap="wrap"><span>共享俄文商品详情（兼容兜底）</span><Button size="small" icon={<FileTextOutlined />} disabled={immutable} onClick={() => descriptionFileRef.current?.click()}>导入 UTF-8 TXT</Button><input ref={descriptionFileRef} hidden type="file" accept=".txt,text/plain" onChange={(event) => void importDescriptionFile(event.target.files?.[0])} /></Flex>} rules={[{ required: true, whitespace: true }, { validator: ozonDescriptionContentValidator }]} extra="各变体优先使用自己的俄文详情；未单独填写时继承这里的共享详情。中文、隐形字符、外链、联系方式、广告/价格/仿品词和不合规 HTML 会被拒绝；不会自动删除或改写。提交时仅将换行规范为 <br>。"><Input.TextArea maxLength={OZON_DESCRIPTION_MAX_LENGTH} showCount autoSize={{ minRows: 5, maxRows: 12 }} onChange={() => userTouchedInitializationFields.current.add('descriptionRu')} /></Form.Item>
-            {!!item.data.descriptionWarnings?.length && <Alert showIcon type="warning" message="历史详情清理记录" description={`该记录来自旧版本，不代表当前会自动清理：${item.data.descriptionWarnings.map((warning) => warning.removedFragments.join('、')).join('；')}`} />}
+            <Form.Item name="descriptionRu" label={<Flex align="center" justify="space-between" gap={12} wrap="wrap"><span>共享俄文商品详情（兼容兜底）</span><Button size="small" icon={<FileTextOutlined />} disabled={immutable} onClick={() => descriptionFileRef.current?.click()}>导入 UTF-8 TXT</Button><input ref={descriptionFileRef} hidden type="file" accept=".txt,text/plain" onChange={(event) => void importDescriptionFile(event.target.files?.[0])} /></Flex>} rules={[{ required: true, whitespace: true }, { validator: ozonDescriptionContentValidator }]} extra="各变体优先使用自己的俄文详情；未单独填写时继承这里的共享详情。中文、隐形字符、外链、联系方式、广告/价格/仿品词和不合规 HTML 会被拒绝；高密度重复词会提示但不阻断。不会自动删除或改写，提交时仅将换行规范为 <br>。"><Input.TextArea maxLength={OZON_DESCRIPTION_MAX_LENGTH} showCount autoSize={{ minRows: 5, maxRows: 12 }} onChange={() => userTouchedInitializationFields.current.add('descriptionRu')} /></Form.Item>
+            <OzonDescriptionWarningAlerts warnings={item.data.descriptionWarnings} />
             {!automaticSnapshotMode && <Alert
               className="ozon-listing-store-migration"
               showIcon
@@ -2446,8 +2532,8 @@ function ListingEditor({ context, onClose, onChanged }: { context?: OzonListingE
                 <Col xs={12} md={4}><Form.Item name={[field.name, 'barcode']} label="条码"><Input placeholder="留空时不主动覆盖" /></Form.Item></Col>
                 <Col xs={12} md={4}><Form.Item name={[field.name, 'modelGroup']} label="模型分组" extra="同一 SKU 的所有变体固定使用商品 SKU。"><Input readOnly /></Form.Item></Col>
               </Row>}
-              <Form.Item name={[field.name, 'descriptionRu']} label="该变体的俄文商品详情" rules={[{ validator: ozonOptionalDescriptionContentValidator }]} extra={`留空时继承共享详情${offerValue.descriptionSource?.executionId ? `；来源 E003 执行 ${offerValue.descriptionSource.executionId}` : ''}。中文、隐形字符、外链、联系方式、广告/价格/仿品词和不合规 HTML 会被拒绝；不会自动删除或改写。提交时仅将换行规范为 <br>。`}><Input.TextArea maxLength={OZON_DESCRIPTION_MAX_LENGTH} showCount autoSize={{ minRows: 4, maxRows: 10 }} placeholder="留空以继承共享俄文商品详情" onChange={() => userTouchedInitializationFields.current.add(`offer:${String(offerValue.productVariantId || offerValue.variantId || field.key)}:descriptionRu`)} /></Form.Item>
-              {!!offerValue.descriptionWarnings?.length && <Alert showIcon type="warning" message="历史详情清理记录" description={`该记录来自旧版本，不代表当前会自动清理：${offerValue.descriptionWarnings.flatMap((warning: any) => warning.removedFragments || []).join('、')}`} />}
+               <Form.Item name={[field.name, 'descriptionRu']} label="该变体的俄文商品详情" rules={[{ validator: ozonOptionalDescriptionContentValidator }]} extra={`留空时继承共享详情${offerValue.descriptionSource?.executionId ? `；来源 E003 执行 ${offerValue.descriptionSource.executionId}` : ''}。中文、隐形字符、外链、联系方式、广告/价格/仿品词和不合规 HTML 会被拒绝；高密度重复词会提示但不阻断。不会自动删除或改写，提交时仅将换行规范为 <br>。`}><Input.TextArea maxLength={OZON_DESCRIPTION_MAX_LENGTH} showCount autoSize={{ minRows: 4, maxRows: 10 }} placeholder="留空以继承共享俄文商品详情" onChange={() => userTouchedInitializationFields.current.add(`offer:${String(offerValue.productVariantId || offerValue.variantId || field.key)}:descriptionRu`)} /></Form.Item>
+               <OzonDescriptionWarningAlerts warnings={offerValue.descriptionWarnings} />
               {automaticSnapshotMode && <><Divider orientation="left">该变体的 OZON 类目字段</Divider>
               {!variantAttributes.length ? <Text type="secondary">当前类目没有变体级字段</Text> : <OzonListingAttributeFields attributes={variantAttributes} formPath={[field.name, 'offerAttributeValues']} dictionarySnapshot={selectedCategory?.publishedVersion?.snapshot.dictionarySnapshot || {}} />}</>}
               <Divider orientation="left">该变体的媒体</Divider>

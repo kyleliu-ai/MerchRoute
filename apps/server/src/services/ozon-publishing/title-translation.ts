@@ -1,11 +1,10 @@
 import { createHash } from 'node:crypto';
 import {
   AppError,
-  OZON_CONTENT_POLICY_V2,
-  OZON_CONTENT_POLICY_V3,
   OZON_TITLE_MAX_LENGTH,
   OZON_TITLE_TRANSLATION_WEBHOOK_PATH,
   OZON_TITLE_TRANSLATION_WORKFLOW_ID,
+  isExecutableOzonContentPolicyVersion,
   type OzonContentPolicyVersion,
   validateOzonTitle
 } from '@n8n-media-review/shared';
@@ -58,7 +57,7 @@ export class OzonTitleTranslationClient implements OzonTitleTranslator {
     const contentPolicyVersion = String(input.contentPolicyVersion || '').trim();
     if (!content || !requestId || !language || Array.from(language).length > 64 || /[\r\n]/.test(language)
       || !Number.isInteger(input.maxLength) || input.maxLength < 1 || input.maxLength > OZON_TITLE_MAX_LENGTH
-      || ![OZON_CONTENT_POLICY_V2, OZON_CONTENT_POLICY_V3].includes(contentPolicyVersion as OzonContentPolicyVersion)) {
+      || !isExecutableOzonContentPolicyVersion(contentPolicyVersion)) {
       throw new AppError('CONFIG_INVALID', 'OZON 标题翻译参数无效', {
         errorCode: 'OZON_TITLE_TRANSLATION_INPUT_INVALID', retryable: false,
         details: {

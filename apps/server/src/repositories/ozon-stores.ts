@@ -3593,7 +3593,7 @@ export class OzonStoreRepository {
         WHERE j.state=ANY($1::text[])
           AND j.task_kind<>'SHARED_PREPARATION'
           AND (j.task_kind<>'STORE_PUBLICATION' OR (
-            j.payload->>'contentPolicyVersion' IN ('merchroute-ozon-content-v2','merchroute-ozon-content-v3')
+            j.payload->>'contentPolicyVersion' IN ('merchroute-ozon-content-v2','merchroute-ozon-content-v3','merchroute-ozon-content-v4')
             AND COALESCE(j.payload->>'materialHash','') ~ '^sha256:[a-f0-9]{64}$'
             AND j.payload->>'materialHashVersion'='ozon-shared-material-v1'
             AND candidate_publication.content_policy_version=j.payload->>'contentPolicyVersion'
@@ -4103,7 +4103,7 @@ function toPublication(row: SqlRow): OzonStorePublication {
     ...(row.planned_job_id ? { plannedJobId: String(row.planned_job_id) } : {}),
     ...(row.request_id ? { requestId: String(row.request_id) } : {}),
     ...(row.plan_hash ? { planHash: String(row.plan_hash) } : {}),
-    ...(['merchroute-ozon-content-v2', 'merchroute-ozon-content-v3', 'LEGACY_UNKNOWN'].includes(String(row.content_policy_version))
+    ...(['merchroute-ozon-content-v2', 'merchroute-ozon-content-v3', 'merchroute-ozon-content-v4', 'LEGACY_UNKNOWN'].includes(String(row.content_policy_version))
       ? { contentPolicyVersion: row.content_policy_version as OzonStorePublication['contentPolicyVersion'] }
       : {}),
     ...(row.material_hash ? { materialHash: String(row.material_hash) } : {}),
@@ -4482,7 +4482,7 @@ function toPublicationJob(row: SqlRow): OzonPublishJob {
 }
 
 function normalizeStoredContentPolicyVersion(value: unknown): OzonPublishJob['contentPolicyVersion'] {
-  if (value === 'merchroute-ozon-content-v2' || value === 'merchroute-ozon-content-v3' || value === 'LEGACY_UNKNOWN') return value;
+  if (value === 'merchroute-ozon-content-v2' || value === 'merchroute-ozon-content-v3' || value === 'merchroute-ozon-content-v4' || value === 'LEGACY_UNKNOWN') return value;
   return undefined;
 }
 
@@ -5560,10 +5560,10 @@ async function migrateOzonSharedMaterialAndPreparationAttempts(client: PoolClien
       content_policy_version=CASE
         WHEN p.content_policy_version<>'LEGACY_UNKNOWN' THEN p.content_policy_version
         WHEN COALESCE(j.payload->>'contentPolicyVersion','') IN (
-          'merchroute-ozon-content-v1','merchroute-ozon-content-v2','merchroute-ozon-content-v3'
+          'merchroute-ozon-content-v1','merchroute-ozon-content-v2','merchroute-ozon-content-v3','merchroute-ozon-content-v4'
         ) THEN j.payload->>'contentPolicyVersion'
         WHEN COALESCE(j.payload #>> '{importIntent,contentPolicyVersion}','') IN (
-          'merchroute-ozon-content-v1','merchroute-ozon-content-v2','merchroute-ozon-content-v3'
+          'merchroute-ozon-content-v1','merchroute-ozon-content-v2','merchroute-ozon-content-v3','merchroute-ozon-content-v4'
         )
           THEN j.payload #>> '{importIntent,contentPolicyVersion}'
         ELSE 'LEGACY_UNKNOWN' END,
@@ -5590,14 +5590,14 @@ async function migrateOzonSharedMaterialAndPreparationAttempts(client: PoolClien
       CROSS JOIN LATERAL (VALUES
         (NULLIF(p.content_policy_version,'LEGACY_UNKNOWN')),
         (CASE WHEN j.payload->>'contentPolicyVersion' IN (
-          'merchroute-ozon-content-v1','merchroute-ozon-content-v2','merchroute-ozon-content-v3'
+          'merchroute-ozon-content-v1','merchroute-ozon-content-v2','merchroute-ozon-content-v3','merchroute-ozon-content-v4'
         ) THEN j.payload->>'contentPolicyVersion' END),
         (CASE WHEN j.payload #>> '{importIntent,contentPolicyVersion}' IN (
-          'merchroute-ozon-content-v1','merchroute-ozon-content-v2','merchroute-ozon-content-v3'
+          'merchroute-ozon-content-v1','merchroute-ozon-content-v2','merchroute-ozon-content-v3','merchroute-ozon-content-v4'
         ) THEN j.payload #>> '{importIntent,contentPolicyVersion}' END)
       ) AS e(content_policy_version)
       WHERE e.content_policy_version IN (
-        'merchroute-ozon-content-v1','merchroute-ozon-content-v2','merchroute-ozon-content-v3'
+        'merchroute-ozon-content-v1','merchroute-ozon-content-v2','merchroute-ozon-content-v3','merchroute-ozon-content-v4'
       )
     ), resolved_policy AS (
       SELECT generated_version_id,MIN(content_policy_version) content_policy_version
