@@ -630,7 +630,7 @@
         "gitleaks",
         "diff-check"
       ],
-      "sourceDocumentSha256": "72d285b11fb4acae0057daef254829f3c2c000bc50a0abd62dcb4227c4d0adeb"
+      "sourceDocumentSha256": "38eba5263926d661c8006a658196f09c380cf7ad2b909eaae3b7a8ccc6837fd4"
     },
     {
       "id": "review-delivery-reliability",
