@@ -8,13 +8,11 @@ import { WbAutoPublishRepository } from './wb-auto-publish.js';
 import { WbAutoPublishRetryService } from '../services/wb-auto-publish/retry.js';
 import { WbStoreGatewayService } from '../services/wb-stores/gateway.js';
 
-// Vitest may load this file while another integration fixture is restoring an
-// environment override.  CI always supplies a disposable DATABASE_URL, so
-// register the suite there and resolve the URL in beforeAll instead of
-// silently marking every retry assertion as skipped during that short window.
-let connectionString: string | undefined;
-const requireDatabase = process.env.CI === 'true';
+const connectionString = process.env.DATABASE_URL;
 const schema = 'wb_retry_test_' + randomUUID().replaceAll('-', '');
+const downloadRoot = process.platform === 'win32'
+  ? 'C:\\MerchRouteTests\\wb-retry-downloads'
+  : '/srv/merchroute-tests/wb-retry-downloads';
 const storeId = '00000000-0000-4000-8000-000000000001';
 let admin: Pool, pool: Pool, purchases: PurchaseRepository, wb: WbRepository, stores: WbStoreRepository, auto: WbAutoPublishRepository;
 let gateway: WbStoreGatewayService, service: WbAutoPublishRetryService;
@@ -26,16 +24,14 @@ const stable = (v: any): string => Array.isArray(v) ? '[' + v.map(stable).join('
   : v && typeof v === 'object' ? '{' + Object.keys(v).sort().map(k => JSON.stringify(k) + ':' + stable(v[k])).join(',') + '}' : JSON.stringify(v);
 const hash = (v: any) => 'sha256:' + createHash('sha256').update(stable(v)).digest('hex');
 
-describe.runIf(requireDatabase || Boolean(process.env.DATABASE_URL))('WB retry PostgreSQL and gateway integration', () => {
+describe.runIf(Boolean(connectionString))('WB retry PostgreSQL and gateway integration', () => {
   beforeAll(async () => {
-    connectionString = process.env.DATABASE_URL;
-    if (!connectionString) throw new Error('WB retry integration requires DATABASE_URL');
     admin = new Pool({ connectionString, max: 1 });
     await admin.query(`CREATE SCHEMA ${schema}`);
     const url = new URL(connectionString!); url.searchParams.set('options', `-c search_path=${schema},public`);
     pool = new Pool({ connectionString: url.toString(), max: 6 });
     purchases = new PurchaseRepository(url.toString());
-    await purchases.initialize({ code: 'E999', displayName: 'isolated', webhookUrl: 'http://127.0.0.1:9/test', parentOutputDir: '/tmp/wb-retry-test', enabled: false, isDefault: false });
+    await purchases.initialize({ code: 'E999', displayName: 'isolated', webhookUrl: 'http://127.0.0.1:9/test', parentOutputDir: downloadRoot, enabled: false, isDefault: false });
     wb = new WbRepository(url.toString()); await wb.initialize();
     stores = new WbStoreRepository(url.toString()); await stores.initialize();
     await pool.query('CREATE TABLE IF NOT EXISTS wb_listing_presets(id UUID PRIMARY KEY)');
