@@ -2,11 +2,11 @@ import assert from 'node:assert/strict';
 import { mkdir, writeFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { patchOzonContentV4, POLICY_NODES } from '../patches/ozon-content-v4.mjs';
+import { patchOzonContentV4, PATCH_NODES } from '../patches/ozon-content-v4.mjs';
 
 const root = path.resolve(import.meta.dirname, '../../..');
 // Downstream first, so accepting v4 titles cannot expose an unpatched submit/readback step.
-const ids = ['g3KK68BLXX7eShqa', 'stSK51IuxrMZlLjx', 'HDh0ZNLK2ps5qasR'];
+const ids = ['0FqozLuQ7vuabT8V', 'stSK51IuxrMZlLjx', 'g3KK68BLXX7eShqa', 'HDh0ZNLK2ps5qasR'];
 const allowedSettings = new Set(['saveExecutionProgress', 'saveManualExecutions', 'saveDataErrorExecution',
   'saveDataSuccessExecution', 'executionTimeout', 'errorWorkflow', 'timezone', 'executionOrder', 'callerPolicy',
   'callerIds', 'timeSavedPerExecution', 'redactionPolicy', 'availableInMCP']);
@@ -28,7 +28,7 @@ export async function deployOzonContentV4({ apiUrl, apiKey, expectedVersions, ba
     if (before.active) assert.equal(before.activeVersionId, before.versionId, `${id}: unpublished draft exists`);
     const after = patchOzonContentV4(before);
     const changes = after.nodes.filter((node, index) => JSON.stringify(node) !== JSON.stringify(before.nodes[index])).map(node => node.name);
-    assert.ok(changes.every(name => POLICY_NODES[id].includes(name)));
+    assert.ok(changes.every(name => PATCH_NODES[id].includes(name)));
     const names = new Set(after.nodes.map(node => node.name));
     for (const [name, outputs] of Object.entries(after.connections)) {
       assert.ok(names.has(name));

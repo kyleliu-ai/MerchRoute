@@ -619,7 +619,7 @@
       "category": "ozon",
       "active": true,
       "file": "workflows/ozon/g3KK68BLXX7eShqa.json",
-      "sha256": "38a3749479316050172e87e42b3e2174b1c2457daf091519fc3fdb696660a42e",
+      "sha256": "d6242c70dded787f9f8e9e5100f7737faa8b9652eb78b457a862c29e5311e23a",
       "dependencies": [
         "0FqozLuQ7vuabT8V",
         "3hyAiON1l3fEHBzA",
@@ -659,7 +659,7 @@
       "category": "ozon",
       "active": true,
       "file": "workflows/ozon/0FqozLuQ7vuabT8V.json",
-      "sha256": "fefccce6f23f4614c986f4f5fa79a1c740d26e3417b8924cd4fd754135f764d7",
+      "sha256": "9365e12f0918eef0df4300575e89d21b05ca767d9d5cd6777246ec1c96b8bd09",
       "dependencies": [
         "kU8XxFLUign9LiQC"
       ],
