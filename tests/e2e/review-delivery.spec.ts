@@ -739,6 +739,7 @@ test.describe.serial('v002 review and delivery', () => {
     await page.getByRole('button', { name: '审核通过' }).click();
     await expect(page.locator('.ant-modal').getByRole('checkbox')).toBeChecked();
     await page.getByRole('button', { name: '加入待投递清单' }).click();
+    await expect(page.getByText('审核请求已接收，请查看待投递清单', { exact: true })).toBeVisible();
     await expect(page.getByRole('heading', { name: '待投递清单' })).toBeVisible();
     await expect(page.getByText('E2E-测试产品A', { exact: true }).first()).toBeVisible();
     await page.locator('.ant-table-tbody tr').filter({ hasText: 'E2E-测试产品A' }).locator('label.ant-checkbox-wrapper').click();

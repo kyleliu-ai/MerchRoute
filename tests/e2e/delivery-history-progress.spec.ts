@@ -54,14 +54,18 @@ for (const route of ['/pending', '/history']) {
   });
 }
 
-test('review workbench and task detail retain their visible operation card', async ({ page }) => {
-  await fakeEvents(page);
-  await page.route('**/api/v1/review-operations?*', (request) => request.fulfill({ json: { items: [{ ...operation, status: 'RUNNING' }] } }));
-  await page.goto('/review/E005');
-  await expect(page.getByText('审核与投递进度', { exact: true })).toBeVisible();
-  await page.goto('/task/progress-visibility-fixture');
-  await expect(page.getByText('审核与投递进度', { exact: true })).toBeVisible();
-});
+for (const route of ['/review/downloads', '/review/E005', '/task/progress-visibility-fixture']) {
+  for (const status of ['QUEUED', 'RUNNING', 'RETRY_WAIT', 'SUCCEEDED', 'PARTIAL_SUCCESS', 'FAILED', 'NEEDS_ATTENTION']) {
+    test(`${route} hides the complete operation card for ${status}`, async ({ page }) => {
+      await fakeEvents(page);
+      await page.route('**/api/v1/review-operations?*', (request) => request.fulfill({ json: { items: [{ ...operation, status }] } }));
+      await page.goto(route);
+      await expect(page.getByText('审核与投递进度', { exact: true })).toHaveCount(0);
+      await expect(page.getByTestId('review-operation')).toHaveCount(0);
+      await expect(page.getByText(operation.operationId, { exact: true })).toHaveCount(0);
+    });
+  }
+}
 
 test('history distinguishes five outcomes and retains details and appropriate recovery actions', async ({ page }) => {
   await fakeEvents(page);

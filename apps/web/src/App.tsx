@@ -551,7 +551,7 @@ export function App() {
           <Space size={18}><div className="header-status"><Badge status={headerConfigurationStatus.badge} /><span>{headerConfigurationStatus.label}</span></div><NotificationHub /></Space>
         </Header>
         <Content className="app-content">
-          {/^\/(review|task|pending|history)(\/|$)/.test(location.pathname) && <ReviewOperationsPanel visible={!/^\/(pending|history)(\/|$)/.test(location.pathname)} />}
+          {/^\/(review|task|pending|history)(\/|$)/.test(location.pathname) && <ReviewOperationsPanel visible={false} />}
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/review/downloads" element={<DownloadCenter />} />
@@ -1047,7 +1047,7 @@ function ReviewDetail() {
     return [...new Map(options.map((item) => [item.sku, item])).values()].map((item) => ({ value: item.sku, label: `${item.sku} · ${item.productName}` }));
   }, [productCandidates.data?.items, task?.productIdentity.candidates]);
   const save = useMutation({ mutationFn: () => api.saveDraft(taskId, allSelectedRelativePaths, activeTargets, isVariantSplit ? variantGroups : undefined), onSuccess: () => { message.success('草稿已保存'); void client.invalidateQueries({ queryKey: ['task', taskId] }); } });
-  const approve = useMutation({ mutationFn: () => api.approve(taskId, allSelectedRelativePaths, activeTargets, isVariantSplit ? variantGroups : undefined, task?.reviewVersion), onSuccess: () => { message.success('审核请求已接收，可在进度区查看处理结果'); void client.invalidateQueries({ queryKey: ['review-operations'] }); navigate(isTerminalDelivery ? '/history' : '/pending'); }, onError: (error) => message.error(error.message) });
+  const approve = useMutation({ mutationFn: () => api.approve(taskId, allSelectedRelativePaths, activeTargets, isVariantSplit ? variantGroups : undefined, task?.reviewVersion), onSuccess: () => { message.success(isTerminalDelivery ? '审核请求已接收，投递结果请查看投递历史' : '审核请求已接收，请查看待投递清单'); void client.invalidateQueries({ queryKey: ['review-operations'] }); navigate(isTerminalDelivery ? '/history' : '/pending'); }, onError: (error) => message.error(error.message) });
   const updateActiveSelection = (update: (current: string[]) => string[]) => {
     if (!isVariantSplit) return setSelectedRelativePaths((current) => uniqueSelectedRelativePaths(update(current)));
     if (!activeVariantGroup) return;
