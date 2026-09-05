@@ -2,8 +2,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
+import { tsImport } from 'tsx/esm/api';
 import { patchOzonTitleV4, TITLE_POLICY_NODES } from '../n8n/patches/ozon-title-v4.mjs';
-import { validateOzonTitle, OZON_EXECUTABLE_CONTENT_POLICY_VERSIONS } from '../../packages/shared/dist/index.js';
+
+// Use the source contract, never a missing or stale local dist artifact.
+const { validateOzonTitle, OZON_EXECUTABLE_CONTENT_POLICY_VERSIONS } = await tsImport('../../packages/shared/src/ozon-content-policy.ts', import.meta.url);
 
 const definition = JSON.parse(fs.readFileSync(new URL('../n8n/workflows/ozon/HDh0ZNLK2ps5qasR.json', import.meta.url), 'utf8'));
 function run(name, input, request = {}, initial = {}) {

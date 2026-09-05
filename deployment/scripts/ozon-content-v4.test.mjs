@@ -3,8 +3,11 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 import test from 'node:test';
 import ts from 'typescript';
+import { tsImport } from 'tsx/esm/api';
 import { patchOzonContentV4, POLICY_NODES } from '../n8n/patches/ozon-content-v4.mjs';
-import { validateOzonDescription } from '../../packages/shared/dist/index.js';
+
+// Deployment tests run before the first build on a clean installation.
+const { validateOzonDescription } = await tsImport('../../packages/shared/src/ozon-content-policy.ts', import.meta.url);
 
 const load = id => JSON.parse(fs.readFileSync(new URL(`../n8n/workflows/ozon/${id}.json`, import.meta.url), 'utf8'));
 function declarations(source, names) {
