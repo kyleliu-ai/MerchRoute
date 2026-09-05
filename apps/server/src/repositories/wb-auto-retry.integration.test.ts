@@ -10,6 +10,9 @@ import { WbStoreGatewayService } from '../services/wb-stores/gateway.js';
 
 const connectionString = process.env.DATABASE_URL;
 const schema = 'wb_retry_test_' + randomUUID().replaceAll('-', '');
+const downloadRoot = process.platform === 'win32'
+  ? 'C:\\MerchRouteTests\\wb-retry-downloads'
+  : '/srv/merchroute-tests/wb-retry-downloads';
 const storeId = '00000000-0000-4000-8000-000000000001';
 let admin: Pool, pool: Pool, purchases: PurchaseRepository, wb: WbRepository, stores: WbStoreRepository, auto: WbAutoPublishRepository;
 let gateway: WbStoreGatewayService, service: WbAutoPublishRetryService;
@@ -28,7 +31,7 @@ describe.runIf(Boolean(connectionString))('WB retry PostgreSQL and gateway integ
     const url = new URL(connectionString!); url.searchParams.set('options', `-c search_path=${schema},public`);
     pool = new Pool({ connectionString: url.toString(), max: 6 });
     purchases = new PurchaseRepository(url.toString());
-    await purchases.initialize({ code: 'E999', displayName: 'isolated', webhookUrl: 'http://127.0.0.1:9/test', parentOutputDir: '/tmp/wb-retry-test', enabled: false, isDefault: false });
+    await purchases.initialize({ code: 'E999', displayName: 'isolated', webhookUrl: 'http://127.0.0.1:9/test', parentOutputDir: downloadRoot, enabled: false, isDefault: false });
     wb = new WbRepository(url.toString()); await wb.initialize();
     stores = new WbStoreRepository(url.toString()); await stores.initialize();
     await pool.query('CREATE TABLE IF NOT EXISTS wb_listing_presets(id UUID PRIMARY KEY)');
