@@ -35,6 +35,11 @@
       "name": "work/solo-dev-migration-20260903-2050",
       "head": "bdd6f75361e940e33bce2e6f23265907ee59f631",
       "featureId": "project-release-guardrails"
+    },
+    {
+      "name": "work/english-path-migration-20260904-2242",
+      "head": "771f0b0b99e1fe6636d96f2693b68ef89cfe51de",
+      "featureId": "project-release-guardrails"
     }
   ],
   "branches": [
