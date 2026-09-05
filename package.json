@@ -1,6 +1,6 @@
 {
   "name": "merchroute",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Local-first procurement, AI commerce media, review, pricing, shipping, and WB/OZON listing operations platform.",
   "private": true,
   "type": "module",

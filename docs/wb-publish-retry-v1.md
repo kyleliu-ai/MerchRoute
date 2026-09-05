@@ -32,7 +32,7 @@ node deployment/n8n/scripts/verify-wb-retry-protocol.mjs --expected-commit=<已�
 node deployment/n8n/scripts/verify-wb-retry-protocol.mjs --expected-commit=<已部署候选提交> --apply --approved
 ```
 
-启用后核验实际前端资源、按钮、详情接口和调度；仍不代表授权真实重试。TEK+01 / default、SKU 0000172 必须另行指定，届时重新读取任务后执行单轮重试。TEK+02 的成功记录不受影响。
+启用后核验实际前端资源、按钮、详情接口和调度；仍不代表授权真实重试。具体店铺及 SKU 必须另行指定，届时重新读取任务后执行单轮重试。其他店铺的成功记录不受影响。
 
 ## 回滚
 
@@ -50,4 +50,4 @@ node deployment/n8n/scripts/verify-wb-retry-protocol.mjs --disable --apply --app
 
 验收覆盖：无 partial effects 的失败建卡、新成功与新 400、原商品身份、媒体/价格/库存/收尾检查点、UNKNOWN/不完整回查/字段错误/归属冲突、重复点击与过期版本、检查租约/许可/提交/回写重启、多店隔离、浏览器进度/原错误/新错误和窄屏。已有 320px 侧栏限制继续单独登记，不把它当作本次重试功能通过的依据。
 
-保留既有 release-features 清单并增加本功能。工作树变更、源码及工作流哈希、测试结果构成开发候选证据。项目正式候选封装工具要求干净的已提交源码；本批次没有暂存/提交授权，因此交付未提交开发构建及部署材料，正式候选封装和发布验收需在另获提交授权后继续，不能将 dirty 构建标为已验收发布。
+保留既有 release-features 清单并增加本功能。正式候选必须来自干净的已提交源码；开发测试记录不能代替完整发布验收，也不能将 dirty 构建标为已验收发布。v0.1.7 将 WB 与 OZON 两项修复按独立提交汇入同一个发布批次，配套部署和回滚要求见 [v0.1.7 发布契约](releases/v0.1.7.md)。

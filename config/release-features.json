@@ -688,7 +688,7 @@
         { "path": "docs/ozon-publish-retry.md" }
       ],
       "checkIds": ["check", "postgres-integration", "e2e"],
-      "acceptance": ["仅选中店铺；保留冻结身份；未知写入先回查；重建先确认；旧新任务可追溯；本次不发布"]
+      "acceptance": ["仅选中店铺；保留冻结身份；未知写入先回查；重建先确认；旧新任务可追溯；隔离验收不触发真实上品"]
     },
     {
       "id": "wb-controlled-publish-retry",
