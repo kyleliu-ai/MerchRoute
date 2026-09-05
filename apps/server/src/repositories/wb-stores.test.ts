@@ -662,12 +662,12 @@ describe('WB gateway request retry fencing', () => {
     })).resolves.toMatchObject({ idempotent: true, row: { request_ref: 'already-created-attempt-2' } });
   });
 
-  it('rejects CARD_UPLOAD attempt 3 even when called below the shared request schema', async () => {
+  it('rejects CARD_UPLOAD attempts outside the database integer range below the shared schema', async () => {
     const repository = new WbStoreRepository();
     await expect(repository.beginGatewayRequest({
       requestRef: 'second__0000133__r1:CARD_WRITE:intent-133:attempt-3',
       requestHash: `sha256:${'a'.repeat(64)}`, operation: 'CARD_UPLOAD', identity: cardIdentity(),
-      logicalIntentId: 'intent-133', attemptNo: 3
+      logicalIntentId: 'intent-133', attemptNo: 2147483648
     })).rejects.toMatchObject({ code: 'WB_CARD_ATTEMPT_INVALID', statusCode: 409 });
   });
 

@@ -23,6 +23,22 @@ const predicates={
 export function assertNoActivity(counts) {
   if(!Object.keys(counts).length||Object.values(counts).some(x=>!Number.isInteger(x)||x!==0))throw new Error('Business activity is active or unknown; cutover is blocked');
 }
+export async function inspectPublishRetries(client, productVersion) {
+  if(!/^\d+\.\d+\.\d+$/.test(productVersion||''))throw new Error('Retry gate requires a known release version');
+  const legacy=/^0\.1\.[0-6]$/.test(productVersion);
+  const counts={};
+  for(const [prefix,table] of [['wbRetry','wb_auto_publish_retries'],['ozonRetry','ozon_publish_retries']]){
+    const exists=(await client.query('SELECT to_regclass($1) AS name',['public.'+table])).rows[0]?.name;
+    if(!exists){
+      if(!legacy)throw new Error('Required retry ledger is missing: '+table);
+      counts[prefix+'Active']=0;counts[prefix+'Leases']=0;continue;
+    }
+    const row=(await client.query("SELECT count(*) FILTER (WHERE status IN ('CHECKING','RUNNING'))::int AS active, count(*) FILTER (WHERE lease_until > now())::int AS leases FROM public."+table)).rows[0];
+    counts[prefix+'Active']=row?.active;counts[prefix+'Leases']=row?.leases;
+  }
+  assertNoActivity(counts);
+  return counts;
+}
 export async function inspectBusinessIdle(binding) {
   const envBytes=await readFile(binding.runtimeEnvFile),env=dotenv.parse(envBytes);
   const db=JSON.parse(await readFile(path.join(binding.appDataDir,'db.json'),'utf8'));
@@ -34,6 +50,7 @@ export async function inspectBusinessIdle(binding) {
   try{
     await client.connect();await client.query('BEGIN READ ONLY');
     for(const [name,[table,predicate]] of Object.entries(predicates))counts[name]=Number((await client.query('SELECT count(*)::int AS n FROM '+table+' WHERE '+predicate)).rows[0].n);
+    Object.assign(counts,await inspectPublishRetries(client,binding.productVersion));
     counts.advisoryLocks=Number((await client.query("SELECT count(*)::int AS n FROM pg_locks WHERE locktype='advisory' AND granted AND database=(SELECT oid FROM pg_database WHERE datname=current_database())")).rows[0].n);
     await client.query('ROLLBACK');
   }finally{await client.end();}

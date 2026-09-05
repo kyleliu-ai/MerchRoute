@@ -389,7 +389,7 @@ describe('WbAutoPublishingCoordinator activation boundary', () => {
     expect(isCompatibleRuntimeRecoveryCandidate({ ...candidate, result: { submissionMode: 'CREATE_ONLY' } })).toBe(false);
   });
 
-  it('rechecks a compatible partial-effect failure by recovering the same runtime task instead of creating a new revision', async () => {
+  it('requires the controlled retry endpoint for already submitted compatible failures', async () => {
     const job = {
       sku: '0000078', state: 'FAILED', operationMode: 'COMPATIBLE_UPSERT', runId: 'run-78',
       n8nTaskId: '0000078__r3', presetBinding: { schemaVersion: 2 }
@@ -414,10 +414,8 @@ describe('WbAutoPublishingCoordinator activation boundary', () => {
     });
     vi.spyOn(coordinator as any, 'runWorkerNow').mockResolvedValue(undefined);
 
-    await expect(coordinator.recheck('0000078')).resolves.toMatchObject({
-      sku: '0000078', state: 'RUNNING', n8nTaskId: '0000078__r3'
-    });
-    expect(recover).toHaveBeenCalledWith(job, runtimeJob);
+    await expect(coordinator.recheck('0000078')).rejects.toMatchObject({ code: 'WB_RETRY_ENDPOINT_REQUIRED' });
+    expect(recover).not.toHaveBeenCalled();
     expect(recheck).not.toHaveBeenCalled();
   });
 
