@@ -157,7 +157,7 @@ export class SubmissionService {
       const snapshots = this.operations?.currentId ? this.store.getOperation(this.operations.currentId)?.input.taskSnapshots as Record<string, TaskDetail> | undefined : undefined;
       task = snapshots?.[pending.taskId] || await this.scanner.getTask(pending.taskId);
     } catch (error) {
-      const appError = error instanceof AppError ? error : new AppError('STAGE_DISABLED', '流程已停用', undefined, 409);
+      const appError = error instanceof AppError ? error : new AppError('SOURCE_FOLDER_MISSING', error instanceof Error ? error.message : '来源任务无法读取', undefined, 409);
       return this.failProgress(batchId, pendingId, appError.code, appError.message);
     }
     const lockKey = `${pending.taskId}:${pending.targetStageId}`;
@@ -182,46 +182,56 @@ export class SubmissionService {
       const attempt = this.operations?.currentId ? this.store.getOperation(this.operations.currentId)?.attempt || 0 : 4;
       if (['EBUSY', 'EPERM', 'EAGAIN'].includes(error?.code) && attempt <= 3) throw error;
       const appError = error instanceof AppError ? error : new AppError('COPY_FAILED', error?.message || '投递失败');
-      const failureId = this.store.select('deliveryCheckpoints', (rows) => rows?.find((row) => row.pendingSubmissionId === pendingId))?.submissionId || this.submissionId();
-      const failureStatus = appError.code === 'TARGET_FOLDER_EXISTS' ? 'SKIPPED_CONFLICT' : 'FAILED';
-      const result: SubmissionResult = { pendingSubmissionId: pendingId, status: failureStatus, submissionId: failureId, errorCode: appError.code, errorMessage: appError.message };
-      await this.setProgress(batchId, pendingId, { status: failureStatus, submissionId: failureId, errorCode: appError.code, errorMessage: appError.message });
-      await this.store.updateSections(['pendingSubmissions', 'reviews', 'submissionHistory'], (db) => {
-        const item = db.pendingSubmissions.find((candidate) => candidate.id === pendingId);
-        if (item) { item.status = 'FAILED'; item.lastError = `${appError.code}: ${appError.message}`; item.updatedAt = new Date().toISOString(); }
-        const review = db.reviews.find((candidate) => candidate.taskId === pending.taskId);
-        if (review) review.status = 'FAILED';
-        db.submissionHistory = db.submissionHistory.filter((row) => row.submissionId !== failureId);
-        db.submissionHistory.unshift({
-          submissionId: failureId,
-          pendingSubmissionId: pending.id,
-          taskId: pending.taskId,
-          sourceStageId: pending.sourceStageId,
-          targetStageId: pending.targetStageId,
-          sourceFolder: task.sourceFolder,
-          selectedImageCount: pending.selectedRelativePaths.length,
-          productSku: pending.productSku,
-          productNameSnapshot: pending.productNameSnapshot,
-          n8nTaskParameters: structuredClone(pending.n8nTaskParameters),
-          n8nTaskParameterOptions: structuredClone(pending.n8nTaskParameterOptions || {}),
-          n8nParameterFileName: this.n8nParameterFileName(pending.targetStageId, failureId),
-          status: failureStatus,
-          errorCode: appError.code,
-          errorMessage: appError.message,
-          startedAt: new Date().toISOString(),
-          completedAt: new Date().toISOString()
-        });
-
-      });
-      return result;
+      return await this.failProgress(batchId, pendingId, appError.code, appError.message, task);
     } finally {
       this.locks.delete(lockKey);
     }
   }
 
-  private async failProgress(batchId: string, pendingId: string, errorCode: string, errorMessage: string): Promise<SubmissionResult> {
-    await this.setProgress(batchId, pendingId, { status: errorCode === 'TARGET_FOLDER_EXISTS' ? 'SKIPPED_CONFLICT' : 'FAILED', errorCode, errorMessage });
-    return { pendingSubmissionId: pendingId, status: errorCode === 'TARGET_FOLDER_EXISTS' ? 'SKIPPED_CONFLICT' : 'FAILED', errorCode, errorMessage };
+  private async failProgress(batchId: string, pendingId: string, errorCode: string, errorMessage: string, task?: TaskDetail): Promise<SubmissionResult> {
+    this.store.assertWritable();
+    const operationId = reviewOperationContext.getStore()?.operationId;
+    const input = operationId ? this.store.getOperation(operationId)?.input : undefined;
+    const pending = (input?.pending as PendingSubmission[] | undefined)?.find((row) => row.id === pendingId) || this.store.getPending(pendingId);
+    if (!pending) throw new AppError(errorCode, errorMessage, { pendingSubmissionId: pendingId }, 409);
+    const checkpoint = this.store.select('deliveryCheckpoints', (rows) => rows?.find((row) => row.pendingSubmissionId === pendingId));
+    if (checkpoint && ['COMMIT_INTENT', 'TARGET_COMMITTED', 'COMPLETE', 'NEEDS_ATTENTION'].includes(checkpoint.phase)) {
+      throw new AppError('DELIVERY_OUTCOME_UNKNOWN', '已有交付检查点，请核对原投递结果，禁止重复投递', { submissionId: checkpoint.submissionId }, 409);
+    }
+    const sourceFolder = task?.sourceFolder || (input?.sourceFolders as Record<string, string> | undefined)?.[pending.taskId]
+      || (input?.taskSnapshots as Record<string, TaskDetail> | undefined)?.[pending.taskId]?.sourceFolder || this.store.getReview(pending.taskId)?.sourceFolder;
+    if (!sourceFolder) throw new AppError(errorCode, errorMessage, { pendingSubmissionId: pendingId, reason: 'SOURCE_IDENTITY_UNAVAILABLE' }, 409);
+    let result!: SubmissionResult;
+    await this.store.updateSections(['pendingSubmissions', 'reviews', 'submissionHistory', 'submissionBatches'], (db) => {
+      const batch = db.submissionBatches.find((row) => row.batchId === batchId);
+      const batchItem = batch?.items.find((row) => row.pendingSubmissionId === pendingId);
+      const failureId = checkpoint?.submissionId || batchItem?.submissionId || this.submissionId();
+      const old = db.submissionHistory.find((row) => row.submissionId === failureId);
+      if (old?.status === 'SUCCESS' || old?.status === 'PARTIAL_SUCCESS') throw new AppError('DELIVERY_OUTCOME_UNKNOWN', '该投递已有公开结果，请先核对', { submissionId: failureId }, 409);
+      const now = new Date().toISOString();
+      const status = errorCode === 'TARGET_FOLDER_EXISTS' ? 'SKIPPED_CONFLICT' : 'FAILED';
+      result = { pendingSubmissionId: pendingId, submissionId: failureId, status, errorCode, errorMessage };
+      const record: SubmissionRecord = {
+        submissionId: failureId, pendingSubmissionId: pendingId, taskId: pending.taskId,
+        sourceStageId: pending.sourceStageId, targetStageId: pending.targetStageId, sourceFolder,
+        selectedImageCount: pending.selectedRelativePaths.length, selectedRelativePaths: [...pending.selectedRelativePaths],
+        productSku: pending.productSku, productNameSnapshot: pending.productNameSnapshot,
+        variantGroupId: pending.variantGroupId, variantId: pending.variantId, variantName: pending.variantName,
+        n8nTaskParameters: structuredClone(pending.n8nTaskParameters), n8nTaskParameterOptions: structuredClone(pending.n8nTaskParameterOptions || {}),
+        n8nParameterFileName: this.n8nParameterFileName(pending.targetStageId, failureId),
+        status, errorCode, errorMessage, startedAt: old?.startedAt || batch?.createdAt || now, completedAt: old?.completedAt || now
+      };
+      if (old) Object.assign(old, record); else db.submissionHistory.unshift(record);
+      // Persist the result identity with the history so a crash before the batch
+      // finishes cannot allocate another failure record for the same attempt.
+      if (batchItem) Object.assign(batchItem, result);
+      const current = db.pendingSubmissions.find((row) => row.id === pendingId);
+      if (current) { current.status = 'FAILED'; current.lastError = `${errorCode}: ${errorMessage}`; current.updatedAt = now; }
+      const review = db.reviews.find((row) => row.taskId === pending.taskId);
+      if (review) review.status = 'FAILED';
+    });
+    await this.setProgress(batchId, pendingId, result);
+    return result;
   }
 
   private requirePendingStagesEnabled(pending: PendingSubmission): void {
@@ -272,7 +282,8 @@ export class SubmissionService {
       }
     }
     const nameInfo = existingCheckpoint ? { name: path.basename(existingCheckpoint.targetFinal), revision: existingCheckpoint.revision } : await this.resolveDestinationName(task.sourceFolderName, target, pending.conflictPolicy);
-    const submissionId = existingCheckpoint?.submissionId || this.submissionId();
+    const submissionId = existingCheckpoint?.submissionId
+      || this.store.getBatch(batchId)?.items.find((row) => row.pendingSubmissionId === pending.id)?.submissionId || this.submissionId();
     const n8nTaskParameters = pending.n8nTaskParameters || await this.config.getWorkflowParameters(pending.targetStageId);
     const n8nParameterFileName = this.n8nParameterFileName(pending.targetStageId, submissionId);
     const startedAt = new Date().toISOString();

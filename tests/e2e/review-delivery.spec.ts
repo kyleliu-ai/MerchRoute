@@ -518,7 +518,7 @@ test.describe.serial('v002 review and delivery', () => {
     await expect(page.locator('.ant-drawer').filter({ hasText: '投递进度' })).toHaveCount(0);
     await expect(pendingRow).toHaveCount(0);
     await page.goto('/history');
-    await expect(page.locator('.ant-table-tbody > tr.ant-table-row').filter({ hasText: batchResults[0]!.submissionId })).toContainText('SUCCESS');
+    await expect(page.locator('.ant-table-tbody > tr.ant-table-row').filter({ hasText: batchResults[0]!.submissionId })).toContainText('投递成功');
   });
 
   test('creates multiple E001 variant selection groups and freezes one pending task per variant', async ({ page }) => {

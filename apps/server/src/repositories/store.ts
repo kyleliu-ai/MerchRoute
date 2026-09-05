@@ -3,7 +3,7 @@ import { mkdir, readFile, copyFile } from 'node:fs/promises';
 import writeFileAtomic from 'write-file-atomic';
 import { randomUUID } from 'node:crypto';
 import { reviewOperationContext } from '../utils/review-operation-context.js';
-import { AppError, type AppDatabase, type AppEvent, type ReviewRecord, type ReviewStatus, type ReviewOperation } from '@n8n-media-review/shared';
+import { AppError, type AppDatabase, type AppEvent, type ReviewRecord, type ReviewStatus, type ReviewOperation, type SubmissionRecord } from '@n8n-media-review/shared';
 
 const EMPTY_DB: AppDatabase = {
   schemaVersion: '1.0', reviews: [], pendingSubmissions: [], submissionHistory: [], submissionBatches: [], appEvents: [],
@@ -57,6 +57,32 @@ export class StateStore {
   select<K extends Section, T>(key: K, select: (value: AppDatabase[K]) => T): T { return this.readView(select(this.data[key])); }
   getPending(id: string) { return this.select('pendingSubmissions', (rows) => rows.find((row) => row.id === id)); }
   getSubmission(id: string) { return this.select('submissionHistory', (rows) => rows.find((row) => row.submissionId === id)); }
+  getSubmissionView(id: string) { return this.selectSubmissionHistory((rows) => rows.find((row) => row.submissionId === id)); }
+  selectSubmissionHistory<T>(select: (rows: SubmissionRecord[]) => T): T {
+    const operations = new Map((this.data.reviewOperations || []).map((row) => [row.operationId, row]));
+    const awaiting = (this.data.deliveryCheckpoints || []).filter((row) => {
+      if (!['COMMIT_INTENT', 'NEEDS_ATTENTION', 'TARGET_COMMITTED'].includes(row.phase)) return false;
+      const owner = row.operationId ? operations.get(row.operationId) : undefined;
+      return owner ? owner.status === 'NEEDS_ATTENTION' : row.phase === 'NEEDS_ATTENTION';
+    });
+    if (!awaiting.length) return this.readView(select(this.data.submissionHistory));
+    const persisted = new Map(this.data.submissionHistory.map((row) => [row.submissionId, row]));
+    const projected = new Map<string, SubmissionRecord>();
+    for (const checkpoint of awaiting) {
+      // A read projection must never overwrite an acknowledged successful leg.
+      const existing = persisted.get(checkpoint.submissionId);
+      if (existing?.status === 'SUCCESS' || existing?.status === 'PARTIAL_SUCCESS') continue;
+      const owner = checkpoint.operationId ? operations.get(checkpoint.operationId) : undefined;
+      projected.set(checkpoint.submissionId, {
+        ...checkpoint.record, ...existing, status: 'FAILED', errorCode: 'DELIVERY_OUTCOME_UNKNOWN',
+        errorMessage: owner?.error?.message || '投递结果无法确认，请核对原记录，禁止重复投递',
+        completedAt: owner?.completedAt || checkpoint.updatedAt
+      });
+    }
+    const rows = [...projected.values(), ...this.data.submissionHistory.filter((row) => !projected.has(row.submissionId))]
+      .sort((a, b) => (b.completedAt || b.startedAt).localeCompare(a.completedAt || a.startedAt));
+    return this.readView(select(rows));
+  }
   getBatch(id: string) { return this.select('submissionBatches', (rows) => rows.find((row) => row.batchId === id)); }
   getOperation(id: string) { return this.select('reviewOperations', (rows) => rows?.find((row) => row.operationId === id)); }
   operations(activeOnly = false): ReviewOperation[] { return this.select('reviewOperations', (rows) => (rows || []).filter((row) => !activeOnly || operationIsActive(row))); }

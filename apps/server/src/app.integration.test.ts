@@ -947,8 +947,53 @@ describe.sequential('review and submission integration', () => {
     const batch = await app.inject({ method: 'POST', url: '/api/v1/submissions/batch', payload: { batchId: 'BATCH-TEST-EMPTY-SOURCE', pendingSubmissionIds: [approve.json().pendingSubmissions[0].id], conflictPolicy: 'skip' } });
     expect(batch.statusCode).toBe(200);
     expect(batch.json().results[0]).toMatchObject({ status: 'FAILED', errorCode: 'SOURCE_FOLDER_MISSING' });
+    const failure = batch.json().results[0];
+    expect(failure.submissionId).toBeTruthy();
+    const history = (await app.inject({ method: 'GET', url: '/api/v1/submissions/history' })).json();
+    expect(history.items.filter((item: any) => item.submissionId === failure.submissionId)).toEqual([
+      expect.objectContaining({ status: 'FAILED', sourceFolder: task.sourceFolder, errorCode: 'SOURCE_FOLDER_MISSING' })
+    ]);
+    const detail = await app.inject({ method: 'GET', url: `/api/v1/submissions/${failure.submissionId}` });
+    expect(detail.json()).toMatchObject({ submissionId: failure.submissionId, status: 'FAILED' });
     expect(await stat(path.join(config.stages[1]!.targets[0]!.targetQueueRoot, `${folderName}-已经审核`)).catch(() => null)).toBeNull();
     expect(await stat(path.join(config.stages[1]!.approvedArchiveRoot!, `${folderName}-已经审核`)).catch(() => null)).toBeNull();
+  });
+
+  it('pages unacknowledged checkpoints and routes history recovery to the original operation', async () => {
+    const { store, reviewOperations } = app.services;
+    const id = 'history-unknown-fixture', operationId = 'history-unknown-owner';
+    await store.updateSections(['deliveryCheckpoints', 'reviewOperations'], (db) => {
+      db.reviewOperations!.push({ operationId, kind: 'BATCH', requestKey: operationId, requestHash: operationId, subjectKeys: ['task:history-unknown-task'], input: {}, status: 'NEEDS_ATTENTION', attempt: 1, createdAt: '2026-09-05T01:00:00.000Z', updatedAt: '2026-09-05T02:00:00.000Z', completedAt: '2026-09-05T02:00:00.000Z', error: { code: 'DELIVERY_OUTCOME_UNKNOWN', message: 'fixture unknown target' } });
+      db.deliveryCheckpoints!.push({ submissionId: id, operationId, pendingSubmissionId: id, taskId: 'history-unknown-task', phase: 'COMMIT_INTENT', revision: 1, targetTemp: path.join(root, 'unpublished'), targetFinal: path.join(root, 'unknown-target'), files: [], updatedAt: '2026-09-05T02:00:00.000Z', record: {
+        submissionId: id, pendingSubmissionId: id, taskId: 'history-unknown-task', sourceStageId: 'E006', targetStageId: 'E001', sourceFolder: path.join(root, 'source'), selectedImageCount: 1, productSku: '9999999', status: 'FAILED', startedAt: '2026-09-05T01:00:00.000Z'
+      } });
+    });
+    try {
+      const before = await readFile(path.join(appData, 'db.json'), 'utf8');
+      const page = (await app.inject({ method: 'GET', url: '/api/v1/submissions/history?sku=9999999&page=1&pageSize=1&completedFrom=2026-09-05T00:00:00.000Z' })).json();
+      expect(page).toMatchObject({ total: 1, page: 1, pageSize: 1, items: [expect.objectContaining({ submissionId: id, errorCode: 'DELIVERY_OUTCOME_UNKNOWN' })] });
+      expect((await app.inject({ method: 'GET', url: '/api/v1/submissions/history?sku=9999999&page=2&pageSize=1' })).json()).toMatchObject({ total: 1, items: [] });
+      expect((await app.inject({ method: 'GET', url: `/api/v1/submissions/${id}` })).json()).toMatchObject({ submissionId: id, errorCode: 'DELIVERY_OUTCOME_UNKNOWN' });
+      expect(await readFile(path.join(appData, 'db.json'), 'utf8')).toBe(before);
+      const retry = vi.spyOn(reviewOperations, 'retry').mockResolvedValue(store.getOperation(operationId)!);
+      try {
+        const response = await app.inject({ method: 'POST', url: `/api/v1/submissions/${id}/retry`, headers: { prefer: 'respond-async' }, payload: {} });
+        expect(response.statusCode).toBe(202);
+        expect(response.json().operation.operationId).toBe(operationId);
+        expect(retry).toHaveBeenCalledWith(operationId);
+      } finally { retry.mockRestore(); }
+      expect(store.getSubmission(id)).toBeUndefined();
+      await store.updateSections(['reviewOperations', 'deliveryCheckpoints'], (db) => {
+        db.reviewOperations = db.reviewOperations!.filter((row) => row.operationId !== operationId);
+        db.deliveryCheckpoints!.find((row) => row.submissionId === id)!.phase = 'NEEDS_ATTENTION';
+      });
+      expect((await app.inject({ method: 'POST', url: `/api/v1/submissions/${id}/retry`, headers: { prefer: 'respond-async' }, payload: {} })).statusCode).toBe(409);
+    } finally {
+      await store.updateSections(['deliveryCheckpoints', 'reviewOperations'], (db) => {
+        db.deliveryCheckpoints = db.deliveryCheckpoints!.filter((row) => row.submissionId !== id);
+        db.reviewOperations = db.reviewOperations!.filter((row) => row.operationId !== operationId);
+      });
+    }
   });
 
   it('retries only the archive leg after a partial submission', async () => {
