@@ -43,20 +43,51 @@ function platformLinks(job: Pick<OzonPublishJob, 'ozonProductLinks'>) {
   return Array.isArray(job.ozonProductLinks) ? job.ozonProductLinks : [];
 }
 
-export function ozonAutomaticTaskPrimaryState(job: Pick<OzonPublishJob, 'state' | 'ozonProductLinks'> & Partial<Pick<OzonPublishJob, 'payload'>>): {
+type OzonAutomaticTaskStatusInput = Pick<OzonPublishJob, 'state' | 'ozonProductLinks'>
+  & Partial<Pick<OzonPublishJob, 'offerIds' | 'payload'>>;
+
+function expectedOfferIds(job: OzonAutomaticTaskStatusInput): string[] {
+  const payloadOfferIds = Array.isArray(job.payload?.expectedOfferIds)
+    ? job.payload.expectedOfferIds
+    : Array.isArray(job.payload?.offerIds)
+      ? job.payload.offerIds
+      : [];
+  return [...new Set([...(job.offerIds || []), ...payloadOfferIds]
+    .map((offerId) => String(offerId || '').trim())
+    .filter(Boolean))];
+}
+
+export function ozonAutomaticTaskPlatformState(job: OzonAutomaticTaskStatusInput): {
+  label: string;
+  color: string;
+  state: 'ON_SALE' | 'ARCHIVED' | 'PARTIAL_ON_SALE' | 'NOT_FOR_SALE';
+} | undefined {
+  const expected = expectedOfferIds(job);
+  if (!expected.length) return undefined;
+  const linksByOfferId = new Map(platformLinks(job).map((link) => [link.offerId, link]));
+  const links = expected.map((offerId) => linksByOfferId.get(offerId));
+  if (links.some((link) => !link)) return undefined;
+  const states = links.map((link) => link!.displayState);
+  if (states.every((state) => state === 'ON_SALE')) return { label: '已可售', color: 'green', state: 'ON_SALE' };
+  if (states.every((state) => state === 'ARCHIVED')) return { label: '已经归档', color: 'default', state: 'ARCHIVED' };
+  if (states.every((state) => state === 'ON_SALE' || state === 'ARCHIVED')) {
+    return { label: '部分可售', color: 'gold', state: 'PARTIAL_ON_SALE' };
+  }
+  if (states.every((state) => state === 'NOT_FOR_SALE')) {
+    return { label: '商品已下架', color: 'volcano', state: 'NOT_FOR_SALE' };
+  }
+  return undefined;
+}
+
+export function ozonAutomaticTaskPrimaryState(job: OzonAutomaticTaskStatusInput): {
   label: string;
   color: string;
 } {
-  if (platformLinks(job).some((link) => link.displayState === 'ARCHIVED')) {
-    return { label: '商品已归档', color: 'default' };
-  }
-  if (platformLinks(job).some((link) => link.displayState === 'NOT_FOR_SALE')) {
-    return { label: '商品已下架', color: 'volcano' };
-  }
   if (job.payload?.networkRecovery?.status === 'WAITING_NETWORK') {
     return { label: 'OZON上品中', color: 'processing' };
   }
-  return ozonAutomaticStateMeta[job.state];
+  const meta = ozonAutomaticStateMeta[job.state];
+  return { label: meta.label, color: meta.color };
 }
 
 export function ozonAutomaticTaskVersionMode(job: Pick<OzonPublishJob, 'revision' | 'payload' | 'publicationMode'> & { taskKind?: string }): {
@@ -92,21 +123,29 @@ const defaultReasons: Record<OzonPublishJobState, string> = {
 export function ozonAutomaticTaskReason(job: Pick<
   OzonPublishJob,
   'state' | 'payload' | 'lastErrorCode' | 'lastErrorMessage' | 'nextAttemptAt' | 'ozonProductLinks'
->): OzonAutomaticTaskReason {
-  const links = platformLinks(job);
-  const archived = links.find((link) => link.displayState === 'ARCHIVED');
-  if (archived) {
+> & Partial<Pick<OzonPublishJob, 'offerIds'>>): OzonAutomaticTaskReason {
+  const platformState = ozonAutomaticTaskPlatformState(job);
+  if (platformState?.state === 'PARTIAL_ON_SALE') {
     return {
-      text: '商品已被平台归档并隐藏，买家端显示“无现货”。',
-      ...(text(archived.platformMessage) ? { detail: text(archived.platformMessage) } : {}),
+      text: job.state === 'CANCELLED'
+        ? '自动上品流程已取消；平台回读显示部分变体已可售、部分变体已经归档。'
+        : '平台回读显示部分变体已可售、部分变体已经归档。',
+      tone: job.state === 'CANCELLED' ? 'closed' : 'attention'
+    };
+  }
+  if (platformState?.state === 'ARCHIVED') {
+    const detail = platformLinks(job).map((link) => text(link.platformMessage)).find(Boolean);
+    return {
+      text: '全部变体已经归档，买家端不可售。',
+      ...(detail ? { detail } : {}),
       tone: 'closed'
     };
   }
-  const notForSale = links.find((link) => link.displayState === 'NOT_FOR_SALE');
-  if (notForSale) {
+  if (platformState?.state === 'NOT_FOR_SALE') {
+    const detail = platformLinks(job).map((link) => text(link.platformMessage)).find(Boolean);
     return {
-      text: '商品已被平台下架，当前不对买家展示。',
-      ...(text(notForSale.platformMessage) ? { detail: text(notForSale.platformMessage) } : {}),
+      text: '全部变体已被平台下架，当前不对买家展示。',
+      ...(detail ? { detail } : {}),
       tone: 'attention'
     };
   }

@@ -1634,6 +1634,73 @@ describe('OZON publication operation semantics', () => {
     expect(repository.failPublicationReadback).not.toHaveBeenCalled();
   });
 
+  it('uses a stable operation requestId for the dedicated read-only platform status sync', async () => {
+    const publication = publicationFixture();
+    const operationRequestId = '22222222-2222-4222-8222-222222222222';
+    const repository = {
+      getSettings: vi.fn(async () => ({
+        adminApiWebhookUrl: 'http://n8n.test/webhook/ozon-admin', publicationReadbackEnabled: true
+      })),
+      beginPublicationReadback: vi.fn(async () => ({
+        publication, dispatchRowVersion: publication.rowVersion + 1,
+        requestRef: `ozon-readback:${publication.id}:${operationRequestId}`,
+        taskId: 'default__9900002__r1',
+        listing: { sku: '9900002', status: 'MODERATING', data: { offers: [{ offerId: '9900002-01', media: [] }] } },
+        mappings: [], operationRequestId
+      })),
+      completePublicationReadback: vi.fn(async () => ({ ...publication, status: 'SUCCEEDED', rowVersion: publication.rowVersion + 2 })),
+      failPublicationReadback: vi.fn()
+    };
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      ok: true,
+      result: {
+        requestedOfferIds: ['9900002-01'],
+        readAt: '2026-09-05T11:00:00.000Z',
+        infoItems: [{
+          offer_id: '9900002-01', id: '501', sku: '1001', is_created: true,
+          statuses: { status_name: 'selling', moderate_status: 'approved', validation_status: 'success' },
+          stocks: { stocks: [{ present: 1 }] }
+        }],
+        attributeItems: [],
+        operations: [{ operation: 'infoList', ok: true }, { operation: 'attributesInfo', ok: true }]
+      }
+    }), { status: 200 }));
+    globalThis.fetch = fetchMock as typeof fetch;
+    const service = new OzonStoreService(repository as any, {} as any, {} as any, {} as any);
+
+    await expect(service.refreshPublicationPlatformStatus(publication.id, {
+      rowVersion: publication.rowVersion, requestId: operationRequestId
+    })).resolves.toMatchObject({ status: 'SUCCEEDED' });
+
+    expect(repository.beginPublicationReadback).toHaveBeenCalledWith(
+      publication.id, publication.rowVersion, operationRequestId
+    );
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
+      action: 'productStatus', publicationId: publication.id, offerIds: ['9900002-01']
+    });
+    expect(repository.completePublicationReadback).toHaveBeenCalledWith(expect.objectContaining({
+      operationRequestId,
+      offers: [expect.objectContaining({ offerId: '9900002-01', displayState: 'ON_SALE', hasStock: true })]
+    }));
+  });
+
+  it('validates and forwards automation stop CAS without invoking a platform gateway', async () => {
+    const publication = publicationFixture();
+    const requestId = '33333333-3333-4333-8333-333333333333';
+    const repository = {
+      stopPublicationAutomation: vi.fn(async () => ({ ...publication, status: 'CANCELLED' }))
+    };
+    const service = new OzonStoreService(repository as any, {} as any, {} as any, {} as any);
+
+    await expect(service.stopPublicationAutomation(publication.id, {
+      rowVersion: publication.rowVersion, requestId
+    })).resolves.toMatchObject({ status: 'CANCELLED' });
+    expect(repository.stopPublicationAutomation).toHaveBeenCalledWith(publication.id, publication.rowVersion, requestId);
+    await expect(service.stopPublicationAutomation(publication.id, {
+      rowVersion: publication.rowVersion, requestId: 'not-a-uuid'
+    })).rejects.toMatchObject({ code: 'CONFIG_INVALID' });
+  });
+
   it('persists a 429 readback as NOT_SENT/RETRYABLE without changing authoritative platform state', async () => {
     const publication = publicationFixture();
     const repository = {

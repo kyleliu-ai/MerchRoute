@@ -118,6 +118,14 @@ export async function registerOzonStoreRoutes(
     requireLoopbackOperator(request);
     return { publication: await stores.recheckPublication((request.params as { publicationId: string }).publicationId, request.body) };
   });
+  app.post('/api/v1/ozon/publications/:publicationId/platform-status/refresh', async (request) => {
+    requireLoopbackOperator(request);
+    return { publication: await stores.refreshPublicationPlatformStatus((request.params as { publicationId: string }).publicationId, request.body) };
+  });
+  app.post('/api/v1/ozon/publications/:publicationId/stop-automation', async (request) => {
+    requireLoopbackOperator(request);
+    return { publication: await stores.stopPublicationAutomation((request.params as { publicationId: string }).publicationId, request.body) };
+  });
   app.post('/api/v1/ozon/publications/:publicationId/recover-import-price-floor', async (request) => {
     requireLoopbackOperator(request);
     return stores.recoverImportPriceFloorFailure(

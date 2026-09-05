@@ -11,8 +11,10 @@ import {
   ozonPublicationCreateInputSchema,
   ozonPublicationCompatibleAppendSchema,
   ozonPublicationMutationSchema,
+  ozonPublicationPlatformStatusRefreshSchema,
   ozonPublicationPlanInputSchema,
   ozonPublicationRecheckInputSchema,
+  ozonPublicationStopAutomationSchema,
   ozonRuntimeClaimSchema,
   ozonRuntimeClaimResultSchema,
   ozonRuntimePreflightClaimSchema,
@@ -1090,13 +1092,30 @@ export class OzonStoreService {
         productJsonPath: productPath
       });
     }
+    return this.performPublicationReadback(publicationId, parsed.data.rowVersion);
+  }
+
+  async refreshPublicationPlatformStatus(publicationId: string, input: unknown) {
+    const parsed = ozonPublicationPlatformStatusRefreshSchema.safeParse(input);
+    if (!parsed.success) throw validationError('OZON publication 平台状态同步缺少 rowVersion 或 requestId', parsed.error.issues);
+    return this.performPublicationReadback(publicationId, parsed.data.rowVersion, parsed.data.requestId);
+  }
+
+  async stopPublicationAutomation(publicationId: string, input: unknown) {
+    const parsed = ozonPublicationStopAutomationSchema.safeParse(input);
+    if (!parsed.success) throw validationError('终止 OZON 自动上品流程缺少 rowVersion 或 requestId', parsed.error.issues);
+    return this.repository.stopPublicationAutomation(publicationId, parsed.data.rowVersion, parsed.data.requestId);
+  }
+
+  private async performPublicationReadback(publicationId: string, rowVersion: number, operationRequestId?: string) {
     const settings = await this.repository.getSettings();
     if (!settings.publicationReadbackEnabled || !settings.adminApiWebhookUrl) {
       throw new AppError('OZON_READBACK_DISPATCH_UNAVAILABLE', 'OZON publication 只读回查尚未通过受控 fleet capability 门禁', {
         publicationId, deliveryState: 'NOT_SENT', publicationReadbackEnabled: false
       }, 409);
     }
-    const context = await this.repository.beginPublicationReadback(publicationId, parsed.data.rowVersion);
+    const context = await this.repository.beginPublicationReadback(publicationId, rowVersion, operationRequestId);
+    if (operationRequestId && !context.taskId) return context.publication;
     try {
       const response = await postPublicationReadback(settings.adminApiWebhookUrl, {
         action: 'productStatus',
@@ -1117,6 +1136,7 @@ export class OzonStoreService {
         publicationId,
         dispatchRowVersion: context.dispatchRowVersion,
         requestRef: context.requestRef,
+        ...(operationRequestId ? { operationRequestId } : {}),
         ...normalized
       });
     } catch (error) {
@@ -1125,6 +1145,7 @@ export class OzonStoreService {
         publicationId,
         dispatchRowVersion: context.dispatchRowVersion,
         requestRef: context.requestRef,
+        ...(operationRequestId ? { operationRequestId } : {}),
         ...failure
       });
       throw new AppError(failure.errorCode, failure.errorMessage, {

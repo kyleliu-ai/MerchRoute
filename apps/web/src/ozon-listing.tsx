@@ -73,6 +73,7 @@ import {
   OZON_DESCRIPTION_MAX_LENGTH,
   OZON_TITLE_MAX_LENGTH,
   OZON_TITLE_TRANSLATION_WORKFLOW_ID,
+  classifyOzonImportFailures,
   ozonAutoJobCanCancel,
   ozonJobHasActiveLease,
   ozonJobHasRemoteProgress,
@@ -137,6 +138,7 @@ import { OzonStoreSettingsDrawer } from './ozon-store-settings';
 import { ozonAutoJobKey } from './ozon-store-settings-utils';
 import {
   ozonAutomaticStateMeta,
+  ozonAutomaticTaskPlatformState,
   ozonAutomaticTaskPrimaryState,
   ozonAutomaticTaskReason,
   ozonAutomaticTaskStatistics,
@@ -596,6 +598,8 @@ function AutomaticJobsPanel({ initialJobId, initialStoreId, onOpenJob, onCloseJo
   const [storeId, setStoreId] = useState<string | undefined>(initialStoreId);
   const [sharedMaterialOpen, setSharedMaterialOpen] = useState(false);
   const [retryActionContainer, setRetryActionContainer] = useState<HTMLSpanElement | null>(null);
+  const platformStatusRequest = useRef<{ publicationId: string; requestId: string }>();
+  const stopAutomationRequest = useRef<{ publicationId: string; requestId: string }>();
   const queryClient = useQueryClient();
   useEffect(() => {
     setJobId(initialJobId);
@@ -677,18 +681,33 @@ function AutomaticJobsPanel({ initialJobId, initialStoreId, onOpenJob, onCloseJo
       const binding = ozonJobActionBinding(target);
       if (binding.kind === 'LEGACY') {
         const result = await api.cancelOzonJob(binding.jobId, binding.storeId);
-        return { job: result.job, publication: undefined };
+        return { job: result.job, publication: undefined, automationStopped: false };
       }
       const current = await api.ozonPublication(binding.publicationId);
+      const importFailure = classifyOzonImportFailures(target.payload);
+      if (importFailure.blockerCode) {
+        if (!stopAutomationRequest.current || stopAutomationRequest.current.publicationId !== binding.publicationId) {
+          stopAutomationRequest.current = { publicationId: binding.publicationId, requestId: crypto.randomUUID() };
+        }
+        const result = await api.stopOzonPublicationAutomation(
+          binding.publicationId,
+          current.publication.rowVersion,
+          stopAutomationRequest.current.requestId
+        );
+        return { job: target, publication: result.publication, automationStopped: true };
+      }
       const result = await api.cancelOzonPublication(binding.publicationId, current.publication.rowVersion);
-      return { job: target, publication: result.publication };
+      return { job: target, publication: result.publication, automationStopped: false };
     },
     onSuccess: async (result) => {
+      stopAutomationRequest.current = undefined;
       if (!result.publication) {
         queryClient.setQueryData(['ozon-auto-job', ozonJobStoreId(result.job), result.job.id], { job: result.job });
       }
       message.success(result.publication
-        ? `SKU ${result.job.sku} 的店铺 publication 已取消，上品资料已保留`
+        ? result.automationStopped
+          ? `SKU ${result.job.sku} 的自动流程已取消；未调用 OZON 写接口`
+          : `SKU ${result.job.sku} 的店铺 publication 已取消，上品资料已保留`
         : `SKU ${result.job.sku} 的自动上品任务已取消，上品资料已保留`);
       await invalidateJobQueries(result.job);
       if (result.publication) {
@@ -698,7 +717,33 @@ function AutomaticJobsPanel({ initialJobId, initialStoreId, onOpenJob, onCloseJo
         ]);
       }
     },
-    onError: showError
+    onError: (error: Error) => {
+      if (error instanceof ApiError && error.status >= 400 && error.status < 500) stopAutomationRequest.current = undefined;
+      showError(error);
+    }
+  });
+  const syncPlatformStatus = useMutation({
+    mutationFn: async (target: OzonPublishJob) => {
+      if (!target.publicationId) throw new Error('当前任务缺少 publicationId，不能同步平台状态');
+      const current = await api.ozonPublication(target.publicationId);
+      if (!platformStatusRequest.current || platformStatusRequest.current.publicationId !== target.publicationId) {
+        platformStatusRequest.current = { publicationId: target.publicationId, requestId: crypto.randomUUID() };
+      }
+      return api.refreshOzonPublicationPlatformStatus(
+        target.publicationId,
+        current.publication.rowVersion,
+        platformStatusRequest.current.requestId
+      );
+    },
+    onSuccess: async (_, target) => {
+      platformStatusRequest.current = undefined;
+      message.success(`SKU ${target.sku} 的 OZON 平台状态已同步；未执行上品或库存写入`);
+      await invalidateJobQueries(target);
+    },
+    onError: (error: Error) => {
+      if (error instanceof ApiError && error.status >= 400 && error.status < 500) platformStatusRequest.current = undefined;
+      showError(error);
+    }
   });
   const manualTakeover = useMutation({
     mutationFn: async (target: { job: OzonPublishJob; listing: OzonListingDraft }) => api.takeOverOzonAutomaticPreparation(
@@ -757,12 +802,22 @@ function AutomaticJobsPanel({ initialJobId, initialStoreId, onOpenJob, onCloseJo
     if (!targetStoreId) return;
     onOpenListing({ mode: 'AUTO_TASK_SNAPSHOT', sku: job.sku, jobId: job.id, storeId: targetStoreId });
   };
+  const importFailure = classifyOzonImportFailures(job?.payload);
+  const permanentFailureCanStop = Boolean(job?.publicationId
+    && importFailure.blockerCode
+    && ['NEEDS_ATTENTION', 'FAILED'].includes(job.state)
+    && !ozonJobHasActiveLease(job)
+    && ozonUnknownRecord(job.payload?.recoveryHold)?.active !== true);
+  const platformStatusSyncAllowed = Boolean(permanentFailureCanStop && job?.state !== 'CANCELLED');
   const confirmCancel = () => {
     if (!job) return;
+    const permanentFailure = Boolean(importFailure.blockerCode);
     Modal.confirm({
       title: `取消 SKU ${job.sku} 的自动上品任务？`,
       icon: <ExclamationCircleOutlined />,
-      content: '只停止尚未进入 OZON 远程执行的自动任务，并保留已经生成的上品资料。已经进入远程阶段的任务不能撤回。',
+      content: permanentFailure
+        ? '只终止后续自动流程，保留商品映射、平台状态和重复卡错误证据；不会调用 OZON 商品、媒体、价格或库存写接口。'
+        : '只停止尚未进入 OZON 远程执行的自动任务，并保留已经生成的上品资料。已经进入远程阶段的任务不能撤回。',
       okText: '取消自动任务',
       okButtonProps: { danger: true },
       cancelText: '继续保留',
@@ -812,14 +867,16 @@ function AutomaticJobsPanel({ initialJobId, initialStoreId, onOpenJob, onCloseJo
     });
   };
   const listingDisabledReason = !job ? '任务详情加载后可打开上品资料' : undefined;
-  const cancelAllowed = Boolean(job && ozonAutoJobCanCancel(job));
+  const cancelAllowed = Boolean(job && (ozonAutoJobCanCancel(job) || permanentFailureCanStop));
   const cancelDisabledReason = !job
     ? '任务详情加载后可取消'
     : cancelAllowed
       ? undefined
       : ozonJobHasActiveLease(job)
         ? `任务正在运行，lease 占用至 ${dayjs(job.leaseExpiresAt).format('YYYY-MM-DD HH:mm:ss')}，释放后才能取消`
-        : ozonJobHasRemoteProgress(job)
+        : importFailure.blockerCode
+          ? '永久失败任务正在执行其他恢复或状态同步操作，结束后才能取消自动流程'
+          : ozonJobHasRemoteProgress(job)
           ? '任务已进入 OZON 远程执行，不能取消'
           : '当前状态不能取消自动任务';
   const automaticEnabled = Boolean(status.data?.acceptingNewJobs);
@@ -898,6 +955,7 @@ function AutomaticJobsPanel({ initialJobId, initialStoreId, onOpenJob, onCloseJo
         <Tooltip title={listingDisabledReason}><span className="ozon-auto-job-action-tooltip"><Button icon={<FileTextOutlined />} loading={preparationSelected ? preparationMaterial.isFetching : listing.isLoading} disabled={Boolean(listingDisabledReason)} onClick={openListing}>{preparationSelected ? '打开公共素材' : '打开上品资料'}</Button></span></Tooltip>
         {ozonJobIsMultistorePreparation(job) && <Tooltip title={manualTakeoverDisabledReason}><span className="ozon-auto-job-action-tooltip"><Button icon={<FormOutlined />} loading={manualTakeover.isPending} disabled={!manualTakeoverAllowed} onClick={confirmManualTakeover}>转为手动处理</Button></span></Tooltip>}
         {ozonJobIsMultistorePreparation(job) && <Tooltip title={manualSuccessReconcileDisabledReason}><span className="ozon-auto-job-action-tooltip"><Button icon={<CheckCircleOutlined />} loading={manualSuccessReconcile.isPending} disabled={!manualSuccessReconcileAllowed} onClick={confirmManualSuccessReconcile}>按手动成功收口</Button></span></Tooltip>}
+        {importFailure.blockerCode && <Tooltip title={platformStatusSyncAllowed ? '仅从 OZON 读取各变体当前状态，不执行上品、价格或库存写入' : '当前任务不能同步平台状态'}><span className="ozon-auto-job-action-tooltip"><Button icon={<SyncOutlined />} loading={syncPlatformStatus.isPending} disabled={!platformStatusSyncAllowed} onClick={() => job && syncPlatformStatus.mutate(job)}>同步平台状态</Button></span></Tooltip>}
         <span ref={setRetryActionContainer} />
         <Tooltip title={cancelDisabledReason}><span className="ozon-auto-job-action-tooltip"><Button danger icon={<StopOutlined />} loading={cancel.isPending} disabled={!cancelAllowed} onClick={confirmCancel}>取消自动任务</Button></span></Tooltip>
       </Space>}
@@ -1160,24 +1218,40 @@ function JobDetail({ job, recovery }: { job: OzonPublishJob; recovery?: OzonJobR
   </Space>;
 }
 
-export function ozonJobPrimaryStateMeta(job: Pick<OzonPublishJob, 'state' | 'ozonProductLinks'> & Partial<Pick<OzonPublishJob, 'payload'>>): { label: string; color: string } {
+export function ozonJobPrimaryStateMeta(job: Pick<OzonPublishJob, 'state' | 'ozonProductLinks'> & Partial<Pick<OzonPublishJob, 'offerIds' | 'payload'>>): { label: string; color: string } {
   return ozonAutomaticTaskPrimaryState(job);
 }
 
-export function ozonJobArchiveNotice(job: Pick<OzonPublishJob, 'ozonProductLinks'>): { message: string; description: string } | undefined {
+export function ozonJobArchiveNotice(job: Pick<OzonPublishJob, 'ozonProductLinks'> & Partial<Pick<OzonPublishJob, 'state' | 'offerIds' | 'payload'>>): { message: string; description: string } | undefined {
+  const platformState = ozonAutomaticTaskPlatformState({
+    state: job.state || 'NEEDS_ATTENTION',
+    ozonProductLinks: job.ozonProductLinks,
+    offerIds: job.offerIds,
+    payload: job.payload
+  });
   const archivedLinks = (job.ozonProductLinks || []).filter((link) => link.displayState === 'ARCHIVED');
-  if (!archivedLinks.length) return undefined;
+  if (!archivedLinks.length || !platformState || !['ARCHIVED', 'PARTIAL_ON_SALE'].includes(platformState.state)) return undefined;
   const platformMessages = uniqueStrings(archivedLinks.map((link) => link.platformMessage));
+  if (platformState.state === 'PARTIAL_ON_SALE') {
+    const archivedOfferIds = archivedLinks.map((link) => link.offerId).join('、');
+    const onSaleOfferIds = (job.ozonProductLinks || []).filter((link) => link.displayState === 'ON_SALE').map((link) => link.offerId).join('、');
+    return {
+      message: 'OZON 商品部分可售',
+      description: `平台回读显示 ${onSaleOfferIds} 已可售，${archivedOfferIds} 已经归档。自动流程状态与平台状态分别保留。${platformMessages.length ? ` OZON 原始说明：${platformMessages.join('；')}` : ''}`
+    };
+  }
   return {
-    message: 'OZON 商品已归档',
-    description: `商品已被隐藏，买家看到的状态为“无现货”。这是平台归档状态，不是库存写入失败。${platformMessages.length ? ` OZON 原始说明：${platformMessages.join('；')}` : ''}`
+    message: 'OZON 商品已经归档',
+    description: `全部变体已经归档，买家端不可售。这是平台归档状态，不是库存写入失败。${platformMessages.length ? ` OZON 原始说明：${platformMessages.join('；')}` : ''}`
   };
 }
 
-function OzonJobStateTags({ job }: { job: Pick<OzonPublishJob, 'state' | 'payload' | 'ozonProductLinks'> }) {
+function OzonJobStateTags({ job }: { job: Pick<OzonPublishJob, 'state' | 'payload' | 'ozonProductLinks'> & Partial<Pick<OzonPublishJob, 'offerIds'>> }) {
   const primaryState = ozonJobPrimaryStateMeta(job);
+  const platformState = ozonAutomaticTaskPlatformState(job);
   return <Space size={4} wrap>
     <Tag color={primaryState.color}>{primaryState.label}</Tag>
+    {platformState && platformState.label !== primaryState.label && <Tag color={platformState.color}>{platformState.label}</Tag>}
   </Space>;
 }
 
@@ -1278,13 +1352,13 @@ type OzonPlatformOfferView = {
 };
 
 const ozonPlatformStateMeta: Record<OzonPlatformOfferDisplayState, { label: string; color: string; icon: React.ReactNode }> = {
-  ON_SALE: { label: '在售', color: 'green', icon: <CheckCircleOutlined /> },
+  ON_SALE: { label: '已可售', color: 'green', icon: <CheckCircleOutlined /> },
   MODERATING: { label: '审核中', color: 'processing', icon: <ClockCircleOutlined /> },
   OUT_OF_STOCK: { label: '缺货', color: 'gold', icon: <WarningOutlined /> },
   NOT_FOR_SALE: { label: '商品已下架', color: 'volcano', icon: <LockOutlined /> },
   ERROR: { label: '异常', color: 'red', icon: <WarningOutlined /> },
   HIDDEN: { label: '隐藏', color: 'purple', icon: <LockOutlined /> },
-  ARCHIVED: { label: '商品已归档', color: 'default', icon: <DatabaseOutlined /> },
+  ARCHIVED: { label: '已经归档', color: 'default', icon: <DatabaseOutlined /> },
   NOT_FOUND: { label: '平台未找到', color: 'red', icon: <WarningOutlined /> },
   UNKNOWN: { label: '待确认', color: 'default', icon: <ClockCircleOutlined /> }
 };
@@ -4161,10 +4235,17 @@ function ozonGeneratedProductSummary(value: unknown): {
   };
 }
 
-export function ozonJobStageStateValue(job: Pick<OzonPublishJob, 'stageStates' | 'ozonProductLinks'>, stage: (typeof stages)[number][2]): string | undefined {
+export function ozonJobStageStateValue(job: Pick<OzonPublishJob, 'stageStates' | 'ozonProductLinks'> & Partial<Pick<OzonPublishJob, 'state' | 'offerIds' | 'payload'>>, stage: (typeof stages)[number][2]): string | undefined {
   if (stage === 'moderation') {
-    if ((job.ozonProductLinks || []).some((link) => link.displayState === 'ARCHIVED')) return 'ARCHIVED';
-    if ((job.ozonProductLinks || []).some((link) => link.displayState === 'NOT_FOR_SALE')) return 'NOT_FOR_SALE';
+    const platformState = ozonAutomaticTaskPlatformState({
+      state: job.state || 'NEEDS_ATTENTION',
+      ozonProductLinks: job.ozonProductLinks,
+      offerIds: job.offerIds,
+      payload: job.payload
+    });
+    if (platformState?.state === 'ARCHIVED') return 'ARCHIVED';
+    if (platformState?.state === 'NOT_FOR_SALE') return 'NOT_FOR_SALE';
+    if (platformState?.state === 'PARTIAL_ON_SALE') return 'PARTIAL';
   }
   return job.stageStates[stage];
 }

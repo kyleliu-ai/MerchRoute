@@ -265,6 +265,13 @@ export const ozonPublicationMutationSchema = z.object({
   rowVersion: z.number().int().positive()
 }).strict();
 
+export const ozonPublicationPlatformStatusRefreshSchema = z.object({
+  rowVersion: z.number().int().positive(),
+  requestId: z.string().uuid()
+}).strict();
+
+export const ozonPublicationStopAutomationSchema = ozonPublicationPlatformStatusRefreshSchema;
+
 export const ozonPublicationCompatibleAppendSchema = ozonPublicationMutationSchema.extend({
   planHash: z.string().regex(/^sha256:[a-f0-9]{64}$/)
 }).strict();
@@ -566,6 +573,8 @@ export type OzonRuntimeStorePreflightReportInput = z.infer<typeof ozonRuntimeSto
 export type OzonPublicationPlanInput = z.infer<typeof ozonPublicationPlanInputSchema>;
 export type OzonPublicationCreateInput = z.infer<typeof ozonPublicationCreateInputSchema>;
 export type OzonPublicationRecheckInput = z.infer<typeof ozonPublicationRecheckInputSchema>;
+export type OzonPublicationPlatformStatusRefreshInput = z.infer<typeof ozonPublicationPlatformStatusRefreshSchema>;
+export type OzonPublicationStopAutomationInput = z.infer<typeof ozonPublicationStopAutomationSchema>;
 export type OzonPreparationRecheckPlanInput = z.infer<typeof ozonPreparationRecheckPlanInputSchema>;
 export type OzonPreparationRecheckInput = z.infer<typeof ozonPreparationRecheckInputSchema>;
 export type OzonPreparationManualSuccessReconcilePlanInput = z.infer<typeof ozonPreparationManualSuccessReconcilePlanInputSchema>;

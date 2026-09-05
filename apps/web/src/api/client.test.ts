@@ -264,6 +264,8 @@ describe('OZON 多店铺请求合同', () => {
 
     await api.syncOzonPublication('publication/1', 8);
     await api.recheckOzonPublication('publication/1', { rowVersion: 8, planHash: recheckPlanHash, requestId });
+    await api.refreshOzonPublicationPlatformStatus('publication/1', 8, requestId);
+    await api.stopOzonPublicationAutomation('publication/1', 8, requestId);
     await api.cancelOzonPublication('publication/1', 8);
     await api.ozonPublicationCompatibleAppendPlan('publication/1');
     await api.compatibleAppendOzonPublication('publication/1', 8, appendPlanHash);
@@ -272,17 +274,23 @@ describe('OZON 多店铺请求合同', () => {
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
       '/api/v1/ozon/publications/publication%2F1/sync',
       '/api/v1/ozon/publications/publication%2F1/recheck',
+      '/api/v1/ozon/publications/publication%2F1/platform-status/refresh',
+      '/api/v1/ozon/publications/publication%2F1/stop-automation',
       '/api/v1/ozon/publications/publication%2F1/cancel',
       '/api/v1/ozon/publications/publication%2F1/compatible-append-plan',
       '/api/v1/ozon/publications/publication%2F1/compatible-append',
       '/api/v1/ozon/publications/publication%2F1/republish'
     ]);
-    expect(fetchMock.mock.calls.slice(0, 3).map(([, init]) => JSON.parse(String((init as RequestInit).body)))).toEqual([
-      { rowVersion: 8 }, { rowVersion: 8, planHash: recheckPlanHash, requestId }, { rowVersion: 8 }
+    expect(fetchMock.mock.calls.slice(0, 5).map(([, init]) => JSON.parse(String((init as RequestInit).body)))).toEqual([
+      { rowVersion: 8 },
+      { rowVersion: 8, planHash: recheckPlanHash, requestId },
+      { rowVersion: 8, requestId },
+      { rowVersion: 8, requestId },
+      { rowVersion: 8 }
     ]);
-    expect((fetchMock.mock.calls[3]?.[1] as RequestInit).body).toBeUndefined();
-    expect(JSON.parse(String((fetchMock.mock.calls[4]?.[1] as RequestInit).body))).toEqual({ rowVersion: 8, planHash: appendPlanHash });
-    expect(JSON.parse(String((fetchMock.mock.calls[5]?.[1] as RequestInit).body))).toEqual({ rowVersion: 8 });
+    expect((fetchMock.mock.calls[5]?.[1] as RequestInit).body).toBeUndefined();
+    expect(JSON.parse(String((fetchMock.mock.calls[6]?.[1] as RequestInit).body))).toEqual({ rowVersion: 8, planHash: appendPlanHash });
+    expect(JSON.parse(String((fetchMock.mock.calls[7]?.[1] as RequestInit).body))).toEqual({ rowVersion: 8 });
   });
 
   it('publication-managed 详情只按 publicationId 读取冻结合同和恢复能力', async () => {
