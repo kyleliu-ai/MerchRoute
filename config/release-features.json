@@ -45,6 +45,11 @@
       "name": "work/ozon-title-readiness-20260905-0100",
       "head": "234ce139bd6d4deb2d630cd3205ba8b6d4df3dbd",
       "featureId": "project-release-guardrails"
+    },
+    {
+      "name": "work/wb-publish-retry-20260905-0537",
+      "head": "71efaf6a0a2e3fa1e5a545733287080ba3bce4c8",
+      "featureId": "project-release-guardrails"
     }
   ],
   "branches": [
@@ -667,6 +672,9 @@
         },
         {
           "path": "tests/e2e/review-operation-recovery.spec.ts"
+        },
+        {
+          "path": "tests/e2e/delivery-history-progress.spec.ts"
         }
       ],
       "checkIds": [
@@ -684,7 +692,11 @@
         { "path": "packages/shared/src/ozon-retry.ts" },
         { "path": "apps/server/src/repositories/ozon-retry.ts" },
         { "path": "apps/server/src/services/ozon-publishing/retry.ts" },
+        { "path": "apps/server/src/repositories/ozon-duplicate-card-recovery.integration.test.ts" },
+        { "path": "apps/server/src/repositories/ozon-stores.ts" },
         { "path": "apps/web/src/ozon-retry.tsx" },
+        { "path": "apps/web/src/ozon-retry.test.ts" },
+        { "path": "packages/shared/src/ozon-retry.test.ts" },
         { "path": "docs/ozon-publish-retry.md" }
       ],
       "checkIds": ["check", "postgres-integration", "e2e"],

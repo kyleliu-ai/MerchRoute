@@ -8,6 +8,19 @@ import { api, ApiError } from './api/client';
 
 const record = (value: unknown): Record<string, any> => value && typeof value === 'object' ? value as Record<string, any> : {};
 
+export function ozonDuplicateCardNotice(plan?: Pick<OzonPublishRetryPlan, 'blockerCode' | 'blockedOffers'>): {
+  title: string;
+  description: string;
+} | undefined {
+  if (plan?.blockerCode !== 'OZON_DUPLICATE_PRODUCT_CARD') return undefined;
+  const duplicateOffers = (plan.blockedOffers || []).map((offer) => offer.offerId).filter(Boolean).join('、');
+  const conflictOffers = [...new Set((plan.blockedOffers || []).flatMap((offer) => offer.conflictOfferIds))].join('、');
+  return {
+    title: '商品卡重复',
+    description: `OZON 判定 ${duplicateOffers || '当前商品'} 与已有商品卡 ${conflictOffers || '平台现有商品'} 类似或重复。请在 OZON 后台处理后同步平台状态，或取消自动任务。`
+  };
+}
+
 export function OzonPublishRetry({ job, stores, onOpenJob, actionContainer }: {
   job: OzonPublishJob; stores: OzonStore[]; onOpenJob: (id: string, storeId: string) => void; actionContainer?: HTMLElement | null;
 }) {
@@ -72,6 +85,7 @@ export function OzonPublishRetry({ job, stores, onOpenJob, actionContainer }: {
   }, [latest?.updatedAt, latest?.status, queryClient]);
   const busy = ['CHECKING', 'RUNNING'].includes(latest?.status || '');
   const reason = !storeId ? '请先选择本次要重试的店铺' : plan.error?.message || current?.blockedReason;
+  const duplicateCardNotice = ozonDuplicateCardNotice(current);
   const action = <Tooltip title={reason || OZON_RETRY_EXPLANATION}><span className="ozon-auto-job-action-tooltip"><Button icon={<ReloadOutlined />} aria-label={pending.current ? '确认重试受理结果' : '重试上品'}
     loading={retry.isPending || plan.isFetching} disabled={!storeId || (!pending.current && (!current?.canRetry || busy))}
     onClick={() => void begin()}>{pending.current ? '确认重试受理结果' : '重试上品'}</Button></span></Tooltip>;
@@ -82,6 +96,8 @@ export function OzonPublishRetry({ job, stores, onOpenJob, actionContainer }: {
       {actionContainer ? createPortal(action, actionContainer) : action}
       {plan.isError && <Button onClick={() => void plan.refetch()}>重新读取重试条件</Button>}
     </Space>
+    {duplicateCardNotice && <Alert showIcon type="error" message={duplicateCardNotice.title}
+      description={duplicateCardNotice.description} />}
     {!latest && <Typography.Text type="secondary">{reason || OZON_RETRY_EXPLANATION}</Typography.Text>}
     {latest && <Alert showIcon type={latest.status === 'SUCCEEDED' ? 'success' : busy ? 'info' : 'warning'}
       message={latest.message} description={<Space direction="vertical" size={4}>

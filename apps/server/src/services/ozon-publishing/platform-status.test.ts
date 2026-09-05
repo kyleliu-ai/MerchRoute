@@ -194,6 +194,31 @@ describe('OZON platform status normalization', () => {
     });
     expect(result.businessState).toBe('NEEDS_ATTENTION');
   });
+
+  it('keeps an archived Offer and an in-stock on-sale Offer as separate readback evidence', () => {
+    const archived = {
+      ...approvedInfo('0000090-01', 0),
+      is_archived: true,
+      statuses: {
+        status_name: 'Архив',
+        status_description: 'Убран из продажи',
+        moderate_status: 'approved',
+        validation_status: 'success'
+      }
+    };
+    const result = normalizeOzonPlatformStatusRefresh(lease(), {
+      ok: true,
+      result: {
+        infoItems: [archived, approvedInfo('0000090-02', 1)],
+        attributeItems: [attributes('0000090-01'), attributes('0000090-02')]
+      }
+    });
+    expect(result.offers.map((offer) => [offer.offerId, offer.displayState, offer.hasStock])).toEqual([
+      ['0000090-01', 'ARCHIVED', false],
+      ['0000090-02', 'ON_SALE', true]
+    ]);
+    expect(result.businessState).toBe('NEEDS_ATTENTION');
+  });
 });
 
 describe('OZON known pre-platform recovery remote absence proof', () => {

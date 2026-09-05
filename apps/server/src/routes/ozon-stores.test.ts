@@ -133,6 +133,40 @@ describe('OZON publication no-brand recovery route', () => {
   });
 });
 
+describe('OZON publication duplicate-card recovery routes', () => {
+  it('forwards read-only platform sync and automation stop with CAS and idempotency identity', async () => {
+    const publicationId = '576ad31b-486b-4e58-ba7e-9180606ca54f';
+    const requestId = '22222222-2222-4222-8222-222222222222';
+    const refreshPublicationPlatformStatus = vi.fn(async (id, input) => ({ id, ...input }));
+    const stopPublicationAutomation = vi.fn(async (id, input) => ({ id, ...input }));
+    const stores = { refreshPublicationPlatformStatus, stopPublicationAutomation, repository: { getStore: vi.fn() } };
+    const app = Fastify();
+    await registerOzonStoreRoutes(app, { stores, gateway: { execute: vi.fn() } } as any);
+    const payload = { rowVersion: 9, requestId };
+
+    const refresh = await app.inject({
+      method: 'POST', url: `/api/v1/ozon/publications/${publicationId}/platform-status/refresh`,
+      remoteAddress: '127.0.0.1', payload
+    });
+    const stop = await app.inject({
+      method: 'POST', url: `/api/v1/ozon/publications/${publicationId}/stop-automation`,
+      remoteAddress: '127.0.0.1', payload
+    });
+
+    expect([refresh.statusCode, stop.statusCode]).toEqual([200, 200]);
+    expect(refreshPublicationPlatformStatus).toHaveBeenCalledWith(publicationId, payload);
+    expect(stopPublicationAutomation).toHaveBeenCalledWith(publicationId, payload);
+
+    const denied = await app.inject({
+      method: 'POST', url: `/api/v1/ozon/publications/${publicationId}/stop-automation`,
+      remoteAddress: '10.0.0.8', payload
+    });
+    expect(denied.statusCode).toBe(403);
+    expect(stopPublicationAutomation).toHaveBeenCalledTimes(1);
+    await app.close();
+  });
+});
+
 describe('OZON publication list route', () => {
   it('forwards a bounded SKU batch and publication source for manual-list status projection', async () => {
     const listPublications = vi.fn(async () => ({ items: [], total: 0 }));

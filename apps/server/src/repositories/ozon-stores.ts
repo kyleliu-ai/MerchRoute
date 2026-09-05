@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { Pool, type PoolClient, type QueryResultRow } from 'pg';
 import {
   AppError,
+  classifyOzonImportFailures,
   OZON_DEFAULT_STORE_ALIAS,
   OZON_DEFAULT_STORE_ID,
   OZON_PER_STORE_CONCURRENCY,
@@ -286,6 +287,7 @@ export type OzonPublicationReadbackContext = {
   taskId: string;
   listing: OzonListingDraft;
   mappings: OzonProductMapping[];
+  operationRequestId?: string;
 };
 
 export type OzonRepresentedMediaFanoutReconciliationResult = {
@@ -2761,7 +2763,8 @@ export class OzonStoreRepository {
 
   async beginPublicationReadback(
     publicationId: string,
-    expectedRowVersion: number
+    expectedRowVersion: number,
+    operationRequestId?: string
   ): Promise<OzonPublicationReadbackContext> {
     return this.transaction(async (client) => {
       const publicationResult = await client.query<SqlRow>(
@@ -2769,6 +2772,23 @@ export class OzonStoreRepository {
       );
       const publication = publicationResult.rows[0];
       if (!publication) throw new AppError('NOT_FOUND', 'OZON publication 不存在', { publicationId }, 404);
+      const existingReadback = jsonObject(jsonObject(publication.result_json).readback);
+      if (operationRequestId
+        && String(existingReadback.requestId || '') === operationRequestId
+        && existingReadback.deliveryState === 'RESPONDED') {
+        return {
+          publication: toPublication(publication),
+          dispatchRowVersion: Number(publication.row_version),
+          requestRef: String(existingReadback.requestRef || `ozon-readback:${publicationId}:${operationRequestId}`),
+          taskId: '',
+          listing: {} as OzonListingDraft,
+          mappings: [],
+          operationRequestId
+        };
+      }
+      if (operationRequestId && publication.status === 'CANCELLED') {
+        throw new AppError('TASK_LOCKED', '已取消的 OZON 自动流程不能重新同步平台状态', { publicationId }, 409);
+      }
       assertRowVersion(expectedRowVersion, publication.row_version, 'OZON publication');
       const job = (await client.query<SqlRow>(`SELECT * FROM ozon_publish_jobs WHERE publication_id=$1
         ORDER BY updated_at DESC,id DESC LIMIT 1 FOR UPDATE`, [publicationId])).rows[0];
@@ -2801,7 +2821,7 @@ export class OzonStoreRepository {
         WHERE store_id=$1 AND sku=$2 AND offer_id=ANY($3::text[]) FOR SHARE`, [
         publication.store_id, publication.sku, normalizeStringArray(publication.offer_ids)
       ]);
-      const requestRef = `ozon-readback:${publicationId}:${randomUUID()}`;
+      const requestRef = `ozon-readback:${publicationId}:${operationRequestId || randomUUID()}`;
       const startedAt = new Date().toISOString();
       await client.query(`UPDATE ozon_publish_jobs SET
         payload=$2::jsonb,row_version=row_version+1,updated_at=NOW() WHERE id=$1`, [
@@ -2812,6 +2832,7 @@ export class OzonStoreRepository {
             active: true,
             kind: 'PUBLICATION_READBACK',
             requestRef,
+            ...(operationRequestId ? { requestId: operationRequestId } : {}),
             publicationId,
             startedAt,
             expiresAt: new Date(Date.now() + PUBLICATION_READBACK_HOLD_MS).toISOString()
@@ -2822,6 +2843,7 @@ export class OzonStoreRepository {
         ...jsonObject(publication.result_json),
         readback: {
           requestRef,
+          ...(operationRequestId ? { requestId: operationRequestId } : {}),
           deliveryState: 'UNKNOWN',
           retryClass: 'READBACK_REQUIRED',
           startedAt,
@@ -2842,7 +2864,8 @@ export class OzonStoreRepository {
         requestRef,
         taskId: String(job.task_id),
         listing: version.snapshot as OzonListingDraft,
-        mappings: mappingRows.rows.map(toScopedProductMapping)
+        mappings: mappingRows.rows.map(toScopedProductMapping),
+        ...(operationRequestId ? { operationRequestId } : {})
       };
     });
   }
@@ -2856,6 +2879,7 @@ export class OzonStoreRepository {
     offers: OzonPlatformOfferStatus[];
     warnings: string[];
     stageStates: Record<string, string>;
+    operationRequestId?: string;
   }): Promise<OzonStorePublication> {
     return this.transaction(async (client) => {
       const publicationResult = await client.query<SqlRow>(
@@ -2896,6 +2920,9 @@ export class OzonStoreRepository {
           jobId: job.id
         }, 409);
       }
+      if (input.operationRequestId && String(readbackHold.requestId || '') !== input.operationRequestId) {
+        throw new AppError('VERSION_CONFLICT', 'OZON publication readback requestId 已变化', { publicationId: input.publicationId }, 409);
+      }
       delete jobPayload.recoveryHold;
       const conflicting = await client.query<SqlRow>(`SELECT offer_id,sku FROM ozon_product_mappings
         WHERE store_id=$1 AND offer_id=ANY($2::text[]) AND sku<>$3 FOR SHARE`, [
@@ -2931,13 +2958,23 @@ export class OzonStoreRepository {
       const jobState = input.businessState === 'PUBLISHED'
         ? 'SUCCEEDED'
         : input.businessState === 'NEEDS_ATTENTION' ? 'NEEDS_ATTENTION' : 'MODERATING';
+      const permanentImportFailure = classifyOzonImportFailures(jobPayload);
+      const jobErrorCode = jobState === 'NEEDS_ATTENTION'
+        ? permanentImportFailure.blockerCode
+          ? String(job.last_error_code || permanentImportFailure.blockerCode)
+          : 'OZON_PLATFORM_NEEDS_ATTENTION'
+        : null;
+      const jobErrorMessage = jobState === 'NEEDS_ATTENTION'
+        ? permanentImportFailure.blockerCode
+          ? String(job.last_error_message || 'OZON 商品导入存在永久错误')
+          : '平台只读回查发现需要处理的商品状态'
+        : null;
       await client.query(`UPDATE ozon_publish_jobs SET state=$2,stage_states=$3::jsonb,
-          product_links=$4::jsonb,last_error_code=CASE WHEN $2='NEEDS_ATTENTION' THEN 'OZON_PLATFORM_NEEDS_ATTENTION' ELSE NULL END,
-          last_error_message=CASE WHEN $2='NEEDS_ATTENTION' THEN '平台只读回查发现需要处理的商品状态' ELSE NULL END,
+          product_links=$4::jsonb,last_error_code=$6,last_error_message=$7,
           finished_at=CASE WHEN $2='SUCCEEDED' THEN NOW() ELSE NULL END,
           payload=$5::jsonb,row_version=row_version+1,updated_at=NOW() WHERE id=$1`, [
         job.id, jobState, JSON.stringify(input.stageStates), JSON.stringify(readbackProductLinks(input.offers)),
-        JSON.stringify(jobPayload)
+        JSON.stringify(jobPayload), jobErrorCode, jobErrorMessage
       ]);
       await client.query(`INSERT INTO ozon_publish_events(
           id,job_id,event_type,from_state,to_state,message,payload,store_id,publication_id
@@ -2950,6 +2987,7 @@ export class OzonStoreRepository {
         ...jsonObject(publication.result_json),
         readback: {
           requestRef: input.requestRef,
+          ...(input.operationRequestId ? { requestId: input.operationRequestId } : {}),
           deliveryState: 'RESPONDED',
           retryClass: 'NONE',
           statusCode: 200,
@@ -2962,14 +3000,23 @@ export class OzonStoreRepository {
       };
       const productIds = normalizeStringArray(input.offers.map((offer) => offer.ozonProductId));
       const ozonSkus = normalizeStringArray(input.offers.map((offer) => offer.ozonSku));
+      const publicationErrorCode = publicationStatus === 'NEEDS_ATTENTION'
+        ? permanentImportFailure.blockerCode
+          ? String(publication.error_code || permanentImportFailure.blockerCode)
+          : 'OZON_PLATFORM_NEEDS_ATTENTION'
+        : '';
+      const publicationErrorMessage = publicationStatus === 'NEEDS_ATTENTION'
+        ? permanentImportFailure.blockerCode
+          ? String(publication.error_message || 'OZON 商品导入存在永久错误')
+          : '平台只读回查发现需要处理的商品状态'
+        : '';
       const updated = await client.query<SqlRow>(`UPDATE ozon_store_publications SET
         status=$2,result_json=$3::jsonb,product_ids=$4::jsonb,ozon_skus=$5::jsonb,product_links=$6::jsonb,
-        error_code=CASE WHEN $2='NEEDS_ATTENTION' THEN 'OZON_PLATFORM_NEEDS_ATTENTION' ELSE '' END,
-        error_message=CASE WHEN $2='NEEDS_ATTENTION' THEN '平台只读回查发现需要处理的商品状态' ELSE '' END,
+        error_code=$7,error_message=$8,
         completed_at=CASE WHEN $2='SUCCEEDED' THEN NOW() ELSE NULL END,
         row_version=row_version+1,updated_at=NOW() WHERE id=$1 RETURNING *`, [
         input.publicationId, publicationStatus, JSON.stringify(resultJson), JSON.stringify(productIds),
-        JSON.stringify(ozonSkus), JSON.stringify(readbackProductLinks(input.offers))
+        JSON.stringify(ozonSkus), JSON.stringify(readbackProductLinks(input.offers)), publicationErrorCode, publicationErrorMessage
       ]);
       return toPublication(updated.rows[0]!);
     });
@@ -2984,6 +3031,7 @@ export class OzonStoreRepository {
     statusCode?: number;
     errorCode: string;
     errorMessage: string;
+    operationRequestId?: string;
   }): Promise<void> {
     await this.transaction(async (client) => {
       const result = await client.query<SqlRow>('SELECT * FROM ozon_store_publications WHERE id=$1 FOR UPDATE', [input.publicationId]);
@@ -3005,11 +3053,15 @@ export class OzonStoreRepository {
           jobId: job.id
         }, 409);
       }
+      if (input.operationRequestId && String(readbackHold.requestId || '') !== input.operationRequestId) {
+        throw new AppError('VERSION_CONFLICT', 'OZON publication readback requestId 已变化', { publicationId: input.publicationId }, 409);
+      }
       delete jobPayload.recoveryHold;
       const resultJson = {
         ...jsonObject(publication.result_json),
         readback: {
           requestRef: input.requestRef,
+          ...(input.operationRequestId ? { requestId: input.operationRequestId } : {}),
           deliveryState: input.deliveryState,
           retryClass: input.retryClass,
           ...(input.statusCode ? { statusCode: input.statusCode } : {}),
@@ -3055,6 +3107,65 @@ export class OzonStoreRepository {
       const updated = await client.query<SqlRow>(`UPDATE ozon_store_publications SET
         status='CANCELLED',error_code='',error_message='',completed_at=NOW(),row_version=row_version+1,updated_at=NOW()
         WHERE id=$1 RETURNING *`, [publicationId]);
+      return toPublication(updated.rows[0]!);
+    });
+  }
+
+  async stopPublicationAutomation(publicationId: string, expectedRowVersion: number, requestId: string): Promise<OzonStorePublication> {
+    return this.transaction(async (client) => {
+      const publicationResult = await client.query<SqlRow>('SELECT * FROM ozon_store_publications WHERE id=$1 FOR UPDATE', [publicationId]);
+      const publication = publicationResult.rows[0];
+      if (!publication) throw new AppError('NOT_FOUND', 'OZON publication 不存在', { publicationId }, 404);
+      const previousClosure = jsonObject(jsonObject(publication.result_json).operatorClosure);
+      if (String(previousClosure.requestId || '') === requestId && publication.status === 'CANCELLED') return toPublication(publication);
+      assertRowVersion(expectedRowVersion, publication.row_version, 'OZON publication');
+      if (publication.source !== 'AUTOMATION') {
+        throw new AppError('CONFIG_INVALID', '仅自动上品 publication 可以终止自动流程', { publicationId }, 409);
+      }
+      const job = (await client.query<SqlRow>(`SELECT * FROM ozon_publish_jobs WHERE publication_id=$1
+        ORDER BY updated_at DESC,id DESC LIMIT 1 FOR UPDATE`, [publicationId])).rows[0];
+      if (!job) throw new AppError('NOT_FOUND', 'OZON publication 任务不存在', { publicationId }, 404);
+      const failure = classifyOzonImportFailures(jsonObject(job.payload));
+      const blockers: string[] = [];
+      if (!['FAILED', 'NEEDS_ATTENTION'].includes(String(job.state))) blockers.push('runtimeState');
+      if (!['FAILED', 'NEEDS_ATTENTION'].includes(String(publication.status))) blockers.push('publicationStatus');
+      if (!failure.blockerCode) blockers.push('permanentImportFailureMissing');
+      const payload = jsonObject(job.payload);
+      if (jsonObject(payload.recoveryHold).active === true) blockers.push('recoveryHold');
+      if (job.lease_expires_at && new Date(String(job.lease_expires_at)).getTime() > Date.now()) blockers.push('runtimeLease');
+      if (jsonObject(payload.networkRecovery).deliveryState === 'UNKNOWN') blockers.push('unknownDelivery');
+      const activeRetry = (await client.query(`SELECT id FROM ozon_publish_retries
+        WHERE status IN ('CHECKING','RUNNING') AND ($1=source_job_id OR $1=effective_job_id OR $1=root_job_id) LIMIT 1`, [job.id])).rows[0];
+      if (activeRetry) blockers.push('activeRetry');
+      const unresolvedGateway = (await client.query(`SELECT request_ref FROM ozon_gateway_requests WHERE publication_id=$1
+        AND (delivery_state='UNKNOWN' OR (retry_class='READBACK_REQUIRED' AND delivery_state<>'RESPONDED')) LIMIT 1`, [publicationId])).rows[0];
+      if (unresolvedGateway) blockers.push('unresolvedGateway');
+      if (blockers.length) {
+        throw new AppError('OZON_AUTOMATION_STOP_BLOCKED', '当前 publication 不能安全终止自动流程', {
+          publicationId, jobId: job.id, blockers
+        }, 409);
+      }
+      const stoppedAt = new Date().toISOString();
+      const closure = {
+        kind: 'STOP_AUTOMATION', requestId, reason: failure.blockerCode,
+        stoppedAt, previousJobState: String(job.state), previousPublicationStatus: String(publication.status),
+        platformMutation: false
+      };
+      await client.query(`UPDATE ozon_publish_jobs SET state='CANCELLED',payload=$2::jsonb,
+        lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,finished_at=COALESCE(finished_at,NOW()),
+        row_version=row_version+1,updated_at=NOW() WHERE id=$1`, [
+        job.id, JSON.stringify({ ...payload, operatorClosure: closure })
+      ]);
+      await client.query(`INSERT INTO ozon_publish_events(
+        id,job_id,event_type,from_state,to_state,message,payload,store_id,publication_id
+      ) VALUES($1,$2,'PUBLICATION_AUTOMATION_STOPPED',$3,'CANCELLED',$4,$5::jsonb,$6,$7)`, [
+        randomUUID(), job.id, job.state, '操作员已终止自动上品流程；未调用 OZON 写接口',
+        JSON.stringify(closure), job.store_id, publicationId
+      ]);
+      const resultJson = { ...jsonObject(publication.result_json), operatorClosure: closure };
+      const updated = await client.query<SqlRow>(`UPDATE ozon_store_publications SET
+        status='CANCELLED',result_json=$2::jsonb,completed_at=COALESCE(completed_at,NOW()),
+        row_version=row_version+1,updated_at=NOW() WHERE id=$1 RETURNING *`, [publicationId, JSON.stringify(resultJson)]);
       return toPublication(updated.rows[0]!);
     });
   }

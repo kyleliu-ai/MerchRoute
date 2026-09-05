@@ -336,9 +336,10 @@ describe('OZON automatic platform state label', () => {
     } as unknown as OzonPublishJob)).toEqual({ label: 'OZON上品中', color: 'processing' });
   });
 
-  it('shows the authoritative not-for-sale mapping as 商品已下架 instead of a generic job error', () => {
+  it('keeps the automatic workflow state independent from a platform outcome', () => {
     expect(ozonJobPrimaryStateMeta({
       state: 'NEEDS_ATTENTION',
+      offerIds: ['0000119-01'],
       ozonProductLinks: [{
         offerId: '0000119-01',
         ozonProductId: '5913618188',
@@ -346,12 +347,13 @@ describe('OZON automatic platform state label', () => {
         url: 'https://www.ozon.ru/product/5430089516/',
         displayState: 'NOT_FOR_SALE'
       }]
-    })).toEqual({ label: '商品已下架', color: 'volcano' });
+    })).toEqual({ label: '需要处理', color: 'volcano' });
   });
 
-  it('shows an authoritative archive status instead of the generic attention state', () => {
+  it('shows a complete all-archived platform readback without replacing the workflow state', () => {
     const job = {
       state: 'NEEDS_ATTENTION',
+      offerIds: ['0000119-01'],
       ozonProductLinks: [{
         offerId: '0000119-01',
         ozonProductId: '5913618212',
@@ -362,10 +364,10 @@ describe('OZON automatic platform state label', () => {
       }]
     } as unknown as OzonPublishJob;
 
-    expect(ozonJobPrimaryStateMeta(job)).toEqual({ label: '商品已归档', color: 'default' });
+    expect(ozonJobPrimaryStateMeta(job)).toEqual({ label: '需要处理', color: 'volcano' });
     expect(ozonJobArchiveNotice(job)).toEqual({
-      message: 'OZON 商品已归档',
-      description: '商品已被隐藏，买家看到的状态为“无现货”。这是平台归档状态，不是库存写入失败。 OZON 原始说明：Убран из продажи'
+      message: 'OZON 商品已经归档',
+      description: '全部变体已经归档，买家端不可售。这是平台归档状态，不是库存写入失败。 OZON 原始说明：Убран из продажи'
     });
     expect(ozonJobStageStateValue({
       ...job,
@@ -373,6 +375,24 @@ describe('OZON automatic platform state label', () => {
         import: 'SUCCESS', moderation: 'FAILED', images: 'VERIFIED', video: 'VERIFIED', price: 'VERIFIED', stock: 'VERIFIED'
       }
     }, 'moderation')).toBe('ARCHIVED');
+  });
+
+  it('shows mixed archived and on-sale Offers as partial sale', () => {
+    const job = {
+      state: 'CANCELLED',
+      offerIds: ['0000171-01', '0000171-02'],
+      ozonProductLinks: [
+        { offerId: '0000171-01', displayState: 'ARCHIVED', platformMessage: 'Убран из продажи' },
+        { offerId: '0000171-02', displayState: 'ON_SALE' }
+      ],
+      stageStates: { moderation: 'FAILED' }
+    } as unknown as OzonPublishJob;
+    expect(ozonJobPrimaryStateMeta(job)).toEqual({ label: '已取消', color: 'default' });
+    expect(ozonJobArchiveNotice(job)).toEqual({
+      message: 'OZON 商品部分可售',
+      description: '平台回读显示 0000171-02 已可售，0000171-01 已经归档。自动流程状态与平台状态分别保留。 OZON 原始说明：Убран из продажи'
+    });
+    expect(ozonJobStageStateValue(job, 'moderation')).toBe('PARTIAL');
   });
 });
 

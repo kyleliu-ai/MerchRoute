@@ -1,13 +1,10 @@
-import { AppError, isExecutableOzonContentPolicyVersion, ozonProductSchema, type OzonPublishRetryPlan, type OzonPublishRetryRequest } from '@n8n-media-review/shared';
+import { AppError, classifyOzonImportFailures, isExecutableOzonContentPolicyVersion, ozonErrorsAreTransient, ozonProductSchema, type OzonPublishRetryPlan, type OzonPublishRetryRequest } from '@n8n-media-review/shared';
 import { ozonRetryRecord, ozonRetryToken, retryHash, retryObject, retryCredentialReady, retryRuntimeContractReady, type OzonRetryRepository, type OzonRetrySnapshot, type RetryRow } from '../../repositories/ozon-retry.js';
 import type { OzonStoreService, OzonFrozenAutomaticPublicationPlan } from '../ozon-stores/index.js';
 import type { OzonStoreGatewayService } from '../ozon-stores/gateway.js';
 
 const WRITE_OPERATIONS = new Set(['importProduct', 'picturesImport', 'pricesWrite', 'stocksWrite', 'attributesUpdate']);
 const stopped = new Set(['NEEDS_ATTENTION', 'FAILED', 'WAITING_MEDIA']);
-const transientCode = /^(?:ECONNABORTED|ETIMEDOUT|ECONNRESET|ENOTFOUND|EAI_AGAIN|ECONNREFUSED|OZON_RESPONSE_MISSING|OZON_RESPONSE_DUPLICATE|OZON_REQUEST_TIMEOUT|OZON_RATE_LIMITED|TOO_MANY_REQUESTS|INTERNAL_ERROR|INTERNAL_SERVER_ERROR|SERVICE_UNAVAILABLE|NOT_FOUND|PRODUCT_NOT_FOUND|PRODUCT_NOT_READY|PRODUCT_NOT_CREATED|PRODUCT_IS_NOT_CREATED|PRODUCT_HAS_NOT_BEEN_TAGGED_YET|NOT_PASS_MODERATION|OFFER_NOT_FOUND|HTTP_429|HTTP_5\d\d)$/i;
-const transientErrors = (errors: unknown): boolean => Array.isArray(errors) && errors.length > 0
-  && errors.every(e => transientCode.test(String(e?.code || e?.errorCode || '')));
 const hasRemoteEvidence = (s: OzonRetrySnapshot): boolean => Boolean(s.job.import_task_id || s.job.ozon_product_id
   || retryObject(s.job.payload).importIntent || retryObject(s.job.payload).platformWriteAttempted
   || (s.publication?.product_ids || []).length
@@ -37,7 +34,7 @@ function progressBlockedReason(s: OzonRetrySnapshot): string {
     if (!bucket || !['succeededOfferIds', 'pendingOfferIds', 'failedOfferIds'].every(k => Array.isArray(bucket[k]))) return '价格库存检查点不完整，请人工核对';
     const all = [...bucket.succeededOfferIds, ...bucket.pendingOfferIds, ...bucket.failedOfferIds];
     if (all.length !== new Set(all).size || retryHash([...all].sort()) !== retryHash([...(s.publication?.offer_ids || [])].sort())) return '价格库存检查点与原 Offer 不一致，请人工核对';
-    if (bucket.failedOfferIds.some((id: string) => !transientErrors(bucket.errorsByOffer?.[id]))) return '存在平台明确拒绝的价格或库存，请修正业务数据后处理，不能直接重放';
+    if (bucket.failedOfferIds.some((id: string) => !ozonErrorsAreTransient(bucket.errorsByOffer?.[id]))) return '存在平台明确拒绝的价格或库存，请修正业务数据后处理，不能直接重放';
   }
   return '';
 }
@@ -49,6 +46,7 @@ const stageNames: Record<string, string> = {
 
 export function buildOzonRetryPlan(s: OzonRetrySnapshot, latest?: RetryRow): OzonPublishRetryPlan {
   const j = s.job, p = s.publication, payload = retryObject(j.payload);
+  const importFailure = classifyOzonImportFailures(payload);
   const remote = hasRemoteEvidence(s);
   const frozenValid = validFrozenProduct(s);
   const mode = remote ? 'READBACK' : frozenValid ? 'RESUME' : 'REBUILD';
@@ -68,6 +66,11 @@ export function buildOzonRetryPlan(s: OzonRetrySnapshot, latest?: RetryRow): Ozo
   else if (mode !== 'REBUILD' && Number(p?.store_config_version) !== Number(s.store.config_version)) reason = '店铺配置已变化，原任务冻结配置不能继续写入，请先处理配置差异';
   else if (mode === 'READBACK' && !frozenValid) reason = '平台结果需核对，但原 Offer 或商品快照不完整，禁止重复创建';
   else if (mode === 'REBUILD' && s.gateways.length) reason = '旧任务已有网关证据，不能重建身份，请先人工核对';
+  else if (importFailure.classification === 'DUPLICATE_PRODUCT_CARD') {
+    const failedOffers = importFailure.blockedOffers.map((offer) => offer.offerId).filter(Boolean).join('、') || '当前 Offer';
+    const conflicts = [...new Set(importFailure.blockedOffers.flatMap((offer) => offer.conflictOfferIds))].join('、') || '已有商品卡';
+    reason = `商品卡重复：OZON 判定 ${failedOffers} 与已有商品卡 ${conflicts} 类似或重复。请在 OZON 后台处理后同步平台状态，或取消自动任务。`;
+  } else if (importFailure.classification === 'PERMANENT') reason = '存在 OZON 明确拒绝的商品导入错误，请修正业务资料并创建新版本，不能直接重试';
   else if (progressBlockedReason(s)) reason = progressBlockedReason(s);
   const values = [
     ['预设', p?.preset_id, s.store.default_preset_id],
@@ -79,7 +82,9 @@ export function buildOzonRetryPlan(s: OzonRetrySnapshot, latest?: RetryRow): Ozo
     ['发布方式', p?.publication_mode, s.store.auto_publish_mode],
     ['凭据版本', p?.credential_version_id, s.store.active_credential_version_id]
   ];
-  return { canRetry: !reason, ...(reason ? { blockedReason: reason } : {}), planHash: ozonRetryToken(s),
+  return { canRetry: !reason, ...(reason ? { blockedReason: reason } : {}),
+    ...(importFailure.blockerCode ? { blockerCode: importFailure.blockerCode, blockedOffers: importFailure.blockedOffers } : {}),
+    planHash: ozonRetryToken(s),
     sourceJobId: j.id, storeId: s.store.id, sku: j.sku, storeName: s.store.display_name || s.store.store_alias,
     mode, stage: mode === 'REBUILD' ? '重新生成当前店铺上品资料' : mode === 'READBACK' ? '核对平台结果后继续' : '恢复原发布包并继续上品',
     requiresConfirmation: mode === 'REBUILD', previousError: j.last_error_message || p?.error_message || '',
@@ -91,6 +96,14 @@ export function buildOzonRetryPlan(s: OzonRetrySnapshot, latest?: RetryRow): Ozo
 /** Select an existing executor branch. Never reset a possibly delivered import to READY. */
 export function ozonRetryResume(s: OzonRetrySnapshot): { state: string; payload: RetryRow } {
   const p = retryObject(s.job.payload);
+  const importFailure = classifyOzonImportFailures(p);
+  if (importFailure.blockerCode || importFailure.classification === 'PERMANENT') {
+    throw new AppError(importFailure.blockerCode || 'OZON_IMPORT_FAILURE_UNCLASSIFIED', importFailure.classification === 'DUPLICATE_PRODUCT_CARD'
+      ? 'OZON 已明确拒绝重复商品卡，不能恢复原导入任务'
+      : importFailure.blockerCode
+        ? 'OZON 已明确拒绝商品导入，不能恢复原导入任务'
+        : 'OZON 商品导入失败证据不完整，不能恢复原导入任务');
+  }
   const blocked = progressBlockedReason(s);
   if (blocked) throw new AppError('OZON_RETRY_PROGRESS_INVALID', blocked);
   if (hasRemoteEvidence(s)) {
@@ -105,7 +118,7 @@ export function ozonRetryResume(s: OzonRetrySnapshot): { state: string; payload:
         if (!bucket) continue;
         const recoverable = (bucket.failedOfferIds || []).filter((id: string) => {
           const errors = bucket.errorsByOffer?.[id];
-          return transientErrors(errors);
+          return ozonErrorsAreTransient(errors);
         });
         bucket.pendingOfferIds = [...new Set([...(bucket.pendingOfferIds || []), ...recoverable])];
         bucket.failedOfferIds = (bucket.failedOfferIds || []).filter((id: string) => !recoverable.includes(id));
