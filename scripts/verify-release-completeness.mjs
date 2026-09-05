@@ -17,7 +17,7 @@ const HISTORICAL_FEATURE_IDS = [
   'review-open-product-folder', 'wb-restart-protection', 'junction-retirement', 'project-release-guardrails',
   'review-delivery-reliability'
 ];
-export const REQUIRED_FEATURE_IDS = [...HISTORICAL_FEATURE_IDS, 'wb-controlled-publish-retry'];
+export const REQUIRED_FEATURE_IDS = [...HISTORICAL_FEATURE_IDS, 'ozon-controlled-publish-retry', 'wb-controlled-publish-retry'];
 export const REQUIRED_LOCAL_CHECK_IDS = [
   'check', 'postgres-integration', 'e2e', 'jimeng', 'deployment-verify', 'gitleaks', 'diff-check',
   'release-verifier-tests', 'restart-safety', 'retirement-safety', 'isolated-runtime'

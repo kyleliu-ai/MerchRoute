@@ -374,6 +374,43 @@ export class OzonStoreService {
     );
   }
 
+  async assertRetrySourceAvailable(versionId: string): Promise<void> {
+    if (this.sourceMediaCleanup?.repository.configured) await this.sourceMediaCleanup.assertVersionAvailable(versionId);
+  }
+
+  async validateRetryPackage(job: Record<string, any>, publication: Record<string, any>): Promise<void> {
+    // Runtime resolves this same relative path. Do not trust a stale absolute path
+    // or silently overwrite a processing package with today's generated product.
+    const settings = await this.repository.getSettings();
+    const relative = String(job.work_rel_path || publication.package_rel_path || '');
+    if (!relative || relative.includes('\\') || relative.startsWith('/') || relative.includes(':')
+      || relative.split('/').some(part => !part || part === '.' || part === '..')) {
+      throw new AppError('OZON_PACKAGE_NOT_FOUND', '原任务发布包路径缺失或不安全，请先恢复原发布包');
+    }
+    const root = await realpath(settings.rootDirectory);
+    let current = root;
+    for (const segment of relative.split('/')) {
+      current = path.join(current, segment);
+      const info = await lstat(current);
+      if (info.isSymbolicLink() || !info.isDirectory()) throw new AppError('PATH_TRAVERSAL_BLOCKED', '原任务发布包目录必须是真实目录');
+    }
+    const productPath = path.join(current, 'product.json');
+    const info = await lstat(productPath);
+    if (info.isSymbolicLink() || !info.isFile()) throw new AppError('PATH_TRAVERSAL_BLOCKED', '原商品快照必须是普通文件');
+    const bytes = await readFile(productPath);
+    const product = JSON.parse(bytes.toString('utf8'));
+    if (sha256Bytes(bytes) !== (job.directory_signature || publication.package_signature)
+      || sha256(stableMaterial(product)) !== sha256(stableMaterial(publication.materialized_product_snapshot))) {
+      throw new AppError('VERSION_CONFLICT', '原任务发布包与冻结商品快照不一致，请先恢复原发布包', undefined, 409);
+    }
+  }
+
+  async createRetryPublicationFromFrozenPlan(input: unknown, retryId: string, retryLeaseToken: string) {
+    const built = frozenAutomaticBuiltPlan(input);
+    if (built.plan.items.length !== 1) throw new AppError('CONFIG_INVALID', '单店重试只能包含一个店铺');
+    return this.createFromBuiltPlan(built, 'AUTOMATION', undefined, strictUuid(retryId, 'retryId'), undefined, retryId, retryLeaseToken);
+  }
+
   async automaticPublicationPlan(
     sku: string,
     draftVersion: number,
@@ -475,7 +512,9 @@ export class OzonStoreService {
     source: 'MANUAL' | 'AUTOMATION',
     deliveryIdentity?: OzonAutomaticDeliveryIdentity,
     requestId?: string,
-    preparationJobId?: string
+    preparationJobId?: string,
+    retryId?: string,
+    retryLeaseToken?: string
   ): Promise<{
     publications: OzonStorePublication[];
     results: Array<{ storeId: string; publicationId: string; status: string; errorCode?: string; errorMessage?: string }>;
@@ -518,6 +557,8 @@ export class OzonStoreService {
       try {
         const frozenProduct = built.productByStore.get(item.storeId);
         planned = await this.repository.planPublicationAttempt({
+          retryId,
+          retryLeaseToken,
           id: item.publicationId,
           jobId: item.plannedJobId,
           sku: built.plan.sku,
@@ -571,6 +612,7 @@ export class OzonStoreService {
           const message = item.blockers.join('；') || 'OZON 店铺尚未就绪';
           const errorCode = item.errorCode || 'OZON_STORE_NOT_READY';
           const failed = await this.repository.failPublicationAttempt({
+            retryId, retryLeaseToken,
             publicationId: item.publicationId,
             jobId: item.plannedJobId,
             errorCode,
@@ -595,6 +637,7 @@ export class OzonStoreService {
             publicationId: item.publicationId
           }, 409);
         }
+        if (retryId) await this.repository.retries.assertChecking(retryId, retryLeaseToken || '', item.storeId, built.plan.sku);
         const packageResult = await writeStorePackage({
           rootDirectory: settings.rootDirectory,
           storeAlias: item.storeAlias,
@@ -620,6 +663,8 @@ export class OzonStoreService {
           product: frozenProduct
         });
         const created = await this.repository.materializePublicationAttempt({
+          retryId,
+          retryLeaseToken,
           publicationId: item.publicationId,
           jobId: item.plannedJobId,
           planHash: built.plan.planHash,
@@ -645,6 +690,7 @@ export class OzonStoreService {
         const errorMessage = error instanceof Error ? error.message : 'OZON 店铺 publication 创建失败';
         if (planned) {
           const failed = await this.repository.failPublicationAttempt({
+            retryId, retryLeaseToken,
             publicationId: planned.id,
             jobId: item.plannedJobId,
             errorCode,
@@ -908,10 +954,12 @@ export class OzonStoreService {
     return this.repository.cancelPublication(publicationId, parsed.data.rowVersion);
   }
 
-  async recheckPublication(publicationId: string, input: unknown) {
+  async recheckPublication(publicationId: string, input: unknown, retryId?: string, retryLeaseToken?: string) {
     const parsed = ozonPublicationRecheckInputSchema.safeParse(input);
     if (!parsed.success) throw validationError('OZON publication 重检缺少冻结身份', parsed.error.issues);
     const attempt = await this.repository.getPublication(publicationId);
+    if (attempt.plannedJobId) await this.repository.assertRetryOwnership(attempt.plannedJobId, retryId);
+    if (retryId) await this.repository.retries.assertChecking(retryId, retryLeaseToken || '', attempt.storeId, attempt.sku);
     if (attempt.rowVersion !== parsed.data.rowVersion
       || attempt.planHash !== parsed.data.planHash
       || attempt.requestId !== parsed.data.requestId) {
@@ -1003,6 +1051,8 @@ export class OzonStoreService {
           product: frozenProduct
         });
         return this.repository.materializePublicationAttempt({
+          retryId,
+          retryLeaseToken,
           publicationId,
           jobId: attempt.plannedJobId,
           planHash: attempt.planHash!,
@@ -1029,6 +1079,8 @@ export class OzonStoreService {
         }, 409);
       }
       return this.repository.materializePublicationAttempt({
+        retryId,
+        retryLeaseToken,
         publicationId,
         jobId: attempt.plannedJobId,
         planHash: attempt.planHash!,

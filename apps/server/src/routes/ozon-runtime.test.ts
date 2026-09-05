@@ -33,6 +33,7 @@ async function runtimeApp() {
   const assertRuntimeBinding = vi.fn(async () => undefined);
   const assertLegacySkuRefreshAllowed = vi.fn(async () => undefined);
   const assertLegacyJobRouteAllowed = vi.fn(async () => undefined);
+  const assertLegacyRecoveryAllowed = vi.fn(async () => undefined);
   const automaticListingSnapshot = vi.fn(async (jobId: string, storeId: string) => ({
     mode: 'AUTO_TASK_SNAPSHOT', readOnly: true, jobId, storeId
   }));
@@ -54,7 +55,7 @@ async function runtimeApp() {
   await registerOzonRoutes(app, {
     ozon: {} as any,
     ozonStores: {
-      repository: { assertRuntimeBinding, assertLegacySkuRefreshAllowed, assertLegacyJobRouteAllowed },
+      repository: { assertRuntimeBinding, assertLegacySkuRefreshAllowed, assertLegacyJobRouteAllowed, retries: { assertLegacyRecoveryAllowed } },
       claimRuntimeJobs,
       automaticListingSnapshot
     } as any,
@@ -100,6 +101,7 @@ async function runtimeApp() {
     assertRuntimeBinding,
     assertLegacySkuRefreshAllowed,
     assertLegacyJobRouteAllowed,
+    assertLegacyRecoveryAllowed,
     automaticListingSnapshot,
     getAutomaticJob,
     cancelAutomaticJob,
@@ -134,6 +136,14 @@ const baseTransition = {
 };
 
 describe('OZON automatic business-list HTTP contract', () => {
+  it('blocks the old recheck while a single-store retry owns the job', async () => {
+    const { app, assertLegacyRecoveryAllowed, getAutomaticJob, recheckAutomaticJob } = await runtimeApp();
+    assertLegacyRecoveryAllowed.mockRejectedValueOnce(new AppError('VERSION_CONFLICT', '任务已由单店重试接管', undefined, 409));
+    const response = await app.inject({ method: 'POST', url: '/api/v1/ozon/automation/jobs/owned-job/recheck', payload: { storeId: OZON_DEFAULT_STORE_ID } });
+    expect(response.statusCode).toBe(409);
+    expect(assertLegacyRecoveryAllowed).toHaveBeenCalledWith('owned-job');
+    expect(getAutomaticJob).not.toHaveBeenCalled(); expect(recheckAutomaticJob).not.toHaveBeenCalled();
+  });
   it('forwards the explicit businessOnly filter and rejects malformed values', async () => {
     const { app, listAutomaticJobs } = await runtimeApp();
     const response = await app.inject({

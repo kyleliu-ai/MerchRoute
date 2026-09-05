@@ -1,4 +1,7 @@
 import type {
+  OzonPublishRetryPlan,
+  OzonPublishRetryRecord,
+  OzonPublishRetryRequest,
   WbPublishRetryDetail,
   WbPublishRetryRequest,
   WbPublishRetryRecord,
@@ -1226,6 +1229,8 @@ export const api = {
   cloneOzonPreset: (id: string, name?: string) => request<{ preset: OzonPreset }>(`/api/v1/ozon/presets/${encodeURIComponent(id)}/clone`, { method: 'POST', body: JSON.stringify(name ? { name } : {}) }),
   deleteOzonPreset: (id: string, rowVersion: number) => request<{ deleted: { id: string; name: string } }>(`/api/v1/ozon/presets/${encodeURIComponent(id)}?rowVersion=${rowVersion}`, { method: 'DELETE' }),
   ozonAutomationStatus: () => request<OzonAutomationStatus>('/api/v1/ozon/automation/status'),
+  ozonPublishRetryPlan: (id: string, storeId: string) => request<{ plan: OzonPublishRetryPlan }>(`/api/v1/ozon/automation/jobs/${encodeURIComponent(id)}/retry-plan?storeId=${encodeURIComponent(storeId)}`),
+  retryOzonPublish: (id: string, input: OzonPublishRetryRequest) => request<{ retry: OzonPublishRetryRecord; idempotent: boolean }>(`/api/v1/ozon/automation/jobs/${encodeURIComponent(id)}/retry`, { method: 'POST', body: JSON.stringify(input) }),
   ozonJobs: (params = new URLSearchParams()) => request<{ items: OzonPublishJob[]; total: number; page: number; pageSize: number }>(`/api/v1/ozon/automation/jobs${params.size ? `?${params}` : ''}`),
   ozonJob: (id: string, storeId: string) => request<{ job: OzonPublishJob; sourceMediaCleanup?: OzonSourceMediaCleanupSummary }>(`/api/v1/ozon/automation/jobs/${encodeURIComponent(id)}?storeId=${encodeURIComponent(storeId)}`),
   ozonPreparationTaskDetail: (id: string) => request<OzonPreparationTaskDetailResponse>(`/api/v1/ozon/automation/jobs/${encodeURIComponent(id)}/task-detail`),

@@ -1558,6 +1558,7 @@ describe('OZON publication operation semantics', () => {
   it('never rematerializes a NEEDS_ATTENTION attempt when task detail proves remote progress without a gateway row', async () => {
     const publication = { ...publicationFixture(), status: 'NEEDS_ATTENTION' as const };
     const repository = {
+      assertRetryOwnership: vi.fn(),
       getPublication: vi.fn(async () => publication),
       getPublicationTaskDetail: vi.fn(async () => ({
         publication,
@@ -1589,6 +1590,7 @@ describe('OZON publication operation semantics', () => {
   it('dispatches publication-scoped productStatus and commits only the verified readback', async () => {
     const publication = publicationFixture();
     const repository = {
+      assertRetryOwnership: vi.fn(),
       getPublication: vi.fn(async () => publication),
       getSettings: vi.fn(async () => ({
         adminApiWebhookUrl: 'http://n8n.test/webhook/ozon-admin', publicationReadbackEnabled: true
@@ -1635,6 +1637,7 @@ describe('OZON publication operation semantics', () => {
   it('persists a 429 readback as NOT_SENT/RETRYABLE without changing authoritative platform state', async () => {
     const publication = publicationFixture();
     const repository = {
+      assertRetryOwnership: vi.fn(),
       getPublication: vi.fn(async () => publication),
       getSettings: vi.fn(async () => ({
         adminApiWebhookUrl: 'http://n8n.test/webhook/ozon-admin', publicationReadbackEnabled: true
@@ -1661,6 +1664,7 @@ describe('OZON publication operation semantics', () => {
   it('keeps publication readback NOT_SENT until the controlled fleet capability is enabled', async () => {
     const publication = publicationFixture();
     const repository = {
+      assertRetryOwnership: vi.fn(),
       getPublication: vi.fn(async () => publication),
       getSettings: vi.fn(async () => ({
         adminApiWebhookUrl: 'http://n8n.test/webhook/ozon-admin', publicationReadbackEnabled: false

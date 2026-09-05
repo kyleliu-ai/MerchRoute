@@ -5,6 +5,7 @@ import type { FastifyInstance } from 'fastify';
 import sharp from 'sharp';
 import {
   AppError,
+  ozonPublishRetryRequestSchema,
   isExecutableOzonContentPolicyVersion,
   OZON_PUBLISH_JOB_STATES,
   projectOzonPresetRequiredAttributeCoverage,
@@ -36,10 +37,12 @@ import type { OzonCatalogService } from '../services/ozon-catalog/index.js';
 import type { ConfigService } from '../config/service.js';
 import type { OzonStoreService } from '../services/ozon-stores/index.js';
 import type { OzonSourceMediaCleanupService } from '../services/ozon-source-media/index.js';
+import type { OzonPublishRetryService } from '../services/ozon-publishing/retry.js';
+import { requireOzonLoopbackOperator } from './ozon-stores.js';
 
 export async function registerOzonRoutes(
   app: FastifyInstance<any, any, any, any, any>,
-  services: { ozon: OzonRepository; ozonStores: OzonStoreService; ozonPublishing: OzonPublishingService; ozonAutoPublishing: OzonAutoPublishingCoordinator; ozonCatalog: OzonCatalogService; ozonSourceMediaCleanup: OzonSourceMediaCleanupService; pricing: PricingRepository; shipping: ShippingRepository; config: ConfigService }
+  services: { ozon: OzonRepository; ozonStores: OzonStoreService; ozonPublishing: OzonPublishingService; ozonAutoPublishing: OzonAutoPublishingCoordinator; ozonRetry?: OzonPublishRetryService; ozonCatalog: OzonCatalogService; ozonSourceMediaCleanup: OzonSourceMediaCleanupService; pricing: PricingRepository; shipping: ShippingRepository; config: ConfigService }
 ): Promise<void> {
   const { ozon, ozonStores, ozonPublishing, ozonAutoPublishing, ozonCatalog, ozonSourceMediaCleanup, pricing, shipping, config } = services;
   const requireRuntimeKey = (request: { headers: Record<string, unknown> }) => {
@@ -97,6 +100,7 @@ export async function registerOzonRoutes(
   });
   app.post('/api/v1/ozon/listings/:sku/preparations/:jobId/manual-takeover', async (request) => {
     const params = request.params as { sku: string; jobId: string };
+    await services.ozonRetry?.repository.assertLegacyRecoveryAllowed(params.jobId);
     const body = request.body as { jobRowVersion?: number; listingRowVersion?: number } | undefined;
     return ozonPublishing.takeOverAutomaticPreparationForManual({
       sku: params.sku,
@@ -340,12 +344,13 @@ export async function registerOzonRoutes(
       rowVersion: numberValue(query.rowVersion)
     });
   });
-  app.post('/api/v1/ozon/automation/jobs/:id/manual-success-reconcile', async (request) => (
-    ozonAutoPublishing.reconcilePreparationToManualSuccess(
+  app.post('/api/v1/ozon/automation/jobs/:id/manual-success-reconcile', async (request) => {
+    await services.ozonRetry?.repository.assertLegacyRecoveryAllowed((request.params as { id: string }).id);
+    return ozonAutoPublishing.reconcilePreparationToManualSuccess(
       (request.params as { id: string }).id,
       request.body
     )
-  ));
+  });
   app.get('/api/v1/ozon/automation/jobs/:id/material-snapshot', async (request) => ({
     snapshot: await ozonAutoPublishing.preparationMaterialSnapshot((request.params as { id: string }).id)
   }));
@@ -355,6 +360,20 @@ export async function registerOzonRoutes(
       (request.params as { id: string }).id,
       { rowVersion: numberValue(query.rowVersion) }
     );
+  });
+  app.get('/api/v1/ozon/automation/jobs/:id/retry-plan', async (request) => {
+    if (!services.ozonRetry) throw new AppError('CONFIG_INVALID', 'OZON 重试服务不可用', undefined, 503);
+    const id = (request.params as { id: string }).id;
+    const storeId = requiredStoreId((request.query as { storeId?: string }).storeId);
+    return { plan: await services.ozonRetry.plan(id, storeId) };
+  });
+  app.post('/api/v1/ozon/automation/jobs/:id/retry', async (request, reply) => {
+    requireOzonLoopbackOperator(request);
+    if (!services.ozonRetry) throw new AppError('CONFIG_INVALID', 'OZON 重试服务不可用', undefined, 503);
+    const parsed = ozonPublishRetryRequestSchema.safeParse(request.body);
+    if (!parsed.success) throw new AppError('CONFIG_INVALID', '重试必须指定店铺、请求 ID 与已确认计划', { issues: parsed.error.issues }, 400);
+    const result = await services.ozonRetry.request((request.params as { id: string }).id, parsed.data);
+    return reply.code(202).send(result);
   });
   app.get('/api/v1/ozon/automation/jobs/:id', async (request) => {
     const id = (request.params as { id: string }).id;
@@ -375,6 +394,7 @@ export async function registerOzonRoutes(
   });
   app.post('/api/v1/ozon/automation/jobs/:id/recheck', async (request) => {
     const id = (request.params as { id: string }).id;
+    await ozonStores.repository.retries.assertLegacyRecoveryAllowed(id);
     const job = await ozonAutoPublishing.get(id);
     if (job.taskKind === 'SHARED_PREPARATION') {
       return ozonAutoPublishing.recheckPreparation(id, request.body);
