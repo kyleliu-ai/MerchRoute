@@ -45,6 +45,11 @@
       "name": "work/ozon-title-readiness-20260905-0100",
       "head": "234ce139bd6d4deb2d630cd3205ba8b6d4df3dbd",
       "featureId": "project-release-guardrails"
+    },
+    {
+      "name": "work/wb-publish-retry-20260905-0537",
+      "head": "71efaf6a0a2e3fa1e5a545733287080ba3bce4c8",
+      "featureId": "project-release-guardrails"
     }
   ],
   "branches": [
