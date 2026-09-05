@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
+import { OzonPublishRetry } from './ozon-retry';
 import {
   ApiOutlined,
   AppstoreAddOutlined,
@@ -594,7 +595,7 @@ function AutomaticJobsPanel({ initialJobId, initialStoreId, onOpenJob, onCloseJo
   const [jobId, setJobId] = useState<string | undefined>(initialJobId);
   const [storeId, setStoreId] = useState<string | undefined>(initialStoreId);
   const [sharedMaterialOpen, setSharedMaterialOpen] = useState(false);
-  const preparationRequestIds = useRef<Record<string, string>>({});
+  const [retryActionContainer, setRetryActionContainer] = useState<HTMLSpanElement | null>(null);
   const queryClient = useQueryClient();
   useEffect(() => {
     setJobId(initialJobId);
@@ -616,7 +617,6 @@ function AutomaticJobsPanel({ initialJobId, initialStoreId, onOpenJob, onCloseJo
     refetchInterval: (result) => result.state.data?.items.some(ozonJobIsActive) ? 10_000 : false
   });
   const status = useQuery({ queryKey: ['ozon-automation-status'], queryFn: api.ozonAutomationStatus, refetchInterval: 30_000 });
-  const settings = useQuery({ queryKey: ['ozon-settings'], queryFn: api.ozonSettings, retry: false });
   const stores = useQuery({ queryKey: ['ozon-stores'], queryFn: () => api.ozonStores(true), retry: false });
   const automaticJobList = ozonVisibleAutomaticJobList(jobs.data);
   const automaticJobs = automaticJobList.items;
@@ -672,55 +672,6 @@ function AutomaticJobsPanel({ initialJobId, initialStoreId, onOpenJob, onCloseJo
     queryClient.invalidateQueries({ queryKey: ['ozon-listing'] }),
     queryClient.invalidateQueries({ queryKey: ['ozon-listings'] })
   ]);
-  const recheck = useMutation({
-    mutationFn: async (target: OzonPublishJob) => {
-      if (ozonJobIsMultistorePreparation(target)) {
-        const { plan } = await api.ozonPreparationRecheckPlan(target.id, target.rowVersion);
-        if (!plan.canRecheck) throw new Error(plan.blockedReason || '当前共享准备重检计划未通过安全检查');
-        const requestId = plan.requestId || preparationRequestIds.current[target.id];
-        if (!requestId) throw new Error('共享准备重检计划缺少冻结 requestId，已停止重检');
-        preparationRequestIds.current[target.id] = requestId;
-        const detail = await api.recheckOzonPreparation(target.id, {
-          rowVersion: plan.rowVersion,
-          planHash: plan.planHash,
-          requestId
-        });
-        return { job: detail.job, publication: undefined };
-      }
-      const binding = ozonJobActionBinding(target);
-      if (binding.kind === 'LEGACY') {
-        const result = await api.recheckOzonJob(binding.jobId, binding.storeId);
-        return { job: result.job, publication: undefined };
-      }
-      const current = await api.ozonPublicationTaskDetail(binding.publicationId);
-      if (!current.recovery.canRecheck) {
-        throw new Error(current.recovery.blockedReason || '当前 publication 不允许安全重检');
-      }
-      const result = await api.recheckOzonPublication(
-        binding.publicationId,
-        requireOzonPublicationRecheckInput(current.publication, current.frozenContract)
-      );
-      return { job: target, publication: result.publication };
-    },
-    onSuccess: async (result) => {
-      if (!result.publication) {
-        queryClient.setQueryData(['ozon-auto-job', ozonJobStoreId(result.job), result.job.id], { job: result.job });
-      }
-      message.success(result.publication
-        ? `SKU ${result.job.sku} 的店铺 publication 已提交重新检查`
-        : ozonJobIsMultistorePreparation(result.job)
-          ? `SKU ${result.job.sku} 的共享准备任务已按冻结 fan-out 计划重新检查`
-          : `SKU ${result.job.sku} 已重新检测，将继续使用原自动任务处理`);
-      await invalidateJobQueries(result.job);
-      if (result.publication) {
-        await Promise.all([
-          queryClient.invalidateQueries({ queryKey: ['ozon-publication', result.publication.id] }),
-          queryClient.invalidateQueries({ queryKey: ['ozon-publications'] })
-        ]);
-      }
-    },
-    onError: showError
-  });
   const cancel = useMutation({
     mutationFn: async (target: OzonPublishJob) => {
       const binding = ozonJobActionBinding(target);
@@ -861,23 +812,6 @@ function AutomaticJobsPanel({ initialJobId, initialStoreId, onOpenJob, onCloseJo
     });
   };
   const listingDisabledReason = !job ? '任务详情加载后可打开上品资料' : undefined;
-  const recheckStateAllowed = Boolean(job && (ozonJobIsMultistorePreparation(job)
-    ? ozonSharedPreparationRecheckEntryAllowed(job, fanoutSummary, preparationDetail.data?.frozenContract)
-    : ['WAITING_MEDIA', 'NEEDS_ATTENTION', 'FAILED', 'MODERATING'].includes(job.state)));
-  const publicationManaged = ozonJobIsPublicationManaged(job);
-  const publicationReadbackEnabled = ozonPublicationRemoteReadbackEnabled(settings.data?.settings);
-  const publicationRequiresReadback = Boolean(publicationManaged && job && ozonJobHasRemoteProgress(job));
-  const recheckAllowed = Boolean(job
-    && recheckStateAllowed
-    && (!publicationRequiresReadback || publicationReadbackEnabled)
-    && (status.data?.managementEnabled !== false || ozonJobHasRemoteProgress(job)));
-  const recheckDisabledReason = !job || !recheckStateAllowed
-    ? '当前状态不能重新检测'
-    : publicationRequiresReadback && !publicationReadbackEnabled
-      ? '等待受控 OZON 多店 fleet 部署'
-      : recheckAllowed
-        ? undefined
-        : '请先启用 OZON 上品管理';
   const cancelAllowed = Boolean(job && ozonAutoJobCanCancel(job));
   const cancelDisabledReason = !job
     ? '任务详情加载后可取消'
@@ -964,13 +898,16 @@ function AutomaticJobsPanel({ initialJobId, initialStoreId, onOpenJob, onCloseJo
         <Tooltip title={listingDisabledReason}><span className="ozon-auto-job-action-tooltip"><Button icon={<FileTextOutlined />} loading={preparationSelected ? preparationMaterial.isFetching : listing.isLoading} disabled={Boolean(listingDisabledReason)} onClick={openListing}>{preparationSelected ? '打开公共素材' : '打开上品资料'}</Button></span></Tooltip>
         {ozonJobIsMultistorePreparation(job) && <Tooltip title={manualTakeoverDisabledReason}><span className="ozon-auto-job-action-tooltip"><Button icon={<FormOutlined />} loading={manualTakeover.isPending} disabled={!manualTakeoverAllowed} onClick={confirmManualTakeover}>转为手动处理</Button></span></Tooltip>}
         {ozonJobIsMultistorePreparation(job) && <Tooltip title={manualSuccessReconcileDisabledReason}><span className="ozon-auto-job-action-tooltip"><Button icon={<CheckCircleOutlined />} loading={manualSuccessReconcile.isPending} disabled={!manualSuccessReconcileAllowed} onClick={confirmManualSuccessReconcile}>按手动成功收口</Button></span></Tooltip>}
-        <Tooltip title={recheckDisabledReason}><span className="ozon-auto-job-action-tooltip"><Button icon={<ReloadOutlined />} loading={recheck.isPending} disabled={!recheckAllowed} onClick={() => recheck.mutate(job)}>重新检测</Button></span></Tooltip>
+        <span ref={setRetryActionContainer} />
         <Tooltip title={cancelDisabledReason}><span className="ozon-auto-job-action-tooltip"><Button danger icon={<StopOutlined />} loading={cancel.isPending} disabled={!cancelAllowed} onClick={confirmCancel}>取消自动任务</Button></span></Tooltip>
       </Space>}
     >
       {detailLoading && !job ? <Skeleton active /> : detailError && !job ? <Alert showIcon type="error" message="自动上品详情加载失败" description={detailError.message} action={<Button onClick={() => void refetchDetail()}>重试</Button>} /> : job ? <>
         {detailError && <Alert className="ozon-auto-job-fallback" showIcon type="warning" message="正在显示列表快照" description="完整事件暂时无法读取，可稍后重试。" action={<Button size="small" onClick={() => void refetchDetail()}>重试</Button>} />}
         <OzonSourceMediaCleanupStatus summary={sourceMediaCleanup} />
+        <OzonPublishRetry key={job.id} job={job} actionContainer={retryActionContainer} stores={stores.data?.items || []} onOpenJob={(id, targetStoreId) => {
+          setJobId(id); setStoreId(targetStoreId); onOpenJob(id, targetStoreId);
+        }} />
         <JobDetail job={job} />
         {preparationDetail.data?.manualSuccessReconcilePlan && <OzonManualSuccessReconcilePlanDetails plan={preparationDetail.data.manualSuccessReconcilePlan} />}
       </> : null}

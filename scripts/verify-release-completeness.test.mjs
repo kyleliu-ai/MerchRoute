@@ -48,7 +48,7 @@ async function tempDirectory(t, label) {
   return root;
 }
 
-test('原 29 个来源及 12 项功能完整保留，追加优化基线与审核投递可靠性', () => {
+test('历史来源和原有功能完整保留，追加 OZON 与 WB 受控重试', () => {
   assert.deepEqual(validateManifest(manifest), []);
   assert.equal(manifest.branches.length, 30);
   assert.equal(digest(JSON.stringify(manifest.branches.slice(0, 25))), '7fa2eea22e55675c5cdf373683a07ebe15b7eb2c110987708574f7c74cf835bf');
@@ -68,8 +68,8 @@ test('原 29 个来源及 12 项功能完整保留，追加优化基线与审核
   assert.equal(manifest.integrationParent.commit, manifest.branches[27].head);
   assert.equal(manifest.integrationParent.headTreeHash, '22ecc597f1230bcc280d63b032e06b4c72bfee23');
   assert.deepEqual(manifest.features.filter((feature) => feature.action === 'INTEGRATE').map((feature) => feature.id).sort(),
-    ['local-import-directory-status', 'project-release-guardrails', 'review-delivery-reliability', 'wb-restart-protection']);
-  assert.equal(manifest.features.length, 13);
+    ['local-import-directory-status', 'ozon-controlled-publish-retry', 'project-release-guardrails', 'review-delivery-reliability', 'wb-controlled-publish-retry', 'wb-restart-protection']);
+  assert.equal(manifest.features.length, 15);
   assert.equal(digest(JSON.stringify(manifest.branches.slice(0, 29))), "b85410e26bdba57eb6adc9760f42c64e84ddee52b0e5d2f308fb9bbd8df70870");
   assert.deepEqual(manifest.branches[29], { name: 'work/release-acceptance-gates-20260903-1432', head: '8568914f30a9d639f7df92590808d887f4f0809e', featureId: 'core-deployment', relation: 'USER_CONFIRMED_LOCAL_BASELINE' });
   const changed = structuredClone(manifest);
@@ -79,7 +79,7 @@ test('原 29 个来源及 12 项功能完整保留，追加优化基线与审核
   assert.match(validateManifest(changed).join(' '), /仓库内相对路径/);
 });
 
-test('两种模式共用不可删减的 13 项关键功能与本机 11 类检查契约', () => {
+test('两种模式共用不可删减的 15 项关键功能与本机 11 类检查契约', () => {
   assert.deepEqual(manifest.features.map((feature) => feature.id), REQUIRED_FEATURE_IDS);
   assert.deepEqual(manifest.requiredChecks.map((check) => check.id), REQUIRED_LOCAL_CHECK_IDS);
   for (const id of REQUIRED_FEATURE_IDS) {

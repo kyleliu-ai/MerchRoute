@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { createDefaultConfig } from '@n8n-media-review/shared';
 import dayjs from 'dayjs';
 import timezone from 'dayjs/plugin/timezone.js';
 import utc from 'dayjs/plugin/utc.js';
@@ -611,9 +612,23 @@ const pendingCredentialStore = {
 
 test.describe('OZON 独立上品工作区', () => {
   test.beforeEach(async ({ page }) => {
+    if (process.env.MERCHROUTE_OZON_RETRY_UI_ONLY === '1') {
+      await page.route('**/*', route => new URL(route.request().url()).hostname === '127.0.0.1' ? route.continue() : route.abort());
+      await page.route('**/api/v1/**', route => {
+        const pathname = new URL(route.request().url()).pathname;
+        if (pathname === '/api/v1/config') return route.fulfill({ json: { config: createDefaultConfig(), readiness: { complete: true, stages: [] } } });
+        if (pathname === '/api/v1/stages') return route.fulfill({ json: { stages: [] } });
+        return route.fulfill({ status: 503, json: { error: { message: 'Isolated UI test: unmocked API' } } });
+      });
+    }
     const templates: any[] = [];
     await page.route(/\/api\/v1\/ozon\/.*/, async (route) => {
       const path = new URL(route.request().url()).pathname;
+      if (path.endsWith('/retry-plan')) return route.fulfill({ json: { plan: {
+        canRetry: false, blockedReason: '历史任务缺少完整冻结身份，请人工核对', mode: 'READBACK', requiresConfirmation: false,
+        sourceJobId: path.split('/').at(-2), storeId: new URL(route.request().url()).searchParams.get('storeId'),
+        planHash: `sha256:${'a'.repeat(64)}`, sku: '', storeName: '', stage: '', previousError: '', offerIds: [], changes: []
+      } } });
       if (path === '/api/v1/ozon/system') return route.fulfill({ json: readiness });
       if (path === '/api/v1/ozon/settings') return route.fulfill({ json: { settings: multiStoreSettings } });
       if (path === '/api/v1/ozon/stores') return route.fulfill({ json: { items: [], total: 0 } });
@@ -1755,12 +1770,12 @@ test.describe('OZON 独立上品工作区', () => {
     await expect(detail.getByRole('row', { name: /产品 SKU 0000051/ })).toBeVisible();
     const initialActions = detail.locator('.ozon-auto-job-actions .ant-btn');
     await expect(initialActions).toHaveCount(3);
-    expect(await initialActions.allTextContents()).toEqual(['打开上品资料', '重新检测', '取消自动任务']);
+    expect(await initialActions.allTextContents()).toEqual(['打开上品资料', '重试上品', '取消自动任务']);
     await expect(initialActions.nth(0)).toBeEnabled();
 
     await page.setViewportSize({ width: 320, height: 900 });
     await expect(detail.getByRole('button', { name: '打开上品资料' })).toBeVisible();
-    await expect(detail.getByRole('button', { name: '重新检测' })).toBeVisible();
+    await expect(detail.getByRole('button', { name: '重试上品' })).toBeVisible();
     await expect(detail.getByRole('button', { name: '取消自动任务' })).toBeVisible();
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     await detail.getByRole('button', { name: 'Close' }).click();
@@ -1787,7 +1802,7 @@ test.describe('OZON 独立上品工作区', () => {
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });
 
-  test('纯 legacy 自动任务仍使用 storeId 旧接口，远程任务禁止取消', async ({ page }) => {
+  test('纯 legacy 自动任务不盲目重试，取消仍使用 storeId 旧接口且远程任务禁止取消', async ({ page }) => {
     let managementEnabled = true;
     let recheckCalls = 0;
     let cancelCalls = 0;
@@ -1844,12 +1859,10 @@ test.describe('OZON 独立上品工作区', () => {
     const autoTable = page.locator('.ozon-console').first();
     await autoTable.locator('tbody tr').filter({ hasText: '0000049' }).getByRole('button', { name: '查看详情' }).click();
     let detail = page.getByRole('dialog', { name: /自动上品详情/ });
-    await expect(detail.getByRole('button', { name: '重新检测' })).toBeEnabled();
+    await expect(detail.getByRole('button', { name: '重试上品' })).toBeDisabled();
     await expect(detail.getByRole('button', { name: '取消自动任务' })).toBeEnabled();
 
-    await detail.getByRole('button', { name: '重新检测' }).click();
-    await expect.poll(() => recheckCalls).toBe(1);
-    await expect(page.getByText('SKU 0000049 已重新检测，将继续使用原自动任务处理', { exact: true })).toBeVisible();
+    expect(recheckCalls).toBe(0);
 
     managementEnabled = false;
     await detail.getByRole('button', { name: '取消自动任务' }).click();
@@ -1864,7 +1877,7 @@ test.describe('OZON 独立上品工作区', () => {
 
     await autoTable.locator('tbody tr').filter({ hasText: '0000062' }).getByRole('button', { name: '查看详情' }).click();
     detail = page.getByRole('dialog', { name: /自动上品详情/ });
-    await expect(detail.getByRole('button', { name: '重新检测' })).toBeEnabled();
+    await expect(detail.getByRole('button', { name: '重试上品' })).toBeDisabled();
     const remoteCancel = detail.getByRole('button', { name: '取消自动任务' });
     await expect(remoteCancel).toBeDisabled();
     await detail.locator('.ozon-auto-job-action-tooltip').nth(2).hover();
@@ -1884,7 +1897,7 @@ test.describe('OZON 独立上品工作区', () => {
     await expect(page.getByRole('tooltip')).toContainText(`任务正在运行，lease 占用至 ${leaseDisplay}，释放后才能取消`);
   });
 
-  test('publication 自动任务在 readback capability 关闭时禁用且不调用 recheck', async ({ page }) => {
+  test('publication 自动任务按服务端重试门禁禁用且不调用 recheck', async ({ page }) => {
     const publicationId = '11111111-1111-4111-8111-111111111119';
     const publicationJob = {
       ...waitingAutoJob,
@@ -1925,9 +1938,9 @@ test.describe('OZON 独立上品工作区', () => {
     await page.goto('/listing/ozon');
     await page.locator('.ozon-console').first().locator('tbody tr').filter({ hasText: publicationJob.sku }).getByRole('button', { name: '查看详情' }).click();
     const detail = page.getByRole('dialog', { name: /自动上品详情/ });
-    await expect(detail.getByRole('button', { name: '重新检测' })).toBeDisabled();
+    await expect(detail.getByRole('button', { name: '重试上品' })).toBeDisabled();
     await detail.locator('.ozon-auto-job-action-tooltip').nth(1).hover();
-    await expect(page.getByRole('tooltip')).toContainText('等待受控 OZON 多店 fleet 部署');
+    await expect(page.getByRole('tooltip')).toContainText('历史任务缺少完整冻结身份，请人工核对');
     expect(publicationReads).toBe(0);
     expect(publicationRecheckCalls).toBe(0);
     expect(legacyRecheckCalls).toBe(0);
@@ -1980,6 +1993,19 @@ test.describe('OZON 独立上品工作区', () => {
     await page.route(/\/api\/v1\/ozon\/.*/, async (route) => {
       const path = new URL(route.request().url()).pathname;
       const method = route.request().method();
+      if (path === `/api/v1/ozon/automation/jobs/${publicationJob.id}/retry-plan`) {
+        operationOrder.push(`GET-RETRY:${publication.rowVersion}`);
+        return route.fulfill({ json: { plan: { canRetry: true, mode: 'RESUME', requiresConfirmation: false,
+          planHash, sourceJobId: publicationJob.id, storeId: publicationJob.storeId, sku: publicationJob.sku,
+          storeName: 'OZON 主店', stage: '', previousError: '', offerIds: [], changes: [] } } });
+      }
+      if (path === `/api/v1/ozon/automation/jobs/${publicationJob.id}/retry` && method === 'POST') {
+        operationOrder.push('POST:retry');
+        expect(route.request().postDataJSON()).toMatchObject({ storeId: publicationJob.storeId, planHash, confirmRebuild: false });
+        expect(route.request().postDataJSON().requestId).toMatch(/^[a-f0-9-]{36}$/);
+        publication = { ...publication, rowVersion: publication.rowVersion + 1 };
+        return route.fulfill({ status: 202, json: { retry: { status: 'CHECKING' }, idempotent: false } });
+      }
       if (path === '/api/v1/ozon/settings') return route.fulfill({ json: { settings: { ...multiStoreSettings, publicationReadbackEnabled: true } } });
       if (path === '/api/v1/ozon/system') return route.fulfill({ json: readyReadiness });
       if (path === '/api/v1/ozon/stores') return route.fulfill({ json: { items: [readyStoreA], total: 1 } });
@@ -2029,14 +2055,16 @@ test.describe('OZON 独立上品工作区', () => {
     await page.locator('.ozon-console').first().locator('tbody tr').filter({ hasText: publicationJob.sku }).getByRole('button', { name: '查看详情' }).click();
     const detail = page.getByRole('dialog', { name: /自动上品详情/ });
 
-    await detail.getByRole('button', { name: '重新检测' }).click();
-    await expect.poll(() => operationOrder).toEqual(['GET-TASK:41', 'POST:recheck']);
-    await expect(page.getByText(`SKU ${publicationJob.sku} 的店铺 publication 已提交重新检查`, { exact: true })).toBeVisible();
+    await detail.getByRole('button', { name: '重试上品' }).click();
+    await expect.poll(() => operationOrder.filter(item => item.startsWith('POST:'))).toEqual(['POST:retry']);
+    expect(operationOrder[0]).toBe('GET-RETRY:41');
+    await expect(page.getByText('重试上品已受理，正在检查并接续执行；尚未完成上品', { exact: true })).toBeVisible();
 
     await detail.getByRole('button', { name: '取消自动任务' }).click();
     const confirm = page.locator('.ant-modal-confirm').filter({ hasText: `取消 SKU ${publicationJob.sku} 的自动上品任务？` });
     await confirm.getByRole('button', { name: '取消自动任务' }).click();
-    await expect.poll(() => operationOrder).toEqual(['GET-TASK:41', 'POST:recheck', 'GET-PUBLICATION:42', 'POST:cancel']);
+    await expect.poll(() => operationOrder.filter(item => item.startsWith('POST:'))).toEqual(['POST:retry', 'POST:cancel']);
+    expect(operationOrder.indexOf('GET-PUBLICATION:42')).toBeLessThan(operationOrder.indexOf('POST:cancel'));
     await expect(page.getByText(`SKU ${publicationJob.sku} 的店铺 publication 已取消，上品资料已保留`, { exact: true })).toBeVisible();
     expect(legacyActionCalls).toBe(0);
   });

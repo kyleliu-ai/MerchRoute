@@ -37,6 +37,7 @@ import {
 } from '@n8n-media-review/shared';
 import type { OzonEncryptedCredentialPair } from '../services/ozon-stores/token-vault.js';
 import { ozonPreparationGatewayBoundaryLockKey } from '../ozon-preparation-gateway-boundary.js';
+import { migrateOzonRetry, OzonRetryRepository } from './ozon-retry.js';
 
 type SqlRow = Record<string, any>;
 type JsonRecord = Record<string, unknown>;
@@ -151,6 +152,8 @@ export type OzonEligibleAutoStore = OzonStore & {
 };
 
 export type OzonPublicationInsert = {
+  retryId?: string;
+  retryLeaseToken?: string;
   id: string;
   jobId: string;
   sku: string;
@@ -304,10 +307,37 @@ export type OzonRepresentedMediaFanoutReconciliationResult = {
 
 export class OzonStoreRepository {
   private pool?: Pool;
+  readonly retries = new OzonRetryRepository({
+    query: (sql, values) => this.query(sql, values),
+    transaction: action => this.transaction(action)
+  });
 
   constructor(private readonly connectionString?: string) {}
   get configured(): boolean { return Boolean(this.pool); }
   isFleetCapabilityReady(): boolean { return fleetCapabilityReady(); }
+
+  private async assertNoCompetingRetry(input: OzonPublicationInsert, client: PoolClient): Promise<void> {
+    await client.query("SELECT pg_advisory_xact_lock(hashtext('merchroute-ozon-multistore-claim'))");
+    const retry = (await client.query(`SELECT id FROM ozon_publish_retries WHERE store_id=$1 AND sku=$2
+      AND status IN ('CHECKING','RUNNING') AND id IS DISTINCT FROM $3::uuid LIMIT 1`, [input.storeId, input.sku, input.retryId || null])).rows[0];
+    if (retry) throw new AppError('TASK_LOCKED', '当前店铺和 SKU 已由重试上品接管，请等待本轮结果', undefined, 409);
+  }
+
+  async assertRetryOwnership(jobId: string, retryId?: string, client?: PoolClient): Promise<void> {
+    const db = client || { query: (sql: string, values: unknown[]) => this.query(sql, values) };
+    const job = (await db.query('SELECT payload FROM ozon_publish_jobs WHERE id=$1', [jobId])).rows[0];
+    const payload = jsonObject(job?.payload);
+    const hold = jsonObject(payload.recoveryHold);
+    if (payload.replanReplacement || Object.keys(jsonObject(payload.retryReplacements)).length
+      || (hold.active === true && hold.retryId !== retryId)) {
+      throw new AppError('TASK_LOCKED', '任务已由单店重试接管或替代，请打开接续任务', undefined, 409);
+    }
+    if (retryId) {
+      const retry = (await db.query(`SELECT id FROM ozon_publish_retries WHERE id=$1
+        AND status='CHECKING' AND lease_until>NOW()`, [retryId])).rows[0];
+      if (!retry || hold.retryId !== retryId) throw new AppError('TASK_LOCKED', '重试执行保护已失效', undefined, 409);
+    }
+  }
 
   async initialize(options: { migrate?: boolean } = {}): Promise<void> {
     if (!this.connectionString) return;
@@ -940,6 +970,8 @@ export class OzonStoreRepository {
     mediaConsumption?: OzonPublicationMediaConsumption
   ): Promise<OzonStorePublication> {
     return this.transaction(async (client) => {
+      await this.assertNoCompetingRetry(input, client);
+      if (input.retryId) await this.retries.assertChecking(input.retryId, input.retryLeaseToken || '', input.storeId, input.sku, client);
       const existing = await client.query<SqlRow>(`SELECT * FROM ozon_store_publications
         WHERE (store_id=$1 AND generated_version_id=$2)
           OR ($3::uuid IS NOT NULL AND request_id=$3::uuid AND store_id=$1)
@@ -949,6 +981,7 @@ export class OzonStoreRepository {
       ]);
       if (existing.rows[0]) {
         const row = existing.rows[0];
+        await this.assertRetryOwnership(String(row.planned_job_id), input.retryId, client);
         if (String(row.plan_hash || '') !== input.planHash
           || String(row.generated_version_id) !== input.generatedVersionId
           || String(row.planned_job_id || '') !== input.jobId) {
@@ -983,6 +1016,7 @@ export class OzonStoreRepository {
       ]);
       const payload = {
         schemaVersion: 4,
+        ...(input.retryId ? { recoveryHold: { active: true, kind: 'OZON_PUBLISH_RETRY', retryId: input.retryId } } : {}),
         mode: 'MULTISTORE_PUBLICATION',
         attemptPhase: 'PLANNED',
         storeId: input.storeId,
@@ -1034,6 +1068,8 @@ export class OzonStoreRepository {
   }
 
   async materializePublicationAttempt(input: {
+    retryId?: string;
+    retryLeaseToken?: string;
     publicationId: string;
     jobId: string;
     planHash: string;
@@ -1053,6 +1089,8 @@ export class OzonStoreRepository {
       );
       const job = jobResult.rows[0];
       if (!job) throw new AppError('VERSION_CONFLICT', 'OZON publication attempt 缺少原固定 job', undefined, 409);
+      await this.assertRetryOwnership(input.jobId, input.retryId, client);
+      if (input.retryId) await this.retries.assertChecking(input.retryId, input.retryLeaseToken || '', String(job.store_id), String(job.sku), client);
       if (String(publication.plan_hash || '') !== input.planHash
         || String(publication.materialization_hash || '') !== input.materializationHash) {
         throw new AppError('VERSION_CONFLICT', 'OZON publication 发布包与冻结计划不一致', undefined, 409);
@@ -1064,7 +1102,7 @@ export class OzonStoreRepository {
         return toPublication(publication);
       }
       if (!['PLANNED', 'NEEDS_ATTENTION'].includes(String(publication.status))
-        || !['WAITING_MEDIA', 'NEEDS_ATTENTION'].includes(String(job.state))) {
+        || !['WAITING_MEDIA', 'NEEDS_ATTENTION', ...(input.retryId ? ['FAILED'] : [])].includes(String(job.state))) {
         throw new AppError('TASK_LOCKED', 'OZON publication attempt 当前状态不可物化', {
           publicationStatus: publication.status, jobState: job.state
         }, 409);
@@ -1098,6 +1136,8 @@ export class OzonStoreRepository {
   }
 
   async failPublicationAttempt(input: {
+    retryId?: string;
+    retryLeaseToken?: string;
     publicationId: string;
     jobId: string;
     errorCode: string;
@@ -1114,6 +1154,10 @@ export class OzonStoreRepository {
         'SELECT * FROM ozon_publish_jobs WHERE id=$1 AND publication_id=$2 FOR UPDATE', [input.jobId, input.publicationId]
       )).rows[0];
       if (!job) throw new AppError('VERSION_CONFLICT', 'OZON publication attempt 缺少原 job', undefined, 409);
+      if (input.retryId) {
+        await this.assertRetryOwnership(input.jobId, input.retryId, client);
+        await this.retries.assertChecking(input.retryId, input.retryLeaseToken || '', String(job.store_id), String(job.sku), client);
+      }
       const remoteEvidence = await client.query<{ exists: boolean }>(`SELECT EXISTS(
         SELECT 1 FROM ozon_gateway_requests WHERE publication_id=$1
           AND (delivery_state='UNKNOWN' OR delegation_state='RECEIPT_RECORDED')
@@ -1157,6 +1201,7 @@ export class OzonStoreRepository {
     mediaConsumption?: OzonPublicationMediaConsumption
   ): Promise<OzonStorePublication> {
     return this.transaction(async (client) => {
+      await this.assertNoCompetingRetry(input, client);
       const existing = await client.query<SqlRow>(`SELECT * FROM ozon_store_publications
         WHERE store_id=$1 AND generated_version_id=$2 FOR UPDATE`, [input.storeId, input.generatedVersionId]);
       if (existing.rows[0]) {
@@ -2989,6 +3034,7 @@ export class OzonStoreRepository {
       const job = await client.query<SqlRow>(`SELECT * FROM ozon_publish_jobs WHERE publication_id=$1
         ORDER BY updated_at DESC,id DESC LIMIT 1 FOR UPDATE`, [publicationId]);
       if (job.rows[0]) {
+        await this.assertRetryOwnership(String(job.rows[0].id), undefined, client);
         const blockers = publicationCancellationBlockers(job.rows[0]);
         if (blockers.length) {
           throw new AppError('OZON_REMOTE_STATE_UNPROVEN', 'OZON publication 已有运行时或平台写入证据，必须先只读回查，禁止直接取消', {
@@ -3026,6 +3072,7 @@ export class OzonStoreRepository {
         ORDER BY updated_at DESC,id DESC LIMIT 1 FOR UPDATE`, [publicationId]);
       const job = jobResult.rows[0];
       if (!job) throw new AppError('NOT_FOUND', 'OZON publication 任务不存在', { publicationId }, 404);
+      await this.assertRetryOwnership(String(job.id), undefined, client);
       const unsafe = Boolean(job.import_task_id || job.ozon_product_id || job.directory_stage === 'PROCESSING'
         || jsonObject(job.payload).platformWriteAttempted === true);
       if (unsafe) {
@@ -3606,6 +3653,7 @@ export class OzonStoreRepository {
           AND (j.next_attempt_at IS NULL OR j.next_attempt_at<=NOW())
           AND (j.lease_expires_at IS NULL OR j.lease_expires_at<=NOW())
           AND NOT (j.payload @> '{"recoveryHold":{"active":true}}'::jsonb)
+          AND NOT (j.payload ? 'replanReplacement')
           AND NOT EXISTS(SELECT 1 FROM ozon_publish_jobs leased WHERE leased.store_id=j.store_id AND leased.lease_expires_at>NOW())
           AND (
             (j.credential_binding_mode='VAULT' AND s.enabled=true AND s.archived_at IS NULL
@@ -5139,6 +5187,7 @@ export async function migrateOzonMultiStoreSchema(pool: Pool): Promise<void> {
       await migrateOzonMultiStoreHardening(client);
       await migrateOzonStoreOwnedPresetOwnership(client);
       await migrateOzonSharedMaterialAndPreparationAttempts(client);
+      await migrateOzonRetry(client);
       await client.query('COMMIT');
       return;
     }
@@ -5441,6 +5490,7 @@ export async function migrateOzonMultiStoreSchema(pool: Pool): Promise<void> {
     await migrateOzonMultiStoreHardening(client);
     await migrateOzonStoreOwnedPresetOwnership(client);
     await migrateOzonSharedMaterialAndPreparationAttempts(client);
+    await migrateOzonRetry(client);
     await client.query('COMMIT');
   } catch (error) {
     await client.query('ROLLBACK').catch(() => undefined);

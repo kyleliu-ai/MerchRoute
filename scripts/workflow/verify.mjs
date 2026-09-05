@@ -34,7 +34,9 @@ export async function withTestPostgres(action) {
       '-e','POSTGRES_USER=merchroute_ci','-e','POSTGRES_DB=merchroute_ci_test','-e','POSTGRES_HOST_AUTH_METHOD=trust',
       '-e','POSTGRES_INITDB_ARGS=--encoding=UTF8 --locale-provider=icu --icu-locale=und','postgres:18.4-alpine']);
     let ready=false;
-    for(let attempt=0;attempt<60;attempt++){try{docker(['exec',id,'pg_isready','-U','merchroute_ci','-d','merchroute_ci_test']);ready=true;break;}catch{await new Promise(resolve=>setTimeout(resolve,500));}}
+    // The image's temporary initialization server accepts Unix sockets before
+    // restarting. TCP readiness waits for the final server, avoiding that race.
+    for(let attempt=0;attempt<60;attempt++){try{docker(['exec',id,'pg_isready','-h','127.0.0.1','-U','merchroute_ci','-d','merchroute_ci_test']);ready=true;break;}catch{await new Promise(resolve=>setTimeout(resolve,500));}}
     if(!ready)throw new Error('Isolated PostgreSQL did not become ready');
     // Parallel repository suites may otherwise race on PostgreSQL's extension
     // catalog even when every migration uses CREATE EXTENSION IF NOT EXISTS.

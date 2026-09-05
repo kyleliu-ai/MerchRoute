@@ -98,7 +98,7 @@ export const wbGatewayRequestSchema = z.object({
   requestRef: z.string().trim().min(1).max(256),
   operation: z.string().trim().min(1).max(128),
   logicalIntentId: z.string().trim().min(1).max(256).optional(),
-  attemptNo: z.number().int().min(1).max(2).optional(),
+  attemptNo: z.number().int().min(1).max(2147483647).optional(),
   payload: z.record(z.string(), z.unknown()).default({})
 }).strict().superRefine((value, context) => {
   if (!value.taskId && !value.storeId) {

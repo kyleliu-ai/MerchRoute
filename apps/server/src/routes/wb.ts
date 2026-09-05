@@ -21,6 +21,14 @@ export async function registerWbRoutes(app: FastifyInstance<any, any, any, any, 
     if (!received || received !== expected) throw new AppError('AUTH_INVALID', 'WB runtime API 密钥无效', undefined, 401);
   };
 
+  app.get('/api/v1/wb/runtime/retry-protocol', async (request) => {
+    requireRuntimeKey(request);
+    return wb.autoRetry.protocol();
+  });
+  app.post('/api/v1/wb/runtime/retry-protocol', async (request) => {
+    requireRuntimeKey(request);
+    return wb.autoRetry.configureProtocol((request.body || {}) as { enabled: boolean; contractVersion: number; workflowVersionId?: string });
+  });
   app.get('/api/v1/wb/runtime/config', async (request) => {
     requireRuntimeKey(request);
     return { config: await wb.getRuntimeConfig() };
@@ -216,6 +224,9 @@ export async function registerWbRoutes(app: FastifyInstance<any, any, any, any, 
   app.post('/api/v1/wb/automation/jobs/:sku/recheck', async (request) => ({ job: await wbAutoPublishing.recheck(
     (request.params as { sku: string }).sku, String((request.body as Record<string, unknown> | undefined)?.storeId || '') || undefined
   ) }));
+  app.post('/api/v1/wb/automation/jobs/:sku/retry', async (request) => wbAutoPublishing.retry(
+    (request.params as { sku: string }).sku, request.body
+  ));
   app.post('/api/v1/wb/automation/jobs/:sku/cancel', async (request) => ({ job: await wbAutoPublishing.cancel(
     (request.params as { sku: string }).sku, String((request.body as Record<string, unknown> | undefined)?.storeId || '') || undefined
   ) }));

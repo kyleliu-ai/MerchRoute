@@ -40,6 +40,11 @@
       "name": "work/english-path-migration-20260904-2242",
       "head": "771f0b0b99e1fe6636d96f2693b68ef89cfe51de",
       "featureId": "project-release-guardrails"
+    },
+    {
+      "name": "work/ozon-title-readiness-20260905-0100",
+      "head": "234ce139bd6d4deb2d630cd3205ba8b6d4df3dbd",
+      "featureId": "project-release-guardrails"
     }
   ],
   "branches": [
@@ -669,6 +674,56 @@
         "postgres-integration",
         "e2e",
         "isolated-runtime"
+      ]
+    },
+    {
+      "id": "ozon-controlled-publish-retry",
+      "title": "OZON 自动上品单店重试与失败位置接续",
+      "action": "INTEGRATE",
+      "sourceChecks": [
+        { "path": "packages/shared/src/ozon-retry.ts" },
+        { "path": "apps/server/src/repositories/ozon-retry.ts" },
+        { "path": "apps/server/src/services/ozon-publishing/retry.ts" },
+        { "path": "apps/web/src/ozon-retry.tsx" },
+        { "path": "docs/ozon-publish-retry.md" }
+      ],
+      "checkIds": ["check", "postgres-integration", "e2e"],
+      "acceptance": ["仅选中店铺；保留冻结身份；未知写入先回查；重建先确认；旧新任务可追溯；隔离验收不触发真实上品"]
+    },
+    {
+      "id": "wb-controlled-publish-retry",
+      "title": "WB 自动上品受控重试和检查点恢复",
+      "action": "INTEGRATE",
+      "sourceChecks": [
+        {
+          "path": "apps/server/src/services/wb-auto-publish/retry.ts",
+          "includes": [
+            "buildWbRetryPlan"
+          ]
+        },
+        {
+          "path": "apps/server/src/repositories/wb-auto-retry.ts"
+        },
+        {
+          "path": "deployment/n8n/patches/wb-publish-retry-v1.mjs"
+        },
+        {
+          "path": "apps/server/src/repositories/wb-auto-retry.integration.test.ts"
+        },
+        {
+          "path": "deployment/scripts/wb-publish-retry.test.mjs"
+        },
+        {
+          "path": "docs/wb-publish-retry-v1.md"
+        }
+      ],
+      "checkIds": [
+        "check",
+        "postgres-integration",
+        "e2e"
+      ],
+      "acceptance": [
+        "保留原任务冻结身份；单次人工授权；UNKNOWN 规则不放宽；新入口默认关闭；不触发真实上品"
       ]
     }
   ]

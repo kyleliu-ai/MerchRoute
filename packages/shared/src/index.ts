@@ -4,6 +4,8 @@ import { wbPublishingConfigSchema } from './wb.js';
 export * from './countries.js';
 export * from './wb.js';
 export * from './wb-multistore.js';
+export * from './wb-retry.js';
+export * from './ozon-retry.js';
 export * from './ozon.js';
 export * from './ozon-multistore.js';
 export * from './ozon-content-policy.js';

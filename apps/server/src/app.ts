@@ -46,6 +46,7 @@ import { OzonAutoPublishingCoordinator } from './services/ozon-publishing/auto-p
 import { OzonTitleTranslationClient } from './services/ozon-publishing/title-translation.js';
 import { OzonCatalogService } from './services/ozon-catalog/index.js';
 import { registerOzonRoutes } from './routes/ozon.js';
+import { OzonPublishRetryService } from './services/ozon-publishing/retry.js';
 import { registerOzonStoreRoutes } from './routes/ozon-stores.js';
 import { TerminalDeliveryError, VariantMediaDeliveryService } from './services/variant-delivery/index.js';
 import { WbAutoPublishingCoordinator } from './services/wb-auto-publish/index.js';
@@ -102,6 +103,7 @@ type Services = {
   ozonSourceMediaCleanup: OzonSourceMediaCleanupService;
   ozonPublishing: OzonPublishingService;
   ozonAutoPublishing: OzonAutoPublishingCoordinator;
+  ozonRetry: OzonPublishRetryService;
   ozonCatalog: OzonCatalogService;
   variantDelivery: VariantMediaDeliveryService;
   legacyRootCompatibility: LegacyRootCompatibility;
@@ -271,7 +273,7 @@ async function buildAppWithWriter(options: BuildAppOptions) {
   const wbStoreGateway = new WbStoreGatewayService(wbStoreRepository, wbStores);
   const historyReplay = new DeliveryReplayService(store);
   const wbAutoPublishing = new WbAutoPublishingCoordinator(
-    wbAutoPublishRepository, wbPresets, wbPublishing, store, app.log, { historyReplay }, wbStoreRepository, wbSourceMediaCleanup
+    wbAutoPublishRepository, wbPresets, wbPublishing, store, app.log, { historyReplay }, wbStoreRepository, wbSourceMediaCleanup, wbStoreGateway
   );
   const wbTaskStatusSynchronizer = new WbTaskStatusSynchronizer(wb, wbPublishing, app.log, {}, wbSourceMediaCleanup);
   wbPresets.setAutomationChangeHandler(() => wbAutoPublishing.handlePresetChanged());
@@ -314,6 +316,7 @@ async function buildAppWithWriter(options: BuildAppOptions) {
   const ozonStores = new OzonStoreService(ozonStoreRepository, ozon, ozonPublishing);
   ozonStores.setSourceMediaCleanup(ozonSourceMediaCleanup);
   const ozonStoreGateway = new OzonStoreGatewayService(ozonStoreRepository, ozonStores);
+  const ozonRetry = new OzonPublishRetryService(ozonStoreRepository.retries, ozonStores, ozonStoreGateway, app.log);
   const ozonAutoPublishing = new OzonAutoPublishingCoordinator(
     ozon,
     ozonPublishing,
@@ -339,7 +342,7 @@ async function buildAppWithWriter(options: BuildAppOptions) {
     const rootDirectory = parseOzonMediaOutputRootTemplate(configuredOzonTemplate).rootDirectory;
     await ozonPublishing.synchronizeRootDirectory(rootDirectory).catch((error) => app.log.warn({ err: error, rootDirectory }, 'OZON 共享媒体根目录启动同步失败'));
   }
-  app.decorate('services', { aboutVersion, aboutGithubAccess, config, store, scanner, localDirectoryOpener, mediaIndex, thumbnails, submissions, reviewOperations, purchases, localImports, downloads, shipping, pricing, pricingQuery, productIdentity, wb, wbPresetRepository, wbPresets, wbPublishing, wbTaskStatusSynchronizer, wbAutoPublishRepository, wbAutoPublishing, wbStoreRepository, wbStores, wbStoreGateway, wbSourceMediaCleanup, wbCatalog, ozon, ozonStoreRepository, ozonStores, ozonStoreGateway, ozonSourceMediaCleanup, ozonPublishing, ozonAutoPublishing, ozonCatalog, variantDelivery, legacyRootCompatibility });
+  app.decorate('services', { aboutVersion, aboutGithubAccess, config, store, scanner, localDirectoryOpener, mediaIndex, thumbnails, submissions, reviewOperations, purchases, localImports, downloads, shipping, pricing, pricingQuery, productIdentity, wb, wbPresetRepository, wbPresets, wbPublishing, wbTaskStatusSynchronizer, wbAutoPublishRepository, wbAutoPublishing, wbStoreRepository, wbStores, wbStoreGateway, wbSourceMediaCleanup, wbCatalog, ozon, ozonStoreRepository, ozonStores, ozonStoreGateway, ozonSourceMediaCleanup, ozonPublishing, ozonAutoPublishing, ozonRetry, ozonCatalog, variantDelivery, legacyRootCompatibility });
   await app.register(cors, { origin: /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/ });
 
   app.addHook('preHandler', async (request) => {
@@ -492,7 +495,7 @@ async function buildAppWithWriter(options: BuildAppOptions) {
 
   await registerWbRoutes(app, { wb, wbPublishing, wbCatalog, wbPresets, wbAutoPublishing, wbSourceMediaCleanup });
   await registerWbStoreRoutes(app, { stores: wbStores, gateway: wbStoreGateway });
-  await registerOzonRoutes(app, { ozon, ozonStores, ozonPublishing, ozonAutoPublishing, ozonCatalog, ozonSourceMediaCleanup, pricing, shipping, config });
+  await registerOzonRoutes(app, { ozon, ozonStores, ozonPublishing, ozonAutoPublishing, ozonRetry, ozonCatalog, ozonSourceMediaCleanup, pricing, shipping, config });
   await registerOzonStoreRoutes(app, { stores: ozonStores, gateway: ozonStoreGateway, sourceMediaCleanup: ozonSourceMediaCleanup });
 
   app.get('/api/v1/local-import/directories', async (request) => {
@@ -1239,6 +1242,7 @@ async function buildAppWithWriter(options: BuildAppOptions) {
     wbTaskStatusSynchronizer.start();
     wbAutoPublishing.start();
     ozonAutoPublishing.start();
+    ozonRetry.start();
     ozonSourceMediaCleanup.start();
   }
   if (legacyBackgroundWorkersReady) { await reviewOperations.start(); deliveryOutbox.start(); }
@@ -1248,6 +1252,7 @@ async function buildAppWithWriter(options: BuildAppOptions) {
     await deliveryOutbox.stop();
     downloads.stop();
     ozonSourceMediaCleanup.stop();
+    await ozonRetry.stop();
     await Promise.all([mediaIndex.close(), wbCatalog.stop(), ozonCatalog.stop(), wbTaskStatusSynchronizer.stop(), wbAutoPublishing.stop(), ozonAutoPublishing.stop()]);
     await Promise.all([purchases.close(), shipping.close(), pricing.close(), wb.close(), wbPresetRepository.close(), wbStoreRepository.close(), wbAutoPublishRepository.close(), wbSourceMediaCleanupRepository.close(), ozon.close(), ozonStoreRepository.close(), ozonSourceMediaCleanupRepository.close()]);
     await store.addEvent('APP_STOPPED', '应用服务已关闭');

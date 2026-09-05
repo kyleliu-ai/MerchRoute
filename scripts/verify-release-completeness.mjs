@@ -11,12 +11,13 @@ import {
 } from '../apps/server/src/services/content-fingerprint.ts';
 
 export const MANIFEST_PATH = 'config/release-features.json';
-export const REQUIRED_FEATURE_IDS = [
+const HISTORICAL_FEATURE_IDS = [
   'core-deployment', 'local-import-and-name-validation', 'purchase-product-query', 'purchase-url-query',
   'about-fingerprints', 'github-readonly-access', 'github-token-self-service', 'local-import-directory-status',
   'review-open-product-folder', 'wb-restart-protection', 'junction-retirement', 'project-release-guardrails',
   'review-delivery-reliability'
 ];
+export const REQUIRED_FEATURE_IDS = [...HISTORICAL_FEATURE_IDS, 'ozon-controlled-publish-retry', 'wb-controlled-publish-retry'];
 export const REQUIRED_LOCAL_CHECK_IDS = [
   'check', 'postgres-integration', 'e2e', 'jimeng', 'deployment-verify', 'gitleaks', 'diff-check',
   'release-verifier-tests', 'restart-safety', 'retirement-safety', 'isolated-runtime'
@@ -431,7 +432,7 @@ export async function runVerification({ root = process.cwd(), evidencePath, stri
     const historical = JSON.parse(historicalBytes);
     if (sha256(historicalBytes) !== manifest.historicalAudit.sha256
       || JSON.stringify(historical.branches) !== JSON.stringify(manifest.branches)
-      || REQUIRED_FEATURE_IDS.some((id) => !historical.features.some((feature) => feature.id === id))) {
+      || HISTORICAL_FEATURE_IDS.some((id) => !historical.features.some((feature) => feature.id === id))) {
       manifestErrors.push('冻结历史来源台账身份、分支或功能清单不一致');
     }
   }
