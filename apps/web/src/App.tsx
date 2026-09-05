@@ -13,7 +13,7 @@ import {
 } from 'antd';
 import type { MenuProps } from 'antd';
 import type {
-  AppConfig, FolderTreeNode, MediaIndexState, MediaIndexStatus, ProductTask, StageConfig, StageSummary, StageView, VariantSelectionGroup, WorkflowGroup, WorkflowParameterOptions, WorkflowParameterType, WorkflowParameterValue, WorkflowParameters
+  AppConfig, FolderTreeNode, MediaIndexState, MediaIndexStatus, ProductTask, StageConfig, StageSummary, StageView, SubmissionRecord, VariantSelectionGroup, WorkflowGroup, WorkflowParameterOptions, WorkflowParameterType, WorkflowParameterValue, WorkflowParameters
 } from '@n8n-media-review/shared';
 import { classifyPurchaseProductUrl, DEPRECATED_OUTPUT_ROOT_STAGE_IDS, E001_VARIANT_MAX_IMAGE_COUNT, LOCAL_IMPORT_PRODUCT_NAME_MAX_LENGTH, validateLocalImportProductName, WORKFLOW_RUNTIME_PARAMETER_NAMES } from '@n8n-media-review/shared';
 import dayjs, { type Dayjs } from 'dayjs';
@@ -551,7 +551,7 @@ export function App() {
           <Space size={18}><div className="header-status"><Badge status={headerConfigurationStatus.badge} /><span>{headerConfigurationStatus.label}</span></div><NotificationHub /></Space>
         </Header>
         <Content className="app-content">
-          {/^\/(review|task|pending|history)(\/|$)/.test(location.pathname) && <ReviewOperationsPanel />}
+          {/^\/(review|task|pending|history)(\/|$)/.test(location.pathname) && <ReviewOperationsPanel visible={!/^\/(pending|history)(\/|$)/.test(location.pathname)} />}
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/review/downloads" element={<DownloadCenter />} />
@@ -1242,7 +1242,7 @@ function PendingPage() {
   const [parameterDraftRows, setParameterDraftRows] = useState<WorkflowParameterDraftRow[]>([]);
   const submit = useMutation({
     mutationFn: () => api.submitBatch(`BATCH-${crypto.randomUUID()}`, selected.map(String), policy, selectedVersions),
-    onSuccess: () => { message.success('投递请求已接收，处理进度会自动更新'); setSelected([]); setSelectedVersions({}); void client.invalidateQueries({ queryKey: ['review-operations'] }); }, onError: (error) => message.error(error.message)
+    onSuccess: () => { message.success('投递请求已接收，结果请查看投递历史'); setSelected([]); setSelectedVersions({}); void client.invalidateQueries({ queryKey: ['review-operations'] }); void client.invalidateQueries({ queryKey: ['pending'] }); }, onError: (error) => message.error(error.message)
   });
   const remove = useMutation({ mutationFn: api.deletePending, onSuccess: (_result, id) => { setSelected((current) => current.filter((key) => String(key) !== id)); setSelectedVersions((current) => { const next = { ...current }; delete next[id]; return next; }); void client.invalidateQueries({ queryKey: ['pending'] }); } });
   const parameterDefaults = useQuery({ queryKey: ['workflow-parameters', parameterRecord?.targetStageId], queryFn: () => api.workflowParameters(parameterRecord!.targetStageId), enabled: Boolean(parameterRecord) });
@@ -1323,7 +1323,7 @@ function HistoryPage() {
   const [filterError, setFilterError] = useState<string>();
   const query = useQuery({ queryKey: ['history', appliedFilters, page, queryRevision], queryFn: () => api.history(appliedFilters, page, 20), retry: false });
   const workflowShortcuts = useWorkflowShortcutData();
-  const retry = useMutation({ mutationFn: api.retry, onSuccess: () => { message.success('重试请求已接收，请查看处理进度'); void client.invalidateQueries({ queryKey: ['history'] }); void client.invalidateQueries({ queryKey: ['pending'] }); }, onError: (error) => message.error(error.message) });
+  const retry = useMutation({ mutationFn: api.retry, onSuccess: () => { message.success('重试请求已接收，结果请查看投递历史'); void client.invalidateQueries({ queryKey: ['history'] }); void client.invalidateQueries({ queryKey: ['pending'] }); }, onError: (error) => message.error(error.message) });
   const applyHistoryFilters = () => {
     const sku = skuDraft.trim();
     if (sku && !/^\d{7}$/.test(sku)) {
@@ -1356,7 +1356,7 @@ function HistoryPage() {
   const canClearFilters = Boolean(hasAppliedFilters || skuDraft || datePresetDraft !== 'ALL' || customDateRangeDraft);
   const retryDisabledReason = (sourceStageId: string, targetStageId: string) => {
     if (!workflowShortcuts.stageDefinitions.find((stage) => stage.id === sourceStageId)?.enabled) return `来源流程 ${sourceStageId} 已停用`;
-    if (targetStageId !== 'WB_SHARED_MEDIA' && !workflowShortcuts.stageDefinitions.find((stage) => stage.id === targetStageId)?.enabled) return `目标流程 ${targetStageId} 已停用`;
+    if (!['WB_SHARED_MEDIA', 'OZON_SHARED_MEDIA'].includes(targetStageId) && !workflowShortcuts.stageDefinitions.find((stage) => stage.id === targetStageId)?.enabled) return `目标流程 ${targetStageId} 已停用`;
     return undefined;
   };
   return <div className="page-stack"><div className="workflow-navigation-intro">
@@ -1408,9 +1408,9 @@ function HistoryPage() {
       { title: '产品身份', dataIndex: 'sourceFolder', render: (value, record) => <Space direction="vertical" size={0}><strong>{record.productNameSnapshot || pathName(value)}</strong>{record.productSku && <span className="copy-value-inline"><span className="mono-badge">{record.productSku}</span><CopyValueButton label="SKU" value={record.productSku} /></span>}</Space> },
       { title: '流向', render: (_, record) => <Space><Tag>{workflowLabel(workflowShortcuts.stageDefinitions.find((stage) => stage.id === record.sourceStageId), record.sourceStageId)}</Tag>→<Tag color="cyan">{record.targetStageId === 'WB_SHARED_MEDIA' ? 'WB 共享媒体' : workflowLabel(workflowShortcuts.stageDefinitions.find((stage) => stage.id === record.targetStageId), record.targetStageId)}</Tag></Space> },
       { title: '图片', dataIndex: 'selectedImageCount' },
-      { title: '状态', dataIndex: 'status', render: (value) => <Tag color={value === 'SUCCESS' ? 'green' : value === 'PARTIAL_SUCCESS' ? 'orange' : 'red'}>{value}</Tag> },
+      { title: '状态', dataIndex: 'status', render: (value: SubmissionRecord['status'], record) => <Tag color={value === 'SUCCESS' ? 'green' : value === 'PARTIAL_SUCCESS' || record.errorCode === 'DELIVERY_OUTCOME_UNKNOWN' ? 'orange' : value === 'SKIPPED_CONFLICT' ? 'default' : 'red'}>{record.errorCode === 'DELIVERY_OUTCOME_UNKNOWN' && value !== 'SUCCESS' ? '结果待核对' : { SUCCESS: '投递成功', PARTIAL_SUCCESS: '已投递，归档未完成', FAILED: '投递失败', SKIPPED_CONFLICT: '重名跳过' }[value]}</Tag> },
       { title: '完成时间', dataIndex: 'completedAt', render: (value) => value ? dayjs(value).format('YYYY-MM-DD HH:mm:ss') : '—' },
-      { title: '操作', render: (_, record) => { const disabledReason = retryDisabledReason(record.sourceStageId, record.targetStageId); return record.status !== 'SUCCESS' ? <Tooltip title={disabledReason}><Button type="link" disabled={Boolean(disabledReason)} loading={retry.isPending} onClick={() => retry.mutate(record.submissionId)}>重试失败项</Button></Tooltip> : null; } }
+      { title: '操作', render: (_, record) => { const disabledReason = retryDisabledReason(record.sourceStageId, record.targetStageId); return record.status !== 'SUCCESS' ? <Tooltip title={disabledReason}><Button type="link" disabled={Boolean(disabledReason)} loading={retry.isPending} onClick={() => retry.mutate(record.submissionId)}>{record.errorCode === 'DELIVERY_OUTCOME_UNKNOWN' ? '重新核对结果' : record.status === 'PARTIAL_SUCCESS' ? '重试归档' : '重试失败项'}</Button></Tooltip> : null; } }
     ]} scroll={{ x: 1000 }} />
   </div>;
 }

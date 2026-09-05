@@ -5,7 +5,7 @@ import { api, connectReviewOperationEvents, type ReviewOperationView } from './a
 
 const labels = { QUEUED: '等待处理', RUNNING: '处理中', RETRY_WAIT: '等待重试', NEEDS_ATTENTION: '需要核对', SUCCEEDED: '已完成', PARTIAL_SUCCESS: '部分完成', FAILED: '处理失败' };
 const finalStates = new Set(['SUCCEEDED', 'PARTIAL_SUCCESS', 'FAILED', 'NEEDS_ATTENTION']);
-export function ReviewOperationsPanel() {
+export function ReviewOperationsPanel({ visible = true }: { visible?: boolean }) {
   const client = useQueryClient();
   const seen = useRef(new Map<string, string>());
   const hydrated = useRef(false);
@@ -50,6 +50,8 @@ export function ReviewOperationsPanel() {
   const active = (query.data?.items || []).filter((row) => row.status !== 'SUCCEEDED' && (row.status !== 'FAILED' || Date.now() - Date.parse(row.updatedAt) < 86400_000));
   const recent = (query.data?.items || []).filter((row) => row.status === 'SUCCEEDED').slice(0, 1);
   const items = [...active, ...recent];
+  // Keep subscriptions and cache invalidation alive on pages without the card.
+  if (!visible) return null;
   if (query.isError) return <Alert type="warning" showIcon message="暂时无法读取处理进度，正在重新连接。请保留原请求，勿重复创建投递。" style={{ marginBottom: 12 }} />;
   if (!items.length) return null;
   return <Card size="small" title="审核与投递进度" style={{ marginBottom: 16 }}>

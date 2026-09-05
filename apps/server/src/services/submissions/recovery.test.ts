@@ -93,6 +93,39 @@ describe('review delivery performance envelope', () => {
 });
 
 describe('durable file delivery recovery', () => {
+  it('persists a source-read failure once and reuses its identity after restarting the same batch', async () => {
+    const f = await fixture();
+    const readTask = f.scanner.getTask;
+    f.scanner.getTask = async () => { throw Error('source cannot be read'); };
+    const first = await f.service.runBatch('failed-source-batch', ['pending'], 'new-revision');
+    const failure = first.results[0]!;
+    expect(failure).toMatchObject({ status: 'FAILED', errorCode: 'SOURCE_FOLDER_MISSING' });
+    expect(f.store.getSubmission(failure.submissionId!)).toMatchObject({ sourceFolder: f.source, productSku: '0000001', selectedRelativePaths: ['b.png', 'a.png'] });
+    const restarted = await f.restart();
+    const replay = await restarted.service.runBatch('failed-source-batch', ['pending'], 'new-revision');
+    expect(replay.results).toEqual(first.results);
+    expect(restarted.store.section('submissionHistory')).toHaveLength(1);
+    expect(await readdir(f.queue)).toEqual([]);
+    expect(restarted.store.getPending('pending')?.status).toBe('FAILED');
+    f.scanner.getTask = readTask;
+    const repaired = await restarted.service.runBatch('failed-source-batch', ['pending'], 'new-revision');
+    expect(repaired.results[0]).toMatchObject({ submissionId: failure.submissionId, status: 'SUCCESS' });
+    expect(restarted.store.section('submissionHistory')).toHaveLength(1);
+  });
+  it('does not report or retain a failed delivery when saving its history fails', async () => {
+    const f = await fixture(async (next) => {
+      if (next.submissionHistory.length) throw Object.assign(Error('disk full'), { code: 'ENOSPC' });
+    });
+    f.scanner.getTask = async () => { throw Error('missing source'); };
+    await expect(f.service.runBatch('failed-save-batch', ['pending'], 'new-revision')).rejects.toMatchObject({ code: 'ENOSPC' });
+    expect(f.store.section('submissionHistory')).toEqual([]);
+    expect(f.store.getBatch('failed-save-batch')!.items[0]).not.toHaveProperty('submissionId');
+    const restarted = await f.restart();
+    expect(restarted.store.section('submissionHistory')).toEqual([]);
+    const recovered = await restarted.service.runBatch('failed-save-batch', ['pending'], 'new-revision');
+    expect(recovered.results[0]?.status).toBe('FAILED');
+    expect(restarted.store.section('submissionHistory')).toHaveLength(1);
+  });
   it.each(['PREPARING', 'VERIFIED', 'COMMIT_INTENT'])('rebuilds only uncommitted staging after %s save fails', async (phase) => {
     let failed = false;
     const f = await fixture(async (next) => {

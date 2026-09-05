@@ -1067,7 +1067,9 @@ async function buildAppWithWriter(options: BuildAppOptions) {
     const stageIds = new Set(pending.flatMap((row) => [row.sourceStageId, row.targetStageId]));
     const operation = await reviewOperations.accept({
       kind: 'BATCH', requestKey: key, request: body, subjectKeys: pending.map((row) => 'task:' + row.taskId),
-      input: { batchId: body.batchId || 'BATCH-' + randomUUID(), pendingSubmissionIds: ids, pending, taskSnapshots, taskSnapshotErrors, conflictPolicy: body.conflictPolicy || 'new-revision', stages: config.get().stages.filter((row) => stageIds.has(row.id)) },
+      input: { batchId: body.batchId || 'BATCH-' + randomUUID(), pendingSubmissionIds: ids, pending, taskSnapshots, taskSnapshotErrors,
+        sourceFolders: Object.fromEntries(pending.map((row) => [row.taskId, taskSnapshots[row.taskId]?.sourceFolder || store.getReview(row.taskId)?.sourceFolder])),
+        conflictPolicy: body.conflictPolicy || 'new-revision', stages: config.get().stages.filter((row) => stageIds.has(row.id)) },
       validate: (db) => { for (const item of pending) {
         const current = db.pendingSubmissions.find((row) => row.id === item.id);
         if (!current) throw new AppError('CONFIG_INVALID', '待投递任务已变更', { id: item.id }, 409);
@@ -1081,11 +1083,12 @@ async function buildAppWithWriter(options: BuildAppOptions) {
     const key = requestKey(request);
     const existing = reviewOperations.lookup('RETRY', key, { submissionId });
     if (existing) return respondOperation(request, reply, existing);
-    const history = store.getSubmission(submissionId);
+    const history = store.getSubmissionView(submissionId);
     if (!history) throw new AppError('CONFIG_INVALID', '投递记录不存在', { submissionId }, 404);
     const checkpoint = store.select('deliveryCheckpoints', (rows) => rows?.find((row) => row.submissionId === submissionId));
     const owner = checkpoint?.operationId ? store.getOperation(checkpoint.operationId) : undefined;
     if (owner?.status === 'NEEDS_ATTENTION') return respondOperation(request, reply, await reviewOperations.retry(owner.operationId));
+    if (history.errorCode === 'DELIVERY_OUTCOME_UNKNOWN') throw new AppError('DELIVERY_OUTCOME_UNKNOWN', '原操作尚在处理或缺少恢复记录，请核对原投递结果，禁止新建投递', { submissionId }, 409);
     const operation = await reviewOperations.accept({ kind: 'RETRY', requestKey: key, request: { submissionId }, subjectKeys: ['task:' + store.resolvePersistedTaskId(history.taskId)], input: { submissionId } });
     return respondOperation(request, reply, operation);
   });
@@ -1122,7 +1125,7 @@ async function buildAppWithWriter(options: BuildAppOptions) {
     if (completedFrom && completedTo && completedFrom >= completedTo) {
       throw new AppError('CONFIG_INVALID', '投递日期结束时间必须晚于起始时间');
     }
-    const result = store.select('submissionHistory', (rows) => {
+    const result = store.selectSubmissionHistory((rows) => {
       let items = rows;
       if (sku) items = items.filter((item) => item.productSku === sku);
       if (query.status) items = items.filter((item) => item.status === query.status);
@@ -1141,7 +1144,7 @@ async function buildAppWithWriter(options: BuildAppOptions) {
   });
   app.get('/api/v1/submissions/:submissionId', async (request) => {
     const { submissionId } = request.params as { submissionId: string };
-    const item = store.section('submissionHistory').find((candidate) => candidate.submissionId === submissionId);
+    const item = store.getSubmissionView(submissionId);
     if (!item) throw new AppError('CONFIG_INVALID', '投递记录不存在', { submissionId }, 404);
     return item;
   });

@@ -49,6 +49,8 @@ import {
   type OzonPublishingService
 } from '../ozon-publishing/index.js';
 import { normalizeOzonNoBrandAttributeForPlatform } from '../ozon-publishing/material-preparation.js';
+import { isRetryableOzonTitleTranslationError } from '../ozon-publishing/title-translation.js';
+import { OzonNetworkRequestError } from '../ozon-publishing/network-recovery.js';
 import { OzonCredentialVault } from './token-vault.js';
 import type { OzonSourceMediaCleanupService } from '../ozon-source-media/index.js';
 import { withOzonSourceMediaSkuLock } from '../ozon-source-media/sku-lock.js';
@@ -379,7 +381,7 @@ export class OzonStoreService {
     options: { prepareSharedSource?: boolean; readOnly?: boolean } = {}
   ): Promise<OzonFrozenAutomaticPublicationPlan> {
     const parsed = ozonPublicationPlanInputSchema.parse({ draftVersion, storeIds });
-    const built = await this.buildPlan(sku, parsed, options);
+    const built = await this.buildPlan(sku, parsed, { ...options, retryTransientTranslation: true });
     const settings = await this.repository.getSettings();
     assertBuiltPlanSettingsContract(settings, built.settingsContract);
     const stores = built.plan.items.map((item) => {
@@ -1285,7 +1287,7 @@ export class OzonStoreService {
   private async buildPlan(
     sku: string,
     input: OzonPublicationPlanInput,
-    options: { prepareSharedSource?: boolean; readOnly?: boolean } = {}
+    options: { prepareSharedSource?: boolean; readOnly?: boolean; retryTransientTranslation?: boolean } = {}
   ): Promise<BuiltPlan> {
     const [context, settings] = await Promise.all([
       this.repository.getPlanningContext(sku, input.draftVersion, input.storeIds, { readOnly: options.readOnly === true }),
@@ -1302,6 +1304,7 @@ export class OzonStoreService {
         : new AppError('OZON_VARIANT_COLOR_INCOMPATIBLE', 'E001 OZON 颜色权威快照读取失败', undefined, 409);
     }
     const productByStore = new Map<string, JsonRecord>();
+    const transientTranslationErrors: AppError[] = [];
     let sharedSourceCandidate: { product: JsonRecord; sourceDirectory: string } | undefined;
     const fleetReady = fleetCapabilityReady();
     const items = await Promise.all(context.stores.map(async (store) => {
@@ -1360,6 +1363,9 @@ export class OzonStoreService {
             sourceDirectory: generated.sourceMediaDirectory
           };
         } catch (error) {
+          if (options.retryTransientTranslation && isRetryableOzonTitleTranslationError(error)) {
+            transientTranslationErrors.push(error);
+          }
           if (error instanceof AppError) {
             errorCode = error.code;
             errorDetails = {
@@ -1429,6 +1435,17 @@ export class OzonStoreService {
         taskId: `${store.storeAlias}__${context.sku}__r${context.revision}`
       };
     }));
+    // Wait for all store materializations before returning an error. No failed
+    // plan/publications or shared-source files may be frozen for a startup outage.
+    const transientTranslation = transientTranslationErrors[0];
+    if (transientTranslation) {
+      throw new OzonNetworkRequestError({
+        code: String(transientTranslation.details?.errorCode),
+        message: transientTranslation.message,
+        deliveryState: 'NOT_SENT', // Planning has not submitted anything to OZON.
+        cause: transientTranslation
+      });
+    }
     if (sharedSourceCandidate && options.prepareSharedSource !== false) {
       await prepareSharedSource(settings.rootDirectory, context, async () => sharedSourceCandidate!);
     }
