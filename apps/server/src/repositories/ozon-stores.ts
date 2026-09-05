@@ -3137,7 +3137,7 @@ export class OzonStoreRepository {
       const activeRetry = (await client.query(`SELECT id FROM ozon_publish_retries
         WHERE status IN ('CHECKING','RUNNING') AND ($1=source_job_id OR $1=effective_job_id OR $1=root_job_id) LIMIT 1`, [job.id])).rows[0];
       if (activeRetry) blockers.push('activeRetry');
-      const unresolvedGateway = (await client.query(`SELECT id FROM ozon_gateway_requests WHERE publication_id=$1
+      const unresolvedGateway = (await client.query(`SELECT request_ref FROM ozon_gateway_requests WHERE publication_id=$1
         AND (delivery_state='UNKNOWN' OR (retry_class='READBACK_REQUIRED' AND delivery_state<>'RESPONDED')) LIMIT 1`, [publicationId])).rows[0];
       if (unresolvedGateway) blockers.push('unresolvedGateway');
       if (blockers.length) {
