@@ -29,6 +29,9 @@ import type { WbExistingCardBaseline, WbVendorCodeMatch } from '../wb-publishing
 import { wbTaskErrorDetails } from '../wb-publishing/task-error.js';
 import { classifyWbNetworkError, nextWbNetworkRecovery, transportErrorCode } from '../wb-network-recovery.js';
 import { resolveManifestMediaOrder } from '../manifest-media-order.js';
+import { wbPublishRetryRequestSchema } from '@n8n-media-review/shared';
+import type { WbStoreGatewayService } from '../wb-stores/gateway.js';
+import { WbAutoPublishRetryService } from './retry.js';
 import {
   classifyWbPublicationDispatchError,
   unknownDispatchReadbackError
@@ -56,6 +59,7 @@ const NON_NETWORK_RETRY_DELAYS_MS = [60_000, 5 * 60_000, 15 * 60_000];
 const SUBMITTED_STATES = new Set(['QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED', 'BLOCKED']);
 
 export class WbAutoPublishingCoordinator {
+  readonly retries?: WbAutoPublishRetryService;
   private stopped = true;
   private workerTimer?: NodeJS.Timeout;
   private reconciliationTimer?: NodeJS.Timeout;
@@ -78,8 +82,21 @@ export class WbAutoPublishingCoordinator {
     private readonly logger: FastifyBaseLogger,
     private readonly options: CoordinatorOptions = {},
     private readonly wbStores?: WbStoreRepository,
-    private readonly sourceMediaCleanup?: WbSourceMediaCleanupService
+    private readonly sourceMediaCleanup?: WbSourceMediaCleanupService,
+    gateway?: WbStoreGatewayService
   ) {
+    if (gateway) this.retries = new WbAutoPublishRetryService(publishing.repository.autoRetry, gateway, async (storeId, sku) => {
+      const job = await repository.get(sku, storeId);
+      const binding = await this.bindingForJob(job);
+      const context = await presets.resolveExecutionBinding(binding, false);
+      const blockers = context.resolved.issues.filter(issue => issue.severity === 'ERROR');
+      if (blockers.length) throw new AppError('PRESET_SNAPSHOT_INVALID', blockers.map(issue => issue.message).join('；'), undefined, 409);
+      if (wbStores) {
+        const [settings, target] = await Promise.all([wbStores.getSettings(), wbStores.getStore(storeId)]);
+        if (!settings.enabled || !target.enabled) throw new AppError('WB_STORE_DISABLED', '店铺或 WB 上品已停用，请先启用', undefined, 409);
+        if (!target.credential.configured) throw new AppError('WB_CREDENTIAL_REQUIRED', '原店铺凭据不可用，请先处理凭据', undefined, 409);
+      }
+    });
     this.workerIntervalMs = Math.max(1_000, options.workerIntervalMs ?? 10_000);
     this.reconciliationIntervalMs = Math.max(5_000, options.reconciliationIntervalMs ?? 60_000);
     this.debounceMs = Math.max(0, options.debounceMs ?? 10_000);
@@ -241,12 +258,25 @@ export class WbAutoPublishingCoordinator {
   }
 
   list(input: { page?: number; pageSize?: number; state?: string; query?: string; updatedFrom?: string; updatedTo?: string; storeId?: string }) { return this.repository.list(input); }
-  get(sku: string, storeId?: string) { return this.repository.get(sku, storeId); }
+  async get(sku: string, storeId?: string) {
+    const job = await this.repository.get(sku, storeId);
+    return this.retries ? { ...job, retry: await this.retries.detail(job.storeId, sku) } : job;
+  }
+
+  async retry(sku: string, input: unknown) {
+    const parsed = wbPublishRetryRequestSchema.safeParse(input);
+    if (!parsed.success) throw new AppError('CONFIG_INVALID', '重试请求缺少有效身份或版本，请刷新详情', { issues: parsed.error.issues }, 400);
+    if (!this.retries) throw new AppError('WB_RETRY_NOT_DEPLOYED', '重试上品尚未启用', undefined, 409);
+    const result = await this.retries.request(sku, parsed.data);
+    void this.runWorkerNow().catch(error => this.logger.warn({ err: error }, '重试任务将由后台调度继续'));
+    return { ...result, job: await this.get(sku, parsed.data.storeId) };
+  }
   runs(sku: string, storeId?: string) { return this.repository.listRuns(sku, storeId); }
   boundCountsByPreset() { return this.repository.boundCountsByPreset(); }
   async recheck(sku: string, storeId?: string) {
     const locked = await this.repository.withSkuLock(sku, async () => {
       const job = await this.repository.get(sku, storeId);
+      if (job.n8nTaskId) throw new AppError('WB_RETRY_ENDPOINT_REQUIRED', '已提交任务请刷新详情后使用“重试上品”', undefined, 409);
       let binding: WbPresetExecutionBinding;
       try { binding = await this.bindingForJob(job); }
       catch (error) { throw new AppError('CONFIG_INVALID', error instanceof Error ? error.message : '任务的原模板快照无效', { sku }, 409); }
@@ -293,6 +323,11 @@ export class WbAutoPublishingCoordinator {
     return locked.value!;
   }
   async cancel(sku: string, storeId?: string) {
+    if (this.retries) {
+      const job = await this.repository.get(sku, storeId);
+      const latest = await this.retries.repository.latest(job.storeId, sku, job.runId);
+      if (latest && ['CHECKING', 'RUNNING'].includes(latest.status)) throw new AppError('TASK_LOCKED', '重试正在执行，请等待本次结果', undefined, 409);
+    }
     const locked = await this.repository.withSkuLock(sku, () => this.repository.cancel(sku, storeId), storeId);
     if (!locked.acquired) throw new AppError('TASK_LOCKED', '自动上品任务正在推进，暂不能取消', { sku }, 409);
     await this.flushPendingNotifications();
@@ -346,7 +381,7 @@ export class WbAutoPublishingCoordinator {
   async runWorkerNow(): Promise<void> {
     if (this.workerPromise) return this.workerPromise;
     const operation = (async () => {
-      try { await this.workerOnce(); }
+      try { await this.retries?.runPending(); await this.workerOnce(); }
       finally { await this.flushPendingNotifications(); }
     })();
     this.workerPromise = operation;
@@ -465,6 +500,7 @@ export class WbAutoPublishingCoordinator {
   private async synchronizeSubmittedJobs(): Promise<void> {
     for (const job of await this.repository.listSubmitted()) {
       try {
+        if (await this.retries?.blocksNormalWorker(job.storeId, job.sku, job.runId)) continue;
         if (job.publicationId && this.wbStores) {
           const publication = await this.wbStores.syncPublication(job.publicationId);
           const target = publication.status === 'SUCCEEDED' ? 'SUCCEEDED'
@@ -552,6 +588,10 @@ export class WbAutoPublishingCoordinator {
   }
 
   private async processJob(job: WbAutoPublishJob): Promise<void> {
+    if (await this.retries?.blocksNormalWorker(job.storeId, job.sku, job.runId)) {
+      await this.repository.releaseLease(job.sku, job.storeId);
+      return;
+    }
     const publicationStore = this.wbStores ? await this.wbStores.getStore(job.storeId) : undefined;
     const publicationScoped = Boolean(publicationStore && this.wbStores);
     const binding = await this.bindingForJob(job);

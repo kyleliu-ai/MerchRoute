@@ -4,6 +4,52 @@ import dayjs from 'dayjs';
 const BLACK_COLOR_KEY = '1'.repeat(64);
 const WHITE_COLOR_KEY = '2'.repeat(64);
 
+test('WB 重试详情显示检查中、新结果和原错误，并在窄屏阻止重复点击', async ({ page }) => {
+  await mockWbApis(page);
+  const retry: any = { id: 'retry-172', requestId: 'request-172', status: 'RUNNING', stage: 'CARD_CREATE_READY',
+    message: '已开始重试，将从创建商品卡继续', previousErrorCode: 'WB_HTTP_400', previousErrorMessage: 'Internal server error',
+    errorCode: '', createdAt: '2026-09-05T06:00:00.000Z', updatedAt: '2026-09-05T06:00:00.000Z' };
+  const job: any = { sku: '0000172', storeId: 'store-main', runId: '11111111-1111-4111-8111-111111111172', runNo: 1,
+    state: 'FAILED', hasListing: true, canCancel: false, canRecheck: true,
+    presetName: 'default', expectedVendorCodes: ['0000172-01'], events: [],
+    lastErrorCode: 'WB_HTTP_400', lastErrorMessage: 'Internal server error',
+    createdAt: '2026-09-05T05:00:00.000Z', updatedAt: '2026-09-05T05:05:00.000Z',
+    retry: { canRetry: true, reason: '', expectedStateToken: 'a'.repeat(64) } };
+  let release!: () => void;
+  const waiting = new Promise<void>(resolve => { release = resolve; });
+  let requests = 0;
+  await page.route(/\/api\/v1\/wb\/automation\/jobs(?:\?.*)?$/, route => route.fulfill({ json: { items: [job], total: 1 } }));
+  await page.route(/\/api\/v1\/wb\/automation\/jobs\/0000172(?:\?.*)?$/, route => route.fulfill({ json: { job } }));
+  await page.route(/\/api\/v1\/wb\/automation\/jobs\/0000172\/retry$/, async route => {
+    requests++;
+    await waiting;
+    job.state = 'QUEUED'; job.retry = { ...job.retry, canRetry: false, reason: '已有重试正在执行', latest: retry };
+    await route.fulfill({ json: { outcome: 'ACCEPTED', retry, job } });
+  });
+  await page.goto('/listing/wb');
+  await page.locator('.wb-automation-console').getByRole('row').filter({ hasText: '0000172' }).getByRole('button', { name: '查看详情' }).click();
+  const drawer = page.locator('.wb-automation-drawer');
+  await expect(drawer.getByText('核对原任务及 WB 实际结果后，继续未完成的上品步骤；使用原任务资料。')).toBeVisible();
+  await drawer.getByRole('button', { name: '重试上品' }).click();
+  await expect(drawer.getByText('正在检查重试条件', { exact: true })).toBeVisible();
+  release();
+  await expect(drawer.getByRole('button', { name: '重试上品' })).toBeDisabled();
+  await expect(drawer.getByText(/原错误：Internal server error/)).toBeVisible();
+  await expect(drawer.getByText(/本次重试开始：/)).toBeVisible();
+  expect(requests).toBe(1);
+  retry.status = 'FAILED'; retry.errorCode = 'WB_HTTP_400'; retry.message = '再次返回 Internal server error';
+  retry.updatedAt = '2026-09-05T06:01:00.000Z'; retry.finishedAt = retry.updatedAt;
+  job.state = 'FAILED'; job.retry.canRetry = true; job.retry.reason = '';
+  job.lastErrorMessage = retry.message;
+  await expect(drawer.getByText(retry.message, { exact: true }).first()).toBeVisible({ timeout: 12_000 });
+  await page.setViewportSize({ width: 375, height: 812 });
+  await expect(drawer.getByRole('button', { name: '重试上品' })).toBeVisible();
+  const box = await drawer.getByRole('button', { name: '重试上品' }).boundingBox();
+  expect(box!.x).toBeGreaterThanOrEqual(0);
+  expect(box!.x + box!.width).toBeLessThanOrEqual(375);
+  await expect(drawer.getByText(/原错误：Internal server error/)).toBeVisible();
+});
+
 const categorySummary = {
   categoryKey: 'adult_casual_sneakers', nameRu: 'Кроссовки', nameZh: '休闲运动鞋', subjectId: 105, active: true,
   createdAt: '2026-07-15T00:00:00.000Z', updatedAt: '2026-07-15T00:00:00.000Z',
@@ -257,10 +303,12 @@ test.describe('WB 可视化上品管理', () => {
     }
   });
 
-  test('自动上品区域展示统计、可读错误和审计时间线，并支持重新检查与取消', async ({ page }) => {
+  test('自动上品区域展示统计、可读错误和审计时间线，并支持受控重试与取消', async ({ page }) => {
     await mockWbApis(page);
     const job = {
-      sku: '0000021', state: 'NEEDS_ATTENTION', presetId: 'preset-auto', presetName: 'WB 自动上品预设',
+      sku: '0000021', storeId: 'store-main', runId: '11111111-1111-4111-8111-111111111111',
+      retry: { canRetry: true, reason: '', expectedStateToken: 'a'.repeat(64) },
+      state: 'NEEDS_ATTENTION', presetId: 'preset-auto', presetName: 'WB 自动上品预设',
       presetRowVersion: 7, presetBoundAt: '2026-07-19T02:00:00.000Z',
       presetDefinitionHash: 'sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
       sourcePresetExists: false,
@@ -306,8 +354,14 @@ test.describe('WB 可视化上品管理', () => {
       worker: { running: true, lastReconciledAt: '2026-07-19T02:03:00.000Z' }
     } }));
     await page.route(/\/api\/v1\/wb\/automation\/jobs\?.*$/, async (route) => route.fulfill({ json: { items: [job, successfulJob, linkPendingJob], total: 3 } }));
-    await page.route(/\/api\/v1\/wb\/automation\/jobs\/0000021(?:\/(recheck|cancel))?$/, async (route) => {
-      if (route.request().method() === 'POST' && route.request().url().endsWith('/recheck')) recheckRequests += 1;
+    await page.route(/\/api\/v1\/wb\/automation\/jobs\/0000021(?:\/(retry|cancel))?(?:\?.*)?$/, async (route) => {
+      if (route.request().method() === 'POST' && route.request().url().endsWith('/retry')) {
+        recheckRequests += 1;
+        expect(route.request().postDataJSON()).toMatchObject({ storeId: 'store-main', runId: job.runId, expectedStateToken: job.retry.expectedStateToken });
+        expect(route.request().postDataJSON().requestId).toMatch(/^[a-f0-9-]{36}$/);
+        await route.fulfill({ json: { job, outcome: 'ACCEPTED', retry: { status: 'BLOCKED', message: '白色变体仍存在多个有效视频' } } });
+        return;
+      }
       if (route.request().method() === 'POST' && route.request().url().endsWith('/cancel')) cancelRequests += 1;
       await route.fulfill({ json: { job } });
     });
@@ -339,8 +393,8 @@ test.describe('WB 可视化上品管理', () => {
     await expect(drawer.getByText('来源已删除', { exact: true })).toBeVisible();
     await expect(drawer.getByText(/sha256:0123456789abcdef/)).toBeVisible();
     await expect(drawer.getByText('检测到多个视频', { exact: true })).toBeVisible();
-    await drawer.getByRole('button', { name: '重新检查' }).click();
-    await expect(page.getByText('SKU 0000021 已加入重新检查队列', { exact: true })).toBeVisible();
+    await drawer.getByRole('button', { name: '重试上品' }).click();
+    await expect(page.getByText('暂不能重试：白色变体仍存在多个有效视频', { exact: true })).toBeVisible();
     expect(recheckRequests).toBe(1);
 
     await drawer.getByRole('button', { name: '取消自动任务' }).click();

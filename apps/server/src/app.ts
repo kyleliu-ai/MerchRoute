@@ -271,7 +271,7 @@ async function buildAppWithWriter(options: BuildAppOptions) {
   const wbStoreGateway = new WbStoreGatewayService(wbStoreRepository, wbStores);
   const historyReplay = new DeliveryReplayService(store);
   const wbAutoPublishing = new WbAutoPublishingCoordinator(
-    wbAutoPublishRepository, wbPresets, wbPublishing, store, app.log, { historyReplay }, wbStoreRepository, wbSourceMediaCleanup
+    wbAutoPublishRepository, wbPresets, wbPublishing, store, app.log, { historyReplay }, wbStoreRepository, wbSourceMediaCleanup, wbStoreGateway
   );
   const wbTaskStatusSynchronizer = new WbTaskStatusSynchronizer(wb, wbPublishing, app.log, {}, wbSourceMediaCleanup);
   wbPresets.setAutomationChangeHandler(() => wbAutoPublishing.handlePresetChanged());

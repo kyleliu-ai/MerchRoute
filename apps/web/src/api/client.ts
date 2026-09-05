@@ -1,4 +1,7 @@
 import type {
+  WbPublishRetryDetail,
+  WbPublishRetryRequest,
+  WbPublishRetryRecord,
   AppConfig,
   ReviewOperation,
   ReviewOperationProgress,
@@ -779,6 +782,7 @@ export type WbAutoPublishEvent = {
   createdAt: string;
 };
 export type WbAutoPublishJob = {
+  retry?: WbPublishRetryDetail;
   id: string;
   storeId: string;
   sku: string;
@@ -1135,6 +1139,9 @@ export const api = {
     const result = await request<WbAutoPublishJob | { job: WbAutoPublishJob }>(`/api/v1/wb/automation/jobs/${encodeURIComponent(sku)}${query}`);
     return 'job' in result ? result.job : result;
   },
+  retryWbAutoPublishJob: (sku: string, input: WbPublishRetryRequest) =>
+    request<{ job: WbAutoPublishJob; retry: WbPublishRetryRecord; outcome: 'ACCEPTED' | 'EXISTING' }>(
+      `/api/v1/wb/automation/jobs/${encodeURIComponent(sku)}/retry`, { method: 'POST', body: JSON.stringify(input) }),
   recheckWbAutoPublishJob: async (sku: string, storeId: string) => {
     const result = await request<WbAutoPublishJob | { job: WbAutoPublishJob }>(`/api/v1/wb/automation/jobs/${encodeURIComponent(sku)}/recheck`, { method: 'POST', body: JSON.stringify({ storeId }) });
     return 'job' in result ? result.job : result;

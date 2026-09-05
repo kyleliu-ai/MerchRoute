@@ -309,6 +309,15 @@ export class WbAutoPublishRepository {
     return this.transaction(async (client) => {
       const current = await client.query<SqlRow>('SELECT * FROM wb_auto_publish_jobs WHERE store_id=$1 AND sku=$2 FOR UPDATE', [storeId, sku]);
       if (!current.rows[0]) throw new AppError('NOT_FOUND', '自动上品任务不存在', { sku }, 404);
+      // Serialize with retry acceptance on the same job row. A prior read-only
+      // scheduler check cannot protect against a retry accepted just afterwards.
+      const retryTable = await client.query("SELECT to_regclass(current_schema() || '.wb_auto_publish_retries') IS NOT NULL present");
+      if (retryTable.rows[0]?.present) {
+        const retry = await client.query(`SELECT id FROM wb_auto_publish_retries WHERE job_id=$1 AND run_id=$2
+          AND status IN ('CHECKING','RUNNING') AND stage<>'CHECKING_PREPARATION' LIMIT 1`,
+        [current.rows[0].id, current.rows[0].run_id]);
+        if (retry.rows.length) throw new AppError('TASK_LOCKED', '人工重试正在核对或恢复，旧调度结果不能覆盖原任务', { sku }, 409);
+      }
       const fromState = current.rows[0].state as WbAutoPublishState;
       if (TERMINAL.has(fromState) && fromState !== toState) {
         throw new AppError('TASK_LOCKED', '自动上品任务已进入不可逆终态，不能继续推进', { sku, state: fromState, requestedState: toState }, 409);

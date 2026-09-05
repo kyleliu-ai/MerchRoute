@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { WB_RETRY_EXPLANATION, WB_RETRY_STAGE_LABELS, type WbPublishRetryRequest } from '@n8n-media-review/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ClockCircleOutlined, CopyOutlined, ExclamationCircleOutlined, EyeOutlined, FileTextOutlined, LinkOutlined, ReloadOutlined,
@@ -244,10 +245,25 @@ function WbAutoPublishJobDrawer({ identity, store, fallbackJob, onClose, onOpenL
   } });
   const job = detail.data || fallbackJob;
   const refresh = () => client.invalidateQueries({ queryKey: ['wb-automation'] });
+  const retryRequest = useRef<{ key: string; input: WbPublishRetryRequest }>();
   const recheck = useMutation({
-    mutationFn: () => api.recheckWbAutoPublishJob(sku!, storeId!),
-    onSuccess: async () => { message.success(`SKU ${sku} 已加入重新检查队列`); await refresh(); },
-    onError: (error: Error) => message.error(error.message)
+    mutationFn: () => {
+      if (!job?.retry) throw new Error('请刷新详情后重试');
+      const key = [storeId, sku, job.runId, job.retry.expectedStateToken].join(':');
+      if (retryRequest.current?.key !== key) retryRequest.current = { key, input: {
+        storeId: storeId!, runId: job.runId, requestId: crypto.randomUUID(), expectedStateToken: job.retry.expectedStateToken
+      } };
+      return api.retryWbAutoPublishJob(sku!, retryRequest.current.input);
+    },
+    onSuccess: async (result) => {
+      retryRequest.current = undefined;
+      client.setQueryData(['wb-automation', 'job', storeId, sku], result.job);
+      if (result.retry.status === 'SUCCEEDED') message.success('已确认上品完成');
+      else if (['FAILED', 'BLOCKED'].includes(result.retry.status)) message.warning(`暂不能重试：${result.retry.message}`);
+      else message.info(result.retry.message);
+      await refresh();
+    },
+    onError: async (error: Error) => { message.error(error.message); await refresh(); }
   });
   const cancel = useMutation({
     mutationFn: () => api.cancelWbAutoPublishJob(sku!, storeId!),
@@ -266,8 +282,25 @@ function WbAutoPublishJobDrawer({ identity, store, fallbackJob, onClose, onOpenL
   const events = [...(job?.events || [])].sort((a, b) => dayjs(b.createdAt).valueOf() - dayjs(a.createdAt).valueOf());
   const noticePresentation = job ? wbAutoPublishNoticePresentation(job.state) : undefined;
 
-  return <Drawer className="wb-automation-drawer" open={Boolean(identity)} width="min(720px, 96vw)" title={<Space><SafetyCertificateOutlined /><strong>自动上品详情</strong>{store && <Tag color="cyan">{store.displayName}</Tag>}{job && stateTag(job.state)}</Space>} onClose={onClose} extra={job && <Space><Button icon={<FileTextOutlined />} disabled={!job.hasListing} onClick={() => { onClose(); onOpenListing(job.sku); }}>打开上品资料</Button><Tooltip title={job.canRecheck ? undefined : '当前状态不能重新检查'}><Button icon={<ReloadOutlined />} disabled={!job.canRecheck} loading={recheck.isPending} onClick={() => recheck.mutate()}>重新检查</Button></Tooltip><Tooltip title={job.canCancel ? undefined : '已经提交到 WB 或任务已结束，不能取消'}><Button danger icon={<StopOutlined />} disabled={!job.canCancel} loading={cancel.isPending} onClick={confirmCancel}>取消自动任务</Button></Tooltip></Space>}>
+  const activeRetry = Boolean(job?.retry?.latest && ['CHECKING', 'RUNNING'].includes(job.retry.latest.status));
+  return <Drawer className="wb-automation-drawer" open={Boolean(identity)} width="min(720px, 96vw)" title={<Space wrap><SafetyCertificateOutlined /><strong>自动上品详情</strong>{store && <Tag color="cyan">{store.displayName}</Tag>}{job && stateTag(job.state)}</Space>} onClose={onClose} extra={job && <Space wrap>
+    <Button icon={<FileTextOutlined />} disabled={!job.hasListing} onClick={() => { onClose(); onOpenListing(job.sku); }}>打开上品资料</Button>
+    <Tooltip title={job.retry?.canRetry ? WB_RETRY_EXPLANATION : job.retry?.reason || '正在读取重试条件'}><span><Button icon={<ReloadOutlined />} disabled={!job.retry?.canRetry || activeRetry} loading={recheck.isPending} onClick={() => recheck.mutate()}>重试上品</Button></span></Tooltip>
+    <Tooltip title={job.canCancel && !activeRetry ? undefined : activeRetry ? '重试正在执行' : '已经提交到 WB 或任务已结束，不能取消'}><span><Button danger icon={<StopOutlined />} disabled={!job.canCancel || activeRetry} loading={cancel.isPending} onClick={confirmCancel}>取消自动任务</Button></span></Tooltip>
+  </Space>}>
     {detail.isLoading && !job ? <Card loading /> : detail.isError ? <Alert showIcon type="error" message="无法读取自动上品详情" description={detail.error.message} action={<Button onClick={() => void detail.refetch()}>重试</Button>} /> : job ? <div className="wb-automation-detail">
+      <Text type="secondary">{WB_RETRY_EXPLANATION}</Text>
+      {recheck.isPending && <Alert showIcon type="info" message="正在检查重试条件" />}
+      {job.retry?.latest && <Alert showIcon
+        type={job.retry.latest.status === 'SUCCEEDED' ? 'success' : ['FAILED', 'BLOCKED'].includes(job.retry.latest.status) ? 'warning' : 'info'}
+        message={job.retry.latest.message}
+        description={<Space direction="vertical" size={2}>
+          <span>本次重试开始：{dateTime(job.retry.latest.createdAt)} · 第 {job.retry.latest.retryNo || 1} 次 · {WB_RETRY_STAGE_LABELS[job.retry.latest.stage] || '核对原任务'}</span>
+          <span>状态：{({ CHECKING: '检查中', RUNNING: '执行中', SUCCEEDED: '已完成', FAILED: '失败', BLOCKED: '条件不满足' })[job.retry.latest.status]} · 最近结果：{dateTime(job.retry.latest.updatedAt)}</span>
+          {job.retry.latest.errorCode && <span>本次错误：{job.retry.latest.errorCode}</span>}
+          {job.retry.latest.previousErrorMessage && <span>原错误：{job.retry.latest.previousErrorMessage}（{job.retry.latest.previousErrorCode}）</span>}
+        </Space>} />}
+      {!job.retry?.canRetry && !activeRetry && job.retry?.reason && <Text type="secondary">暂不能重试：{job.retry.reason}</Text>}
       <Alert showIcon type={noticePresentation!.alertType} message={jobReason(job)} description={job.state === ('WAITING_NETWORK' as WbAutoPublishState)
         ? `原任务身份保持不变；下次自动检查：${dateTime(job.nextAttemptAt)}`
         : job.state === 'WAITING_GENERATION_TURN'

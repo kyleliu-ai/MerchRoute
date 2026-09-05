@@ -15,6 +15,7 @@ import {
   type WbNetworkRecovery
 } from '@n8n-media-review/shared';
 import { migrateWbMultiStoreSchema, syncPublicationFromRuntime } from './wb-stores.js';
+import { WbAutoRetryRepository } from './wb-auto-retry.js';
 import {
   applyWbPurchaseMeasurementProjection,
   createWbPurchaseMeasurements,
@@ -266,6 +267,11 @@ const EMPTY_DRAFT = {
 };
 
 export class WbRepository {
+  readonly autoRetry = new WbAutoRetryRepository({
+    syncPublication: (client, row) => syncPublicationFromRuntime(client, row),
+    query: (sql, values) => this.query(sql, values),
+    transaction: (action) => this.transaction(action)
+  });
   private pool?: Pool;
   private trigramAvailable = false;
 

@@ -15,6 +15,7 @@ import {
 } from '@n8n-media-review/shared';
 import { wbMaterialPresetDefinitionHashFromListingData } from '../services/wb-presets/material-hash.js';
 import type { WbEncryptedToken } from '../services/wb-stores/token-vault.js';
+import { migrateWbAutoRetry } from './wb-auto-retry.js';
 
 type SqlRow = Record<string, any>;
 type JsonRecord = Record<string, unknown>;
@@ -1130,8 +1131,8 @@ export class WbStoreRepository {
     if (input.operation === 'CARD_UPLOAD') {
       const legacyAttemptOne = !hasLogicalIntent && isLegacyCardUploadRequestRef(input.requestRef, input.identity.taskId);
       if (!input.identity.taskId || (!legacyAttemptOne && (!input.logicalIntentId || !Number.isInteger(input.attemptNo)
-        || input.attemptNo! < 1 || input.attemptNo! > 2))) {
-        throw new AppError('WB_CARD_ATTEMPT_INVALID', 'CARD_UPLOAD 必须绑定 taskId、logicalIntentId 及 1..2 的 attemptNo', {
+        || input.attemptNo! < 1 || input.attemptNo! > 2147483647))) {
+        throw new AppError('WB_CARD_ATTEMPT_INVALID', 'CARD_UPLOAD 必须绑定 taskId、logicalIntentId 及有效 attemptNo', {
           requestRef: input.requestRef, operation: input.operation, attemptNo: input.attemptNo
         }, 409);
       }
@@ -1349,7 +1350,7 @@ async function assertCardUploadAttemptAuthorization(
   const taskId = String(input.identity.taskId || '');
   const logicalIntentId = String(input.logicalIntentId || '');
   const attemptNo = Number(input.attemptNo || 0);
-  if (!taskId || !logicalIntentId || ![1, 2].includes(attemptNo)) {
+  if (!taskId || !logicalIntentId || !Number.isSafeInteger(attemptNo) || attemptNo < 1) {
     throw new AppError('WB_CARD_ATTEMPT_INVALID', 'CARD_UPLOAD intent 身份不完整', {
       taskId, logicalIntentId, attemptNo
     }, 409);
@@ -1421,6 +1422,40 @@ async function assertCardUploadAttemptAuthorization(
     }, 409);
   }
 
+  const manual = asObject(runtime.manualRetry);
+  if (manual.cardWriteAuthorized === true && Number(manual.cardAttemptNo) === attemptNo) {
+    const grants = await client.query<SqlRow>(`SELECT * FROM wb_auto_publish_retries
+      WHERE id=$1 AND task_id=$2 AND store_id=$3 AND publication_id=$4
+        AND status='RUNNING' AND authorized_attempt=$5 FOR UPDATE`,
+    [manual.retryId, taskId, job.store_id, job.publication_id, attemptNo]);
+    const grant = grants.rows[0];
+    const evidence = asObject(grant?.evidence);
+    const protocol = await client.query(`SELECT 1 FROM wb_manual_retry_protocol
+      WHERE singleton AND enabled AND contract_version=1 AND workflow_version_id<>'' AND verified_at IS NOT NULL`);
+    const prior = await client.query<SqlRow>(`SELECT * FROM wb_gateway_requests
+      WHERE task_id=$1 AND operation='CARD_UPLOAD' ORDER BY attempt_no DESC NULLS LAST FOR UPDATE`, [taskId]);
+    const previous = prior.rows.find((row) => Number(row.attempt_no) < attemptNo);
+    const checkedAt = Date.parse(String(evidence.checkedAt || ''));
+    const now = Date.parse(String(job.db_now));
+    if (grant && !grant.consumed_at && Number.isFinite(checkedAt) && now - checkedAt > 10 * 60_000) {
+      throw new AppError('WB_CARD_RETRY_PROOF_EXPIRED', '重试核验已过期，后台将重新核对后继续原尝试', { taskId, attemptNo }, 409);
+    }
+    if (!grant || !protocol.rowCount || evidence.complete !== true || evidence.cardAbsent !== true
+      || !Number.isFinite(checkedAt) || (!grant.consumed_at && now - checkedAt > 10 * 60_000) || checkedAt > now + 5_000
+      || !previous || Number(previous.attempt_no) !== attemptNo - 1
+      || previous.delivery_state === 'UNKNOWN' || !previous.completed_at
+      || previous.request_hash !== input.requestHash
+      || (grant.consumed_at && (grant.request_ref !== input.requestRef || grant.request_hash !== input.requestHash))) {
+      throw new AppError('WB_CARD_RETRY_NOT_AUTHORIZED', '本次人工重试许可无效、核验已过期或存在未决写入', { taskId, attemptNo }, 409);
+    }
+    await client.query(`UPDATE wb_auto_publish_retries SET consumed_at=COALESCE(consumed_at,NOW()),
+      request_ref=$2,request_hash=$3,updated_at=NOW() WHERE id=$1`,
+    [grant.id, input.requestRef, input.requestHash]);
+    return;
+  }
+  if (attemptNo > 2) {
+    throw new AppError('WB_CARD_RETRY_NOT_AUTHORIZED', '新增建卡尝试必须绑定有效的人工重试记录', { taskId, attemptNo }, 409);
+  }
   if (attemptNo === 1) {
     const legacyAttempts = await client.query<SqlRow>(`SELECT * FROM wb_gateway_requests
       WHERE logical_intent_id IS NULL AND operation='CARD_UPLOAD' AND task_id=$1 AND store_id=$2
@@ -1704,6 +1739,13 @@ export async function migrateWbMultiStoreSchema(pool: Pool): Promise<void> {
         ON wb_gateway_requests(task_id,attempt_no)
         WHERE operation='CARD_UPLOAD' AND task_id IS NOT NULL AND attempt_no IS NOT NULL`);
       await client.query("INSERT INTO wb_schema_migrations(id) VALUES('038_wb_card_upload_retry_fencing')");
+      await client.query('COMMIT');
+    }
+    const manualRetry = await client.query("SELECT id FROM wb_schema_migrations WHERE id='040_wb_manual_publish_retry'");
+    if (!manualRetry.rows[0]) {
+      await client.query('BEGIN');
+      await migrateWbAutoRetry(client);
+      await client.query("INSERT INTO wb_schema_migrations(id) VALUES('040_wb_manual_publish_retry')");
       await client.query('COMMIT');
     }
   } catch (error) {
