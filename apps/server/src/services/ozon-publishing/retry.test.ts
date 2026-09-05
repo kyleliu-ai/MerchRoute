@@ -55,6 +55,33 @@ describe('OZON explicit single-store retry', () => {
     expect(buildOzonRetryPlan(s).canRetry).toBe(false);
     expect(() => ozonRetryResume(s)).toThrow('明确拒绝');
   });
+  it('blocks duplicate product cards and exposes the conflicting Offer', () => {
+    const s = retryFixture();
+    s.job.import_task_id = '5570342576';
+    s.job.payload.importFailures = [{
+      offer_id: '9900171-01',
+      errors: [{
+        code: 'SPU_ALREADY_EXISTS_IN_ANOTHER_ACCOUNT',
+        message: 'Карточка похожа на товар 0000143-01 в аккаунте 2466679'
+      }]
+    }];
+    expect(buildOzonRetryPlan(s)).toMatchObject({
+      canRetry: false,
+      mode: 'READBACK',
+      blockerCode: 'OZON_DUPLICATE_PRODUCT_CARD',
+      blockedOffers: [{ offerId: '9900171-01', conflictOfferIds: ['0000143-01'] }]
+    });
+    expect(buildOzonRetryPlan(s).blockedReason).toContain('商品卡重复');
+    expect(() => ozonRetryResume(s)).toThrow('不能恢复原导入任务');
+  });
+  it('fails closed on malformed import failures without treating them as cancellable permanent evidence', () => {
+    const s = retryFixture();
+    s.job.import_task_id = '5570342576';
+    s.job.payload.importFailures = [{ offer_id: '9900171-01', errors: [] }];
+    expect(buildOzonRetryPlan(s)).toMatchObject({ canRetry: false, mode: 'READBACK' });
+    expect(buildOzonRetryPlan(s).blockerCode).toBeUndefined();
+    expect(() => ozonRetryResume(s)).toThrow('失败证据不完整');
+  });
   it('resumes image repair instead of recreating the product', () => {
     const s = retryFixture(); s.job.import_task_id = '123'; s.job.payload.imageRecovery = { phase: 'REUPLOAD_PENDING' };
     expect(ozonRetryResume(s)).toEqual({ state: 'MODERATING', payload: {} });
@@ -92,6 +119,22 @@ describe('OZON explicit single-store retry', () => {
     await new OzonPublishRetryService(repo as any, { repository: { isFleetCapabilityReady: () => true } } as any, {} as any).runPending();
     expect(repo.settle).toHaveBeenCalledWith(r, 'BLOCKED', expect.stringContaining('已变化'), 'VERSION_CONFLICT');
     expect(repo.releaseToRuntime).not.toHaveBeenCalled();
+  });
+  it('rechecks a previously accepted plan before release and blocks a newly observed duplicate card', async () => {
+    const original = retryFixture();
+    original.job.import_task_id = '5570342576';
+    const s = structuredClone(original);
+    const r = { id: 'retry', source_job_id: s.job.id, store_id: s.store.id, status: 'CHECKING', mode: 'READBACK', snapshot: original };
+    s.job.payload.recoveryHold = { retryId: r.id, active: true };
+    s.job.payload.importFailures = [{
+      offer_id: '9900171-01',
+      errors: [{ code: 'SPU_ALREADY_EXISTS_IN_ANOTHER_ACCOUNT', message: 'conflict with 0000143-01' }]
+    }];
+    const repo = { claim: vi.fn(async () => r), snapshot: vi.fn(async () => s), releaseToRuntime: vi.fn(), settle: vi.fn() };
+    const stores = { repository: { isFleetCapabilityReady: () => true }, validateRetryPackage: vi.fn() };
+    await new OzonPublishRetryService(repo as any, stores as any, {} as any).runPending();
+    expect(repo.releaseToRuntime).not.toHaveBeenCalled();
+    expect(repo.settle).toHaveBeenCalledWith(r, 'BLOCKED', expect.stringContaining('重复商品卡'), 'OZON_DUPLICATE_PRODUCT_CARD');
   });
   it('checks absence before resuming and refuses a manually published offer', async () => {
     for (const alreadyExists of [false, true]) {

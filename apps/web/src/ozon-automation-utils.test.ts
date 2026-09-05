@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { OzonPublishJob } from '@n8n-media-review/shared';
 import {
   ozonAutomaticStateMeta,
+  ozonAutomaticTaskPlatformState,
   ozonAutomaticTaskPrimaryState,
   ozonAutomaticTaskReason,
   ozonAutomaticTaskStatistics,
@@ -18,11 +19,29 @@ describe('OZON automatic state presentation', () => {
     });
   });
 
-  it('keeps platform archive and not-for-sale outcomes authoritative', () => {
-    expect(ozonAutomaticTaskPrimaryState({ state: 'NEEDS_ATTENTION', ozonProductLinks: [{ displayState: 'ARCHIVED' }] } as OzonPublishJob))
-      .toEqual({ label: '商品已归档', color: 'default' });
-    expect(ozonAutomaticTaskPrimaryState({ state: 'NEEDS_ATTENTION', ozonProductLinks: [{ displayState: 'NOT_FOR_SALE' }] } as OzonPublishJob))
-      .toEqual({ label: '商品已下架', color: 'volcano' });
+  it('keeps automation and complete platform outcomes as separate dimensions', () => {
+    const mixed = {
+      state: 'CANCELLED',
+      offerIds: ['0000171-01', '0000171-02'],
+      ozonProductLinks: [
+        { offerId: '0000171-01', displayState: 'ARCHIVED' },
+        { offerId: '0000171-02', displayState: 'ON_SALE' }
+      ]
+    } as OzonPublishJob;
+    expect(ozonAutomaticTaskPrimaryState(mixed)).toEqual({ label: '已取消', color: 'default' });
+    expect(ozonAutomaticTaskPlatformState(mixed)).toEqual({ label: '部分可售', color: 'gold', state: 'PARTIAL_ON_SALE' });
+    expect(ozonAutomaticTaskReason(mixed)).toMatchObject({
+      text: '自动上品流程已取消；平台回读显示部分变体已可售、部分变体已经归档。',
+      tone: 'closed'
+    });
+  });
+
+  it('does not infer a platform summary from incomplete Offer evidence', () => {
+    expect(ozonAutomaticTaskPlatformState({
+      state: 'NEEDS_ATTENTION',
+      offerIds: ['0000171-01', '0000171-02'],
+      ozonProductLinks: [{ offerId: '0000171-01', displayState: 'ARCHIVED' }]
+    } as OzonPublishJob)).toBeUndefined();
   });
 
   it('presents an active network recovery as normal OZON publishing progress', () => {

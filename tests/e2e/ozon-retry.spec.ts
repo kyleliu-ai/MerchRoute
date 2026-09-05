@@ -89,3 +89,116 @@ test('retry remains usable at a narrow viewport', async ({ page }) => {
   await expect(page.getByText('重试上品已受理，正在检查并接续执行；尚未完成上品')).toBeVisible();
   await page.screenshot({ path: test.info().outputPath('retry-narrow.png') });
 });
+
+test('duplicate card disables retry and supports read-only sync before stopping automation', async ({ page }) => {
+  const publicationId = job.publicationId;
+  const duplicateMessage = 'OZON 判定 9900171-01 与已有商品卡 0000143-01 类似或重复';
+  let currentJob = {
+    ...job,
+    offerIds: ['9900171-01', '9900171-02'],
+    importTaskId: '5570342576',
+    lastErrorCode: 'OZON_IMPORT_PARTIAL_FAILED',
+    lastErrorMessage: duplicateMessage,
+    payload: {
+      importFailures: [{
+        offer_id: '9900171-01',
+        errors: [{ code: 'SPU_ALREADY_EXISTS_IN_ANOTHER_ACCOUNT', message: duplicateMessage }]
+      }]
+    },
+    ozonProductLinks: []
+  };
+  let publication = { id: publicationId, rowVersion: 9, status: 'NEEDS_ATTENTION' };
+  const writes: Array<{ path: string; body: any }> = [];
+  const settings = { enabled: true, rowVersion: 1, rootDirectory: '/test-only', publicationReadbackEnabled: true };
+  const readiness = { ready: true, mediaReady: true, databaseReady: true, issues: [], mediaIssues: [], settings };
+  await page.route('**/*', route => new URL(route.request().url()).hostname === '127.0.0.1' ? route.continue() : route.abort());
+  await page.route('**/api/v1/**', async route => {
+    const url = new URL(route.request().url()), pathname = url.pathname;
+    const method = route.request().method();
+    const json = (value: any) => route.fulfill({ json: value });
+    if (pathname.endsWith('/retry-plan')) return json({ plan: {
+      canRetry: false,
+      blockedReason: `商品卡重复：${duplicateMessage}。请在 OZON 后台处理后同步平台状态，或取消自动任务。`,
+      blockerCode: 'OZON_DUPLICATE_PRODUCT_CARD',
+      blockedOffers: [{
+        offerId: '9900171-01', errorCodes: ['SPU_ALREADY_EXISTS_IN_ANOTHER_ACCOUNT'],
+        platformMessage: duplicateMessage, conflictOfferIds: ['0000143-01']
+      }],
+      planHash: 'sha256:' + 'a'.repeat(64), sourceJobId: jobId, storeId, storeName: '测试店铺', sku: job.sku,
+      mode: 'READBACK', requiresConfirmation: false, stage: '核对平台结果后继续', previousError: duplicateMessage,
+      offerIds: currentJob.offerIds, changes: []
+    } });
+    if (pathname === `/api/v1/ozon/publications/${publicationId}/platform-status/refresh` && method === 'POST') {
+      const body = route.request().postDataJSON();
+      writes.push({ path: pathname, body });
+      expect(body).toMatchObject({ rowVersion: 9 });
+      expect(body.requestId).toMatch(/^[a-f0-9-]{36}$/);
+      publication = { ...publication, rowVersion: 10 };
+      currentJob = {
+        ...currentJob,
+        ozonProductLinks: [
+          { offerId: '9900171-01', ozonProductId: '501', ozonSku: '9001', url: 'https://www.ozon.ru/product/9001/', displayState: 'ARCHIVED' },
+          { offerId: '9900171-02', ozonProductId: '502', ozonSku: '9002', url: 'https://www.ozon.ru/product/9002/', displayState: 'ON_SALE' }
+        ]
+      };
+      return json({ publication });
+    }
+    if (pathname === `/api/v1/ozon/publications/${publicationId}/stop-automation` && method === 'POST') {
+      const body = route.request().postDataJSON();
+      writes.push({ path: pathname, body });
+      expect(body).toMatchObject({ rowVersion: 10 });
+      expect(body.requestId).toMatch(/^[a-f0-9-]{36}$/);
+      publication = { ...publication, rowVersion: 11, status: 'CANCELLED' };
+      currentJob = { ...currentJob, state: 'CANCELLED' };
+      return json({ publication });
+    }
+    if (method !== 'GET') return route.fulfill({ status: 500, json: { error: { message: `Unexpected write ${pathname}` } } });
+    if (pathname === '/api/v1/config') return json({ config: createDefaultConfig(), readiness: { complete: true, stages: [] } });
+    if (pathname === '/api/v1/stages') return json({ stages: [] });
+    if (pathname === '/api/v1/ozon/automation/jobs') return json({ items: [currentJob], total: 1, page: 1, pageSize: 30 });
+    if (pathname === `/api/v1/ozon/automation/jobs/${jobId}`) return json({ job: currentJob });
+    if (pathname === '/api/v1/ozon/automation/status') return json({ readiness, counts: { [currentJob.state]: 1 }, managementEnabled: true, acceptingNewJobs: true, worker: { running: false } });
+    if (pathname === '/api/v1/ozon/stores') return json({ items: [{
+      id: storeId, displayName: '测试店铺', storeAlias: 'fixture', taskLoad: { running: 0, queued: 0 },
+      enabled: true, autoPublishEnabled: true, autoPublishMode: 'CREATE_ONLY', warehouseId: '12345', warehouseName: '测试仓库',
+      fulfillmentMode: 'FBS', accountCurrency: 'RUB', maxDailyStyles: 100, seller: { id: 'test-seller', name: '测试卖家' },
+      permissions: [], limits: { daily: 1000 }, warehouses: [], configVersion: 1, rowVersion: 1,
+      credential: { state: 'ACTIVE', bindingMode: 'VAULT', configured: true, activeVersionId: '66666666-6666-4666-8666-666666666666', version: 1 },
+      preflight: { status: 'PASSED', currencyVerified: true, currencyVerification: 'VERIFIED', expiresAt: '2099-01-01T00:00:00Z' },
+      readiness: { ready: true, score: 100, blockers: [] }, network: { status: 'READY' }
+    }], total: 1 });
+    if (pathname.endsWith('/system')) return json(readiness);
+    if (pathname.endsWith('/settings')) return json({ settings });
+    if (pathname === `/api/v1/ozon/publications/${publicationId}`) return json({ publication });
+    if (pathname === `/api/v1/ozon/listings/${job.sku}`) return route.fulfill({ status: 404, json: { error: { code: 'NOT_FOUND', message: '尚未生成上品资料' } } });
+    return json({ items: [], total: 0, unreadCount: 0 });
+  });
+
+  await page.goto('/listing/ozon?view=auto&job=' + jobId + '&store=' + storeId, { waitUntil: 'domcontentloaded' });
+  const detail = page.getByRole('dialog', { name: /自动上品详情/ });
+  await expect(detail.getByText('商品卡重复', { exact: true })).toBeVisible();
+  await expect(detail).toContainText('0000143-01');
+  await expect(detail.getByRole('button', { name: '重试上品', exact: true })).toBeDisabled();
+  await expect(detail.getByRole('button', { name: '同步平台状态' })).toBeEnabled();
+  await expect(detail.getByRole('button', { name: '取消自动任务' })).toBeEnabled();
+
+  await detail.getByRole('button', { name: '同步平台状态' }).click();
+  await expect(page.getByText(`SKU ${job.sku} 的 OZON 平台状态已同步；未执行上品或库存写入`, { exact: true })).toBeVisible();
+  await expect(detail.getByText('部分可售', { exact: true }).first()).toBeVisible();
+  await expect(detail).toContainText('9900171-01');
+  await expect(detail).toContainText('已经归档');
+  await expect(detail).toContainText('9900171-02');
+  await expect(detail).toContainText('已可售');
+
+  await detail.getByRole('button', { name: '取消自动任务' }).click();
+  const confirm = page.locator('.ant-modal-confirm').filter({ hasText: `取消 SKU ${job.sku} 的自动上品任务？` });
+  await expect(confirm).toContainText('不会调用 OZON 商品、媒体、价格或库存写接口');
+  await confirm.getByRole('button', { name: '取消自动任务' }).click();
+  await expect(page.getByText(`SKU ${job.sku} 的自动流程已取消；未调用 OZON 写接口`, { exact: true })).toBeVisible();
+  await expect(detail.getByText('已取消', { exact: true }).first()).toBeVisible();
+  await expect(detail.getByText('部分可售', { exact: true }).first()).toBeVisible();
+  expect(writes.map((entry) => entry.path)).toEqual([
+    `/api/v1/ozon/publications/${publicationId}/platform-status/refresh`,
+    `/api/v1/ozon/publications/${publicationId}/stop-automation`
+  ]);
+});
