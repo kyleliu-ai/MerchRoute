@@ -8,6 +8,7 @@ import { AppError } from '@n8n-media-review/shared';
 import { OzonRepository } from '../../repositories/ozon.js';
 import type { PurchaseRepository } from '../../repositories/purchases.js';
 import { OzonPublishingService } from './index.js';
+import { OzonNetworkRequestError } from './network-recovery.js';
 import { OzonAutoPublishingCoordinator, buildOzonPricingItem, buildOzonVariantIdentities, buildSharedAttributes, currentPresetReplanPlanContract, inspectOzonMediaManifest, resolveOzonVariantPublicationScope, resolvePublicationDimensions, sameOzonPrePlanMediaEvidence, selectOzonPricingOption, selectPrices, uniqueManifestAssets } from './auto-publishing.js';
 
 const roots: string[] = [];
@@ -2242,6 +2243,31 @@ describe('OZON automatic compatibility and ownership gates', () => {
       errorMessage: '旧媒体已变化',
       nextAttemptAt: null
     });
+  });
+
+  it('waits for title readiness before freezing either store and resumes the original preparation', async () => {
+    const harness = await createAutoGrossWeightHarness({ procurementGrossWeightGrams: '650' });
+    const originalId = harness.job().id;
+    harness.setListingAbsent();
+    harness.storeService.automaticPublicationPlan.mockRejectedValueOnce(new OzonNetworkRequestError({
+      code: 'OZON_TITLE_TRANSLATION_NOT_READY', message: 'n8n starting', deliveryState: 'NOT_SENT'
+    }));
+    let failure: unknown;
+    try { await (harness.coordinator as any).processJob(harness.job()); } catch (error) { failure = error; }
+    expect(failure).toBeInstanceOf(OzonNetworkRequestError);
+    expect(harness.storeRepository.freezePreparationFanoutPlan).not.toHaveBeenCalled();
+    expect(harness.storeService.createAutomaticPublicationsFromFrozenPlan).not.toHaveBeenCalled();
+    await (harness.coordinator as any).handleJobError(originalId, failure);
+    expect(harness.transitionJob.mock.calls.at(-1)?.[1]).toMatchObject({
+      state: 'READY', eventType: 'NETWORK_RETRY_SCHEDULED',
+      networkRecovery: { deliveryState: 'NOT_SENT', status: 'WAITING_NETWORK', attempt: 1 }
+    });
+    expect(harness.transitionJob.mock.calls.at(-1)?.[1].nextAttemptAt).toEqual(expect.any(String));
+    await (harness.coordinator as any).processJob(harness.job());
+    expect(harness.job().id).toBe(originalId);
+    expect(harness.persistAutomaticSharedMaterialRevision).toHaveBeenCalledOnce();
+    expect(harness.storeRepository.freezePreparationFanoutPlan).toHaveBeenCalledOnce();
+    expect(harness.storeService.createAutomaticPublicationsFromFrozenPlan).toHaveBeenCalledOnce();
   });
 });
 
