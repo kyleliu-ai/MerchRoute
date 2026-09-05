@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { OZON_DEFAULT_STORE_ID, ozonProductSchema } from '@n8n-media-review/shared';
+import { AppError, OZON_DEFAULT_STORE_ID, ozonProductSchema } from '@n8n-media-review/shared';
 import { createOzonVariantColorAuthority, OZON_SHARED_SOURCE_STORE_FIELDS } from '../ozon-publishing/index.js';
 import { publicationCancellationBlockers } from '../../repositories/ozon-stores.js';
 import {
@@ -1116,10 +1116,35 @@ describe('OZON publication operation semantics', () => {
     };
     const service = new OzonStoreService(repository as any, {} as any, publishing as any, {} as any);
 
+    const implementation = publishing.buildStorePresetProduct.getMockImplementation()!;
+    const unavailable = new AppError('VERIFY_FAILED', 'n8n starting', {
+      errorCode: 'OZON_TITLE_TRANSLATION_NOT_READY', retryable: true
+    }, 503);
+    let completed = 0;
+    publishing.buildStorePresetProduct.mockImplementation(async () => {
+      await Promise.resolve();
+      completed++;
+      throw unavailable;
+    });
+    await expect(service.automaticPublicationPlan('0000119', 2, stores.map((store) => store.id)))
+      .rejects.toMatchObject({ code: 'OZON_TITLE_TRANSLATION_NOT_READY', deliveryState: 'NOT_SENT' });
+    expect(completed).toBe(2);
+    // A manual plan still presents per-store diagnostics, not a background retry.
+    const blocked = await (service as any).buildPlan('0000119', { draftVersion: 2, storeIds: stores.map((store) => store.id) });
+    expect(blocked.plan.items.every((item: any) => !item.ready && item.errorCode === 'VERIFY_FAILED')).toBe(true);
+    publishing.buildStorePresetProduct.mockImplementation(async () => {
+      throw new AppError('CONFIG_INVALID', 'wrong endpoint', {
+        errorCode: 'OZON_TITLE_TRANSLATION_ENDPOINT_NOT_FOUND', retryable: false
+      }, 404);
+    });
+    const invalid = await service.automaticPublicationPlan('0000119', 2, stores.map((store) => store.id));
+    expect(invalid.items.every((item) => !item.ready && item.errorCode === 'CONFIG_INVALID')).toBe(true);
+    publishing.buildStorePresetProduct.mockClear().mockImplementation(implementation);
+
     const built = await (service as any).buildPlan('0000119', { draftVersion: 2, storeIds: stores.map((store) => store.id) });
 
     expect(publishing.buildStorePresetProduct).toHaveBeenCalledTimes(2);
-    expect(publishing.resolveVariantColorAuthority).toHaveBeenCalledTimes(1);
+    expect(publishing.resolveVariantColorAuthority).toHaveBeenCalledTimes(4);
     expect(publishing.buildStorePresetProduct.mock.calls.every((call) => call[5] === variantColorAuthority)).toBe(true);
     const tekProduct = built.productByStore.get(stores[0]!.id);
     const glaukeProduct = built.productByStore.get(stores[1]!.id);

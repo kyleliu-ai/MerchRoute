@@ -40,8 +40,9 @@ test('recovers a lost approval acknowledgement and reloads batch progress withou
   expect(response.status()).toBe(202);
   const batchOperationId = (await response.json()).operation.operationId;
   await page.reload();
-  await expect(page.getByTestId('review-operation').filter({ hasText: batchOperationId })).toContainText('已完成');
-  await expect(pending).toHaveCount(0);
+  await expect(page.getByTestId('review-operation')).toHaveCount(0);
+  await expect.poll(async () => (await (await page.request.get('/api/v1/review-operations/' + batchOperationId)).json()).status).toBe('SUCCEEDED');
+  await expect(pending).toHaveCount(0, { timeout: 35_000 });
   const batchReplay = await page.request.post(response.url(), {
     headers: { Prefer: 'respond-async', 'Idempotency-Key': response.request().headers()['idempotency-key']! },
     data: response.request().postDataJSON()

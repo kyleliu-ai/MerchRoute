@@ -619,7 +619,7 @@
       "category": "ozon",
       "active": true,
       "file": "workflows/ozon/g3KK68BLXX7eShqa.json",
-      "sha256": "ca1729ceace1ea5872cb04d271ea27291dee1f8a439a0312da6a5c0f674c2586",
+      "sha256": "d6242c70dded787f9f8e9e5100f7737faa8b9652eb78b457a862c29e5311e23a",
       "dependencies": [
         "0FqozLuQ7vuabT8V",
         "3hyAiON1l3fEHBzA",
@@ -659,7 +659,7 @@
       "category": "ozon",
       "active": true,
       "file": "workflows/ozon/0FqozLuQ7vuabT8V.json",
-      "sha256": "fefccce6f23f4614c986f4f5fa79a1c740d26e3417b8924cd4fd754135f764d7",
+      "sha256": "9365e12f0918eef0df4300575e89d21b05ca767d9d5cd6777246ec1c96b8bd09",
       "dependencies": [
         "kU8XxFLUign9LiQC"
       ],
@@ -677,7 +677,7 @@
       "category": "ozon",
       "active": true,
       "file": "workflows/ozon/stSK51IuxrMZlLjx.json",
-      "sha256": "c243bf27a947f835a2d2da4af9ed6cac4993820a496122f1449a65c16ed4a55e",
+      "sha256": "4d6205dab033d4ec56a681b71081213bdf3df10ec3f6611f580e4163b9ef9aac",
       "dependencies": [
         "3hyAiON1l3fEHBzA",
         "kU8XxFLUign9LiQC",
@@ -715,7 +715,7 @@
       "category": "ozon",
       "active": true,
       "file": "workflows/ozon/HDh0ZNLK2ps5qasR.json",
-      "sha256": "73951a55e5c758c948527570247aa687569c7bb8dceb92c2851a1f43d509e396",
+      "sha256": "36d6e5901e5c74921b8963acaf349c335e6df7bfa7e7f7a812593cb045ba7892",
       "dependencies": [
         "pLoryDijfFiNwKiI"
       ],
