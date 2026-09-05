@@ -848,9 +848,9 @@ test.describe('OZON 独立上品工作区', () => {
     await expect(console.getByText('共 2 个任务', { exact: true })).toBeVisible();
     await expect(console.getByLabel(new RegExp(tekJob.id))).toBeVisible();
     await expect(console.getByLabel(new RegExp(glaukeJob.id))).toBeVisible();
-    await expect(console.getByLabel(new RegExp(tekJob.id)).getByText('商品已归档', { exact: true })).toBeVisible();
-    await expect(console.getByLabel(new RegExp(glaukeJob.id)).getByText('商品已归档', { exact: true })).toBeVisible();
-    await expect(console.getByLabel(new RegExp(tekJob.id))).toContainText('商品已被平台归档并隐藏');
+    await expect(console.getByLabel(new RegExp(tekJob.id)).getByText('已经归档', { exact: true })).toBeVisible();
+    await expect(console.getByLabel(new RegExp(glaukeJob.id)).getByText('已经归档', { exact: true })).toBeVisible();
+    await expect(console.getByLabel(new RegExp(tekJob.id))).toContainText('全部变体已经归档，买家端不可售');
     await expect(console.getByLabel(new RegExp(glaukeJob.id))).toContainText('Убран из продажи');
     await expect(console.getByLabel(new RegExp(preparationJob.id))).toHaveCount(0);
     await expect(console.getByLabel(new RegExp(failedPreparationJob.id))).toHaveCount(0);
