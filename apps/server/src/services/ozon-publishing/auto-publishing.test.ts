@@ -1247,6 +1247,35 @@ describe('OZON automatic media delivery wake-up', () => {
     });
   });
 
+  it('kicks the worker after reconciliation re-arms a historical row-version race', async () => {
+    const jobId = randomUUID();
+    const recoverAutomaticPreparationRowVersionRaces = vi.fn(async () => ({
+      scanned: 1,
+      recoveredJobIds: [jobId]
+    }));
+    const repository = {
+      configured: true,
+      recoverAutomaticPreparationRowVersionRaces,
+      listDeferredAutomaticMediaDeliveries: vi.fn(async () => [])
+    } as unknown as OzonRepository;
+    const coordinator = new OzonAutoPublishingCoordinator(
+      repository,
+      {} as OzonPublishingService,
+      {} as PurchaseRepository,
+      {} as any,
+      {} as any,
+      {} as any,
+      { read: () => ({ submissionHistory: [] }) } as any,
+      { warn: vi.fn() } as unknown as FastifyBaseLogger
+    );
+    const runWorkerNow = vi.spyOn(coordinator, 'runWorkerNow').mockResolvedValue(undefined);
+
+    await coordinator.reconcileNow();
+
+    expect(recoverAutomaticPreparationRowVersionRaces).toHaveBeenCalledOnce();
+    expect(runWorkerNow).toHaveBeenCalledOnce();
+  });
+
   it('lets a rebound durable row override an older terminal in-memory reconciliation key', async () => {
     const variantId = randomUUID();
     const delivery = (decision: 'DEFERRED' | 'ACCEPTED') => ({
@@ -2098,6 +2127,43 @@ describe('OZON automatic compatibility and ownership gates', () => {
     );
 
     expect(harness.transitionJob).toHaveBeenCalledTimes(transitionsBefore);
+  });
+
+  it('recognizes the repository jobId rowVersion race without invalidating the newer worker', async () => {
+    const harness = await createAutoGrossWeightHarness({ procurementGrossWeightGrams: '650' });
+    const transitionsBefore = harness.transitionJob.mock.calls.length;
+
+    await (harness.coordinator as any).handleJobError(
+      harness.job().id,
+      new AppError('TASK_LOCKED', 'OZON 自动准备任务已变化，请刷新后重试', {
+        jobId: harness.job().id,
+        expectedRowVersion: 2,
+        actualRowVersion: 3
+      }, 409)
+    );
+
+    expect(harness.transitionJob).toHaveBeenCalledTimes(transitionsBefore);
+  });
+
+  it.each([
+    ['different job', { jobId: randomUUID(),expectedRowVersion: 2,actualRowVersion: 3 }],
+    ['non-increasing version', { jobId: undefined,expectedRowVersion: 3,actualRowVersion: 3 }],
+    ['malformed version', { jobId: undefined,expectedRowVersion: 'old',actualRowVersion: 3 }],
+    ['business ownership reason', { jobId: undefined,expectedRowVersion: 2,actualRowVersion: 3,reasonCode: 'OZON_SHARED_MATERIAL_CAS_DRIFT' }]
+  ])('does not suppress a TASK_LOCKED error for %s', async (_label, details) => {
+    const harness = await createAutoGrossWeightHarness({ procurementGrossWeightGrams: '650' });
+    const jobId = harness.job().id;
+
+    await (harness.coordinator as any).handleJobError(
+      jobId,
+      new AppError('TASK_LOCKED', '并发所有权异常', { ...details,jobId: details.jobId || jobId }, 409)
+    );
+
+    expect(harness.transitionJob.mock.calls.at(-1)?.[1]).toMatchObject({
+      state: 'NEEDS_ATTENTION',
+      eventType: 'AUTOMATION_STOPPED',
+      errorCode: 'TASK_LOCKED'
+    });
   });
 
   it('keeps the original automatic job recoverable when its network dependency is interrupted', async () => {

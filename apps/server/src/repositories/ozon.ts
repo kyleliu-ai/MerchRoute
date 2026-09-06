@@ -167,6 +167,11 @@ export type OzonAutomaticPreparationRecoveryEvidence = {
   activeStatusRefresh: boolean;
 };
 
+export type OzonAutomaticPreparationRowVersionRaceRecoveryResult = {
+  scanned: number;
+  recoveredJobIds: string[];
+};
+
 export const OZON_AUTOMATIC_REPLAN_MEDIA_REBIND_SQL = `UPDATE ozon_media_deliveries SET
   job_id=$2::uuid,
   payload=payload || jsonb_build_object(
@@ -1771,6 +1776,158 @@ export class OzonRepository {
 
   async getAutomaticPreparationRecoveryEvidence(jobId: string): Promise<OzonAutomaticPreparationRecoveryEvidence> {
     return getAutomaticPreparationRecoveryEvidenceWithClient(this.requirePool(), jobId);
+  }
+
+  /**
+   * Re-arms only the historical failure produced when a media delivery advanced
+   * the shared preparation row between local generation and its atomic commit.
+   * The original AUTOMATION_STOPPED event is retained as the recovery proof;
+   * every platform-write and media-ownership authority is checked again under
+   * the SKU advisory lock before the task can become runnable.
+   */
+  async recoverAutomaticPreparationRowVersionRaces(
+    limitInput = 20
+  ): Promise<OzonAutomaticPreparationRowVersionRaceRecoveryResult> {
+    const limit = Math.min(100, Math.max(1, Math.floor(Number(limitInput) || 20)));
+    const candidates = await this.query<{ id: string; sku: string }>(`
+      SELECT id,sku FROM ozon_publish_jobs
+      WHERE source='AUTO'
+        AND task_kind='SHARED_PREPARATION'
+        AND state='NEEDS_ATTENTION'
+        AND last_error_code='TASK_LOCKED'
+        AND payload @> '{"multistorePreparation":true}'::jsonb
+        AND COALESCE(payload->>'autoPreparedOwnershipInvalidatedReason','')='TASK_LOCKED'
+        AND COALESCE(payload->>'autoPreparedOwnershipInvalidatedAt','')<>''
+      ORDER BY updated_at ASC,id ASC
+      LIMIT $1`, [limit]);
+    const recoveredJobIds: string[] = [];
+    for (const candidate of candidates.rows) {
+      const recovered = await this.transaction(async (client): Promise<OzonPublishJob | undefined> => {
+        const sku = normalizeSku(candidate.sku);
+        await lockSkuJob(client, sku);
+        const currentResult = await client.query<SqlRow>(
+          'SELECT * FROM ozon_publish_jobs WHERE id=$1 FOR UPDATE',
+          [candidate.id]
+        );
+        const current = currentResult.rows[0];
+        if (!current || String(current.sku).trim() !== sku
+          || String(current.source) !== 'AUTO'
+          || String(current.task_kind) !== 'SHARED_PREPARATION'
+          || String(current.state) !== 'NEEDS_ATTENTION'
+          || String(current.last_error_code) !== 'TASK_LOCKED') return undefined;
+
+        const payload = jsonObject(current.payload);
+        if (payload.multistorePreparation !== true
+          || String(payload.autoPreparedOwnershipInvalidatedReason || '') !== 'TASK_LOCKED'
+          || !String(payload.autoPreparedOwnershipInvalidatedAt || '').trim()) return undefined;
+
+        const stoppedEvent = (await client.query<SqlRow>(`
+          SELECT * FROM ozon_publish_events
+          WHERE job_id=$1 AND event_type='AUTOMATION_STOPPED'
+          ORDER BY created_at DESC,id DESC
+          LIMIT 1 FOR UPDATE`, [candidate.id])).rows[0];
+        const errorDetails = jsonObject(jsonObject(stoppedEvent?.payload).errorDetails);
+        const expectedRowVersion = Number(errorDetails.expectedRowVersion);
+        const actualRowVersion = Number(errorDetails.actualRowVersion);
+        if (!stoppedEvent
+          || String(errorDetails.jobId || '') !== candidate.id
+          || errorDetails.reasonCode !== undefined
+          || !Number.isSafeInteger(expectedRowVersion)
+          || !Number.isSafeInteger(actualRowVersion)
+          || expectedRowVersion < 1
+          || actualRowVersion !== expectedRowVersion + 1
+          || Number(current.row_version) !== actualRowVersion + 1) return undefined;
+
+        if (current.task_id || current.import_task_id || current.ozon_product_id || current.offer_id
+          || (Array.isArray(current.offer_ids) && current.offer_ids.length)
+          || (Array.isArray(current.product_links) && current.product_links.length)
+          || current.directory_signature
+          || ['PROCESSING', 'SUCCESS'].includes(String(current.directory_stage || '').toUpperCase())
+          || ozonPrePlanPayloadHasWriteCheckpoint(payload)) return undefined;
+
+        const listing = await client.query<{ exists: boolean }>(
+          'SELECT EXISTS(SELECT 1 FROM ozon_listing_drafts WHERE sku=$1) AS exists',
+          [sku]
+        );
+        if (listing.rows[0]?.exists) return undefined;
+        const competingJob = await client.query<{ exists: boolean }>(`SELECT EXISTS(
+          SELECT 1 FROM ozon_publish_jobs
+          WHERE sku=$1 AND id<>$2
+            AND state IN ('WAITING_MEDIA','READY','UPLOADING_MEDIA','SUBMITTING','IMPORTING',
+              'VERIFYING_IMAGES','UPDATING_PRICE','UPDATING_STOCK','MODERATING')
+        ) AS exists`, [sku,candidate.id]);
+        if (competingJob.rows[0]?.exists) return undefined;
+
+        const evidence = await getAutomaticPreparationRecoveryEvidenceWithClient(client, candidate.id);
+        if (evidence.publicationCount || evidence.mappingCount || evidence.gatewayRequestCount
+          || evidence.productLinkCount || evidence.importIntentPresent || evidence.platformWriteAttempted
+          || evidence.activeLease || evidence.activeSlot || evidence.activeStatusRefresh) return undefined;
+
+        const mediaRows = (await client.query<SqlRow>(`
+          SELECT * FROM ozon_media_deliveries
+          WHERE sku=$1 ORDER BY source_stage_id,submission_id,variant_id FOR UPDATE`, [sku])).rows;
+        const expectedMedia = Array.isArray(payload.mediaDeliveries)
+          ? payload.mediaDeliveries.map(jsonObject)
+          : [];
+        const boundMedia = mediaRows.filter((row) => String(row.job_id || '') === candidate.id);
+        const acceptedForJob = (row: SqlRow): boolean => String(row.job_id || '') === candidate.id
+          && String(jsonObject(row.payload).autoPublishDecision || '').toUpperCase() === 'ACCEPTED';
+        if (!expectedMedia.length || !boundMedia.length || boundMedia.some((row) => !acceptedForJob(row))) return undefined;
+        for (const expected of expectedMedia) {
+          const sourceStageId = String(expected.sourceStageId || '').trim();
+          const submissionId = String(expected.submissionId || '').trim();
+          const variantId = String(expected.variantId || '').trim();
+          if (!['E004', 'E005'].includes(sourceStageId) || !submissionId) return undefined;
+          const matching = mediaRows.find((row) => String(row.source_stage_id) === sourceStageId
+            && String(row.submission_id) === submissionId
+            && String(row.variant_id || '') === variantId);
+          if (!matching || !acceptedForJob(matching)) return undefined;
+        }
+
+        const recoveredAt = new Date().toISOString();
+        const updated = await client.query<SqlRow>(`UPDATE ozon_publish_jobs SET
+          state='READY',
+          payload=(payload - 'autoPreparedOwnershipInvalidatedAt' - 'autoPreparedOwnershipInvalidatedReason')
+            || $3::jsonb,
+          last_error_code=NULL,last_error_message=NULL,next_attempt_at=NULL,finished_at=NULL,
+          row_version=row_version+1,updated_at=NOW()
+          WHERE id=$1 AND row_version=$2 AND state='NEEDS_ATTENTION' RETURNING *`, [
+          candidate.id,
+          Number(current.row_version),
+          JSON.stringify({
+            autoPreparedRowVersionRaceRecovery: {
+              schemaVersion: 1,
+              recoveredAt,
+              stoppedEventId: String(stoppedEvent.id),
+              expectedRowVersion,
+              observedRowVersion: actualRowVersion,
+              stoppedRowVersion: Number(current.row_version),
+              mediaDeliveryCount: boundMedia.length,
+              platformMutation: false
+            }
+          })
+        ]);
+        if (!updated.rows[0]) return undefined;
+        await addEvent(
+          client,
+          candidate.id,
+          'AUTOMATIC_PREPARATION_ROW_VERSION_RACE_RECOVERED',
+          'NEEDS_ATTENTION',
+          'READY',
+          '已核验自动准备任务仅因媒体并发行版本竞争停止，原任务重新进入自动队列',
+          {
+            stoppedEventId: String(stoppedEvent.id),
+            expectedRowVersion,
+            observedRowVersion: actualRowVersion,
+            mediaDeliveryCount: boundMedia.length,
+            platformMutation: false
+          }
+        );
+        return toJob(updated.rows[0]);
+      });
+      if (recovered) recoveredJobIds.push(recovered.id);
+    }
+    return { scanned: candidates.rows.length, recoveredJobIds };
   }
 
   async reconcileAutomaticPreparationToManualSuccess(input: {

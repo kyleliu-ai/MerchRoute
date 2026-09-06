@@ -1518,6 +1518,14 @@ export class OzonAutoPublishingCoordinator {
 
   private async reconcileOnce(): Promise<void> {
     try {
+      let shouldKickWorker = false;
+      const recoverRowVersionRaces = (this.repository as OzonRepository & {
+        recoverAutomaticPreparationRowVersionRaces?: OzonRepository['recoverAutomaticPreparationRowVersionRaces'];
+      }).recoverAutomaticPreparationRowVersionRaces;
+      if (typeof recoverRowVersionRaces === 'function') {
+        const recovered = await recoverRowVersionRaces.call(this.repository);
+        if (recovered.recoveredJobIds.length) shouldKickWorker = true;
+      }
       const durableDeliveries = await this.repository.listDeferredAutomaticMediaDeliveries();
       const deliveryByKey = new Map<string, DeliveryNotification>();
       const durableKeys = new Set<string>();
@@ -1563,7 +1571,6 @@ export class OzonAutoPublishingCoordinator {
         const key = mediaReconciliationKey(notification);
         if (!deliveryByKey.has(key)) deliveryByKey.set(key, notification);
       }
-      let shouldKickWorker = false;
       for (const [key, notification] of deliveryByKey) {
         // A durable row may be legitimately rebound or moved back to ACCEPTED/
         // DEFERRED by a repository CAS after this process cached an older
@@ -2027,10 +2034,7 @@ export class OzonAutoPublishingCoordinator {
     const message = error instanceof Error ? error.message : 'OZON 自动上品任务执行失败';
     const code = error instanceof StopAutoJob ? error.code : error instanceof AppError ? error.code : 'OZON_AUTO_PUBLISH_FAILED';
     if (error instanceof AppError && error.code === 'OZON_MANAGEMENT_DISABLED') return;
-    if (error instanceof AppError
-      && error.code === 'TASK_LOCKED'
-      && error.details?.id === jobId
-      && !error.details?.reasonCode) {
+    if (isBenignAutomaticJobRowVersionRace(error, jobId)) {
       // Another worker already advanced this job. Its newer row owns the next step;
       // the stale worker must not overwrite that progress with NEEDS_ATTENTION.
       return;
@@ -2106,6 +2110,18 @@ export class OzonAutoPublishingCoordinator {
       incrementRetry: true
     });
   }
+}
+
+function isBenignAutomaticJobRowVersionRace(error: unknown, jobId: string): boolean {
+  if (!(error instanceof AppError) || error.code !== 'TASK_LOCKED' || error.details?.reasonCode) return false;
+  if (error.details?.id === jobId) return true;
+  if (error.details?.jobId !== jobId) return false;
+  const expectedRowVersion = Number(error.details.expectedRowVersion);
+  const actualRowVersion = Number(error.details.actualRowVersion);
+  return Number.isSafeInteger(expectedRowVersion)
+    && Number.isSafeInteger(actualRowVersion)
+    && expectedRowVersion >= 1
+    && actualRowVersion > expectedRowVersion;
 }
 
 function isErroneousEmptyFanoutMediaFinalization(job: OzonPublishJob): boolean {
