@@ -76,7 +76,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const source = $('When Executed by Another Workflow').first().json || {};\nconst shared = $('sysPrompt').first().json || {};\n\nconst clean = (value) => value === null || value === undefined ? '' : String(value).trim();\nconst positiveNumber = (value, fallback) => {\n  const number = Number(value);\n  return Number.isFinite(number) && number > 0 ? number : fallback;\n};\nconst extractImageSource = (value) => {\n  if (typeof value === 'string') return clean(value);\n  if (!value || typeof value !== 'object') return '';\n  return clean(value.url ?? value.imageUrl ?? value.imageSource ?? value.path);\n};\n\nconst numberedKeys = [\n  'viewImageAdd1',\n  'viewImageAdd2',\n  'viewImageAdd3',\n  'viewImageAdd4',\n  'viewImageAdd5',\n];\n\nconst numberedImages = numberedKeys\n  .map((key) => extractImageSource(source[key] ?? shared[key]))\n  .filter(Boolean);\n\nconst arrayKeys = ['viewImageAdds', 'imageUrls', 'images', 'viewImages'];\nlet arrayImages = [];\nlet arrayInputField = '';\n\nif (numberedImages.length === 0) {\n  for (const key of arrayKeys) {\n    const candidate = source[key] ?? shared[key];\n    let values = [];\n    if (Array.isArray(candidate)) {\n      values = candidate;\n    } else if (candidate && typeof candidate === 'object' && Array.isArray(candidate.items)) {\n      values = candidate.items;\n    } else if (typeof candidate === 'string' && candidate.trim()) {\n      try {\n        const parsed = JSON.parse(candidate);\n        values = Array.isArray(parsed) ? parsed : [];\n      } catch {\n        values = [];\n      }\n    }\n    const extracted = values.map(extractImageSource).filter(Boolean);\n    if (extracted.length > 0) {\n      arrayImages = extracted;\n      arrayInputField = key;\n      break;\n    }\n  }\n}\n\nconst selectedImages = numberedImages.length > 0 ? numberedImages : arrayImages;\nif (selectedImages.length < 1 || selectedImages.length > 5) {\n  throw new Error('Expected 1-5 image inputs, received ' + selectedImages.length);\n}\n\nconst imageSources = selectedImages.map((value) => value.replace(/\\\\/g, '/'));\nconst userInput = {\n  Category: clean(source.Category ?? shared.Category),\n  productName: clean(source.productName ?? shared.productName),\n  productDescription: clean(source.productDescription ?? shared.productDescription),\n  targetPlatform: clean(source.targetPlatform ?? shared.targetPlatform),\n  Country: clean(source.Country ?? shared.Country),\n  Language: clean(source.Language ?? shared.Language),\n  titleLength: positiveNumber(source.titleLength ?? shared.titleLength, 20),\n  titleDescriptionLenth: positiveNumber(source.titleDescriptionLenth ?? shared.titleDescriptionLenth, 60),\n  ratio: clean(source.ratio ?? shared.ratio),\n  imageCount: imageSources.length,\n};\n\nconst userInputJson = JSON.stringify(userInput, null, 2);\nconst userPrompt = [\n  '下面是当前电商主图场景编排任务。',\n  '请严格遵循系统提示词，结合用户输入 JSON、类目规则，以及后续上传的全部产品参考图完成输出。',\n  '本次实际提供 ' + imageSources.length + ' 张产品参考图，请综合识别，不要遗漏。',\n  '用户输入 JSON：',\n  userInputJson,\n].join('\\n');\n\nreturn imageSources.map((imageSource, imageIndex) => ({\n  json: {\n    imageIndex,\n    imageSource,\n    isUrl: /^https?:\\/\\//i.test(imageSource),\n    imageCount: imageSources.length,\n    imageInputMode: numberedImages.length > 0 ? 'numbered' : arrayInputField,\n    userInputJson,\n    userPrompt,\n  },\n  pairedItem: { item: 0 },\n}));"
+        "jsCode": "const source = $('When Executed by Another Workflow').first().json || {};\nconst shared = $('sysPrompt').first().json || {};\nconst languagePolicy = shared.languagePolicy;\nif (!languagePolicy || !['ru-RU', 'en-US', 'zh-CN'].includes(languagePolicy.code)) {\n  throw new Error('S013_LANGUAGE_UNSUPPORTED: sysPrompt did not provide a supported normalized language');\n}\n\nconst clean = (value) => value === null || value === undefined ? '' : String(value).trim();\nconst positiveNumber = (value, fallback) => {\n  const number = Number(value);\n  return Number.isFinite(number) && number > 0 ? number : fallback;\n};\nconst extractImageSource = (value) => {\n  if (typeof value === 'string') return clean(value);\n  if (!value || typeof value !== 'object') return '';\n  return clean(value.url ?? value.imageUrl ?? value.imageSource ?? value.path);\n};\n\nconst numberedKeys = [\n  'viewImageAdd1',\n  'viewImageAdd2',\n  'viewImageAdd3',\n  'viewImageAdd4',\n  'viewImageAdd5',\n];\n\nconst numberedImages = numberedKeys\n  .map((key) => extractImageSource(source[key] ?? shared[key]))\n  .filter(Boolean);\n\nconst arrayKeys = ['viewImageAdds', 'imageUrls', 'images', 'viewImages'];\nlet arrayImages = [];\nlet arrayInputField = '';\n\nif (numberedImages.length === 0) {\n  for (const key of arrayKeys) {\n    const candidate = source[key] ?? shared[key];\n    let values = [];\n    if (Array.isArray(candidate)) {\n      values = candidate;\n    } else if (candidate && typeof candidate === 'object' && Array.isArray(candidate.items)) {\n      values = candidate.items;\n    } else if (typeof candidate === 'string' && candidate.trim()) {\n      try {\n        const parsed = JSON.parse(candidate);\n        values = Array.isArray(parsed) ? parsed : [];\n      } catch {\n        values = [];\n      }\n    }\n    const extracted = values.map(extractImageSource).filter(Boolean);\n    if (extracted.length > 0) {\n      arrayImages = extracted;\n      arrayInputField = key;\n      break;\n    }\n  }\n}\n\nconst selectedImages = numberedImages.length > 0 ? numberedImages : arrayImages;\nif (selectedImages.length < 1 || selectedImages.length > 5) {\n  throw new Error('Expected 1-5 image inputs, received ' + selectedImages.length);\n}\n\nconst imageSources = selectedImages.map((value) => value.replace(/\\\\/g, '/'));\nconst userInput = {\n  Category: clean(source.Category ?? shared.Category),\n  productName: clean(source.productName ?? shared.productName),\n  productDescription: clean(source.productDescription ?? shared.productDescription),\n  targetPlatform: clean(source.targetPlatform ?? shared.targetPlatform),\n  Country: clean(source.Country ?? shared.Country),\n  Language: clean(shared.Language),\n  titleLength: positiveNumber(source.titleLength ?? shared.titleLength, 20),\n  titleDescriptionLenth: positiveNumber(source.titleDescriptionLenth ?? shared.titleDescriptionLenth, 60),\n  ratio: clean(source.ratio ?? shared.ratio),\n  imageCount: imageSources.length,\n};\n\nconst userInputJson = JSON.stringify(userInput, null, 2);\nconst userPrompt = [\n  '下面是当前电商主图场景编排任务。',\n  '请严格遵循系统提示词，结合用户输入 JSON、类目规则，以及后续上传的全部产品参考图完成输出。',\n  '本次实际提供 ' + imageSources.length + ' 张产品参考图，请综合识别，不要遗漏。',\n  '用户输入 JSON：',\n  userInputJson,\n].join('\\n');\n\nreturn imageSources.map((imageSource, imageIndex) => ({\n  json: {\n    imageIndex,\n    imageSource,\n    isUrl: /^https?:\\/\\//i.test(imageSource),\n    imageCount: imageSources.length,\n    imageInputMode: numberedImages.length > 0 ? 'numbered' : arrayInputField,\n    userInputJson,\n    userPrompt,\n    Language: userInput.Language,\n    languagePolicy,\n  },\n  pairedItem: { item: 0 },\n}));"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -87,7 +87,7 @@
       "id": "0137b26b-de18-48a3-8a93-f1612809fa20",
       "name": "User Input Prepare",
       "notesInFlow": true,
-      "notes": "把用户输入转为 JSON，拆分 3 张图片来源，支持 URL 或本地路径"
+      "notes": "规范化用户输入并透传当前任务的标题语言策略；支持 URL 或本地图片路径"
     },
     {
       "parameters": {
@@ -176,7 +176,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const response = $input.first().json || {};\nlet content = response?.choices?.[0]?.message?.content ?? response?.message?.content ?? response?.content;\nconst productName = String($('When Executed by Another Workflow').first().json.productName ?? '');\n\nif (content && typeof content === 'object') {\n  return [{ json: { ...content, productName } }];\n}\n\nif (typeof content !== 'string') {\n  throw new Error('Qwen response did not include choices[0].message.content.');\n}\n\nlet text = content.trim();\nconst fenced = text.match(/^```(?:json)?\\s*([\\s\\S]*?)\\s*```$/i);\nif (fenced) {\n  text = fenced[1].trim();\n}\n\nfunction parseJson(raw) {\n  try {\n    return JSON.parse(raw);\n  } catch (error) {\n    const firstBrace = raw.indexOf('{');\n    const lastBrace = raw.lastIndexOf('}');\n    if (firstBrace !== -1 && lastBrace > firstBrace) {\n      return JSON.parse(raw.slice(firstBrace, lastBrace + 1));\n    }\n    throw error;\n  }\n}\n\nlet parsed;\ntry {\n  parsed = parseJson(text);\n} catch (error) {\n  throw new Error(`Qwen output is not valid JSON: ${error.message}. Output preview: ${text.slice(0, 500)}`);\n}\n\nif (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {\n  throw new Error('Qwen output JSON must be an object.');\n}\n\nreturn [{ json: { ...parsed, productName } }];"
+        "jsCode": "function parseAssistantJson(response, errorCode = 'S013_QWEN_OUTPUT_INVALID') {\n  let content = response?.choices?.[0]?.message?.content ?? response?.message?.content ?? response?.content;\n  if (content && typeof content === 'object' && !Array.isArray(content)) return content;\n  if (typeof content !== 'string') throw new Error(errorCode + ': response did not include object content');\n  let text = content.trim();\n  const fenced = text.match(/^```(?:json)?\\s*([\\s\\S]*?)\\s*```$/i);\n  if (fenced) text = fenced[1].trim();\n  let parsed;\n  try {\n    parsed = JSON.parse(text);\n  } catch (firstError) {\n    const firstBrace = text.indexOf('{');\n    const lastBrace = text.lastIndexOf('}');\n    if (firstBrace === -1 || lastBrace <= firstBrace) throw new Error(errorCode + ': response is not valid JSON');\n    try {\n      parsed = JSON.parse(text.slice(firstBrace, lastBrace + 1));\n    } catch (secondError) {\n      throw new Error(errorCode + ': response is not valid JSON');\n    }\n  }\n  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {\n    throw new Error(errorCode + ': response JSON must be an object');\n  }\n  return parsed;\n}\n\nfunction findTitleLanguageViolations(result, languagePolicy) {\n  const sceneKeys = Array.from({ length: 7 }, (_, index) => `scenePrompt${String(index + 1).padStart(2, '0')}`);\n  const titleFields = ['title', 'titleDescription'];\n  const violations = [];\n  const code = languagePolicy?.code;\n  if (!['ru-RU', 'en-US', 'zh-CN'].includes(code)) {\n    throw new Error('S013_LANGUAGE_UNSUPPORTED: normalized Language=' + String(code || 'EMPTY'));\n  }\n  for (const sceneKey of sceneKeys) {\n    const scene = result?.[sceneKey];\n    if (!scene || typeof scene !== 'object' || Array.isArray(scene)) continue;\n    for (const field of titleFields) {\n      const raw = scene[field];\n      const value = raw === undefined || raw === null ? '' : String(raw).trim();\n      if (!value) continue;\n      const reasons = [];\n      const hasCyrillic = /[\\u0400-\\u04FF]/.test(value);\n      const hasHan = /[\\u3400-\\u9FFF]/.test(value);\n      const hasLatin = /[A-Za-z]/.test(value);\n      if (code === 'ru-RU') {\n        if (!hasCyrillic) reasons.push('missing_cyrillic');\n        if (hasHan) reasons.push('contains_han');\n      } else if (code === 'en-US') {\n        if (!hasLatin) reasons.push('missing_latin');\n        if (hasHan) reasons.push('contains_han');\n        if (hasCyrillic) reasons.push('contains_cyrillic');\n      } else {\n        if (!hasHan) reasons.push('missing_han');\n        if (hasCyrillic) reasons.push('contains_cyrillic');\n      }\n      if (reasons.length) violations.push({ sceneKey, field, value, reasons });\n    }\n  }\n  return violations;\n}\n\nconst response = $input.first().json || {};\nconst productName = String($('When Executed by Another Workflow').first().json.productName ?? '');\nconst prepared = $('User Input Prepare').first().json || {};\nconst languagePolicy = prepared.languagePolicy;\nconst parsed = parseAssistantJson(response);\nconst result = { ...parsed, productName };\nconst violations = findTitleLanguageViolations(result, languagePolicy);\n\nreturn [{\n  json: {\n    needsTitleLanguageCorrection: violations.length > 0,\n    result,\n    languagePolicy,\n    violations,\n  },\n}];"
       },
       "id": "1a811f28-fb7b-4cff-9f46-7d381f92b166",
       "name": "Parse Qwen JSON Output",
@@ -187,7 +187,7 @@
         480
       ],
       "notesInFlow": true,
-      "notes": "解析百炼返回的 choices[0].message.content，只输出最终 JSON 对象"
+      "notes": "解析初次 Qwen JSON，并校验非空 title/titleDescription 是否符合当前任务语言"
     },
     {
       "parameters": {
@@ -309,7 +309,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const sourceInput = $('When Executed by Another Workflow').first().json || {};\nconst constantsInput = $('Global Constants').first().json || {};\n\nconst fallbackRules = {\n  \"version\": \"1.0.0\",\n  \"categoryAliases\": {\n    \"运动鞋\": \"shoes.sports_shoes\",\n    \"休闲鞋\": \"shoes.sports_shoes\",\n    \"男鞋\": \"shoes.sports_shoes\",\n    \"女鞋\": \"shoes.sports_shoes\",\n    \"鞋子\": \"shoes.sports_shoes\",\n    \"跑步鞋\": \"shoes.sports_shoes\",\n    \"单肩包\": \"bags.crossbody_bag\",\n    \"斜挎包\": \"bags.crossbody_bag\",\n    \"手提包\": \"bags.crossbody_bag\",\n    \"包包\": \"bags.crossbody_bag\",\n    \"吹风机\": \"beauty.hair_dryer\",\n    \"电吹风\": \"beauty.hair_dryer\",\n    \"收纳盒\": \"home.storage_box\",\n    \"收纳架\": \"home.storage_box\",\n    \"厨具\": \"kitchen.cookware\",\n    \"锅具\": \"kitchen.cookware\",\n    \"小家电\": \"electronics.small_appliance\",\n    \"台灯\": \"lighting.table_lamp\",\n    \"灯具\": \"lighting.table_lamp\",\n    \"服装\": \"clothing.general\"\n  },\n  \"categories\": {\n    \"generic.product\": {\n      \"categoryName\": \"通用产品\",\n      \"keywords\": [],\n      \"appearanceFocus\": [\"颜色、形状、结构、材质质感、可见部件和关键细节\"],\n      \"sellingPointFocus\": [\"核心功能\", \"使用便利\", \"适用场景\", \"外观细节\", \"电商展示价值\"],\n      \"sceneStrategy\": [\"商品整体展示\", \"核心卖点展示\", \"真实使用场景\", \"多场景应用\", \"生活方式场景\", \"产品试用场景\", \"最多 2 个细节或特写场景\"],\n      \"sceneDistribution\": {\n        \"maxDetailOrCloseUpScenes\": 2,\n        \"minUsageLifestyleOrTrialScenes\": 4,\n        \"minModelTryOnScenes\": 0\n      },\n      \"forbiddenClaims\": [\"不得虚构功能、参数、认证、配件、材质或使用效果\"],\n      \"titleGuidance\": [\"标题简短，描述对应场景\"],\n      \"detailSceneGuidance\": [\"细节展示和特写场景合计不得超过 2 个\", \"细节展示场景 title 和 titleDescription 必须为空字符串\"]\n    }\n  }\n};\n\nfunction normalizeText(value) {\n  return value === undefined || value === null ? '' : String(value).trim();\n}\n\nfunction getInputCategory(input) {\n  return normalizeText(input.Category || input.category || input.productCategory || '');\n}\n\nfunction positiveNumber(value, fallback) {\n  return typeof value === 'number' && Number.isFinite(value) && value > 0\n    ? value\n    : fallback;\n}\n\nlet rules = fallbackRules;\ntry {\n  const buffer = await this.helpers.getBinaryDataBuffer(0, 'data');\n  const text = buffer.toString('utf8').trim();\n  if (text) {\n    rules = JSON.parse(text);\n  }\n} catch (error) {\n  rules = fallbackRules;\n}\n\nif (!rules || typeof rules !== 'object') {\n  rules = fallbackRules;\n}\nif (!rules.categories || typeof rules.categories !== 'object') {\n  rules.categories = fallbackRules.categories;\n}\nif (!rules.categoryAliases || typeof rules.categoryAliases !== 'object') {\n  rules.categoryAliases = fallbackRules.categoryAliases;\n}\n\nconst rawCategory = getInputCategory(sourceInput);\nlet normalizedCategory = rules.categoryAliases[rawCategory] || rawCategory;\n\nfunction findCategoryByKeywords() {\n  const haystack = [\n    sourceInput.Category,\n    sourceInput.productName,\n    sourceInput.productDescription\n  ].map(normalizeText).join(' ').toLowerCase();\n\n  for (const [key, rule] of Object.entries(rules.categories)) {\n    const keywords = Array.isArray(rule.keywords) ? rule.keywords : [];\n    if (keywords.some((word) => haystack.includes(String(word).toLowerCase()))) {\n      return key;\n    }\n  }\n  return '';\n}\n\nif (!normalizedCategory || !rules.categories[normalizedCategory]) {\n  const detected = findCategoryByKeywords();\n  normalizedCategory = detected || 'generic.product';\n}\nif (!rules.categories[normalizedCategory]) {\n  normalizedCategory = 'generic.product';\n}\n\nconst categoryRule = rules.categories[normalizedCategory] || rules.categories['generic.product'];\n\nconst titleLimit = positiveNumber(sourceInput.titleLength, 20);\nconst titleDescriptionLimit = positiveNumber(sourceInput.titleDescriptionLenth, 60);\n\nconst categoryRuleText = JSON.stringify(categoryRule, null, 2);\n\nconst baseSystemPrompt = `\n你是“电商产品主图展示场景智能编排助手”。\n\n你的任务：根据用户输入的产品信息、电商平台信息、销售国家、标题语言和产品参考视图图片，生成用于电商主图的产品展示场景描述。\n\n你不是图片生成模型。\n你不直接生成图片。\n你不生成完整图生图提示词。\n你只负责生成：productAppearance、sellingPoints、targetMarket、scenePrompt01 到 scenePrompt07。\n\n下游子工作流会根据你的输出继续组装最终图生图提示词、平台规则、视觉风格、外观一致性约束和图像生成参数。\n\n# 输入字段\n\n上游可能提供：\n- productName：产品名称\n- productDescription：产品描述\n- Category：产品类目\n- targetPlatform：目标平台，如 WB / OZON / WB/OZON\n- Country：销售国家\n- Language：标题和标题描述语言，如俄文 / 英文\n- ratio：图片比例\n- titleLength：标题长度限制，当前限制为 ${titleLimit} 字符内\n- titleDescriptionLenth：标题描述长度限制，当前限制为 ${titleDescriptionLimit} 字符内\n- viewImageAdd1 / viewImageAdd2 / viewImageAdd3 / viewImageAdd4 / viewImageAdd5，或数组字段 viewImageAdds / imageUrls / images / viewImages：1-5 张产品参考图\n\n# 参考视图规则\n\n用户提供 1-5 张产品参考图。这些参考图不是固定的正面、背面、侧面，而是来自以下 5 种视图中的任意 1-5 张组合：\n正面视图、背面视图、侧面视图、45° 斜俯视图、顶视图 / 底视图。\n\n如果图片或文件名有明确标签，按标签识别具体视图类型。\n如果没有标签，不要强行判断为正面、背面、侧面，只按上传顺序理解为参考视图，不预设具体视图类型。\n\n只描述图片中真实可见的内容。看不清的细节不要编造。\n用户没有提供、图片也看不到的功能、结构、配件、认证、参数，不得写入 JSON。\n\n# 当前类目规则\n\n当前标准类目：${normalizedCategory}\n当前类目名称：${categoryRule.categoryName || normalizedCategory}\n\n当前类目规则包如下，必须优先参考：\n${categoryRuleText}\n\n# 输出硬性要求\n\n最终只能输出一个 JSON 对象。\n禁止输出 Markdown、代码块、解释、注释或 JSON 以外的任何文字。\nJSON 必须可以被 JSON.parse 正常解析。\n字段完整，字段顺序固定，无尾逗号，无未转义换行。\n\n必须严格输出以下字段名：\nscenePrompt01、scenePrompt02、scenePrompt03、scenePrompt04、scenePrompt05、scenePrompt06、scenePrompt07。\n\n字段名中的 0 必须是阿拉伯数字 0，不得写成英文字母 O 或 o。\n必须输出 scenePrompt03，不得输出 scenePromptO3、scenePrompto3、scenePrompt3、scenePrompt_03、scene_prompt03 或任何其他变体。\n\n# 固定 JSON 结构\n\n{\n  \"productAppearance\": \"\",\n  \"sellingPoints\": [],\n  \"targetMarket\": \"\",\n  \"scenePrompt01\": {\"prompt\":\"\",\"title\":\"\",\"titleDescription\":\"\"},\n  \"scenePrompt02\": {\"prompt\":\"\",\"title\":\"\",\"titleDescription\":\"\"},\n  \"scenePrompt03\": {\"prompt\":\"\",\"title\":\"\",\"titleDescription\":\"\"},\n  \"scenePrompt04\": {\"prompt\":\"\",\"title\":\"\",\"titleDescription\":\"\"},\n  \"scenePrompt05\": {\"prompt\":\"\",\"title\":\"\",\"titleDescription\":\"\"},\n  \"scenePrompt06\": {\"prompt\":\"\",\"title\":\"\",\"titleDescription\":\"\"},\n  \"scenePrompt07\": {\"prompt\":\"\",\"title\":\"\",\"titleDescription\":\"\"}\n}\n\n# productAppearance 规则\n\nproductAppearance 是产品外观描述，必须基于参考图和产品信息总结：\n颜色、形状、结构、材质质感、按钮/按键/开关/旋钮、接口/孔位/指示灯、风口/开口、线缆/手柄/支架/配件等可见细节。\n\nproductAppearance 必须强调：后续生成产品图时，必须严格保持参考图中的产品外观、颜色、结构、比例、材质质感、按键位置、接口位置、孔位和关键细节一致。\n\nproductAppearance 只描述外观，不要把功能卖点写成外观结构，不得添加图片中不存在的外观、结构或配件。\n\n# sellingPoints 规则\n\nsellingPoints 必须输出 7 条中文产品卖点。\n卖点应根据 productName、productDescription、productAppearance、Category、targetPlatform、Country 和当前类目规则生成。\n卖点必须真实有效，不得虚构用户没有提供、图片中也看不到的功能、参数、认证、配件或效果。\n不得使用“最强、第一、100%、永久”等绝对化表述。\n\n# targetMarket 规则\n\ntargetMarket 必须使用中文。\n根据 Country、targetPlatform、productDescription、sellingPoints 和 Category 生成目标市场和目标人群描述。\n内容应包括销售国家、销售平台、适合人群、典型使用场景、产品适用需求。\n\n# 7 条主图展示场景规则\n\n必须输出 scenePrompt01 到 scenePrompt07，共 7 个场景对象。\n每个 scenePrompt 包含：\n- prompt：中文产品主图展示场景描述\n- title：根据 Language 生成的标题；细节展示或特写场景必须为空字符串 \"\"\n- titleDescription：根据 Language 生成的标题描述；细节展示或特写场景必须为空字符串 \"\"\n\nscenePrompt.prompt 只描述产品主图展示场景，不是完整图生图提示词。\n不要写模型参数、分辨率、采样、镜头参数、完整风格堆词或最终图生图模板。\n\n# 场景分布硬性规则\n\n生成 7 个场景时，必须控制场景类型分布，避免大量重复的细节图、特写图或局部结构图。\n\n硬性要求：\n1. 7 个场景中，细节展示场景和特写展示场景合计不得超过 2 个。\n2. 7 个场景中，至少 4 个场景必须属于以下类型之一：\n   - 真实使用场景\n   - 模特试穿 / 模特试用场景\n   - 产品试用场景\n   - 生活方式场景\n   - 多场景应用场景\n   - 动态体验场景\n3. 不得生成 3 个或以上仅展示局部结构、材质纹理、鞋底、接口、按钮、孔位、配件或工艺的场景。\n4. 每个场景必须有明确展示目的，7 个场景要覆盖：展示外观、使用体验、适用场景、生活方式、卖点强化、适量细节。\n5. 如果产品适合被人物穿着、佩戴、手持或试用，应优先增加模特试穿、模特试用、真实使用、生活方式场景的数量，但人物不得遮挡商品主体。\n\n对于鞋类、服饰、包袋等穿戴类产品：\n- 至少 2 个场景必须是模特试穿 / 上脚 / 上身 / 背包 / 手持 / 穿搭展示场景；\n- 至少 1 个场景必须是动态穿着、出行使用或生活方式场景；\n- 细节图和特写图合计最多 2 个。\n\n对于小家电、个护、家居工具、厨具等产品：\n- 至少 2 个场景必须是真实试用或使用场景；\n- 至少 1 个场景必须是生活方式或多场景应用场景；\n- 细节图和特写图合计最多 2 个。\n\n# 细节展示和特写场景定义\n\n只有当画面主体明确聚焦于产品局部区域，并且主要目的是展示局部结构、材质纹理、工艺细节或微距质感时，才可判定为细节展示或特写场景。\n\n细节展示或特写场景包括：\n- 微距特写\n- 局部结构特写\n- 材质纹理特写\n- 工艺细节特写\n- 近距离聚焦局部区域\n\n以下场景不应判定为细节展示或特写场景：\n- 商品整体展示图\n- 模特试穿图\n- 真实使用图\n- 生活方式图\n- 穿搭展示图\n- 多场景应用图\n- 带有完整产品主体的卖点强化图\n\n如果某个场景属于细节展示或特写场景：\n- title 必须输出空字符串 \"\"\n- titleDescription 必须输出空字符串 \"\"\n- prompt 中应说明该场景不添加标题和描述文字\n\n# scenePrompt.prompt 规则\n\n每个 prompt 必须使用中文，具体、清晰，让下游图生图提示词组装节点能理解该主图应该展示什么场景。\n\n每个 prompt 应包含：\n- 当前场景主题\n- 要突出的卖点或功能\n- 产品主体展示方式\n- 场景环境\n- 使用方式、试穿方式、试用方式或展示方式\n- 画面应突出商品主体\n- 必须保持参考图产品外观一致\n- 非细节展示场景可以使用少量清晰文字，且文字不得遮挡产品\n- 不改变产品结构、颜色、比例和关键细节\n\n7 个场景必须动态编排，不能机械套用同一套场景结构，不能重复表达同一个卖点。\n应适当增加产品真实使用、模特试穿、模特试用、生活方式和动态体验场景数量，避免 7 张图过于单一。\n\n# title 规则\n\n每个 scenePrompt 必须包含 title 字段。\n如果当前场景是细节展示或特写场景，title 必须输出空字符串 \"\"。\n如果当前场景不是细节展示或特写场景，title 必须使用 Language 指定语言。\ntitle 必须不超过 ${titleLimit} 个字符，字符数包含空格、数字和标点。\ntitle 应简短醒目，概括当前场景核心卖点或展示主题。\n不得使用夸张营销词，不得虚构产品参数。\n\n# titleDescription 规则\n\n每个 scenePrompt 必须包含 titleDescription 字段。\n如果当前场景是细节展示或特写场景，titleDescription 必须输出空字符串 \"\"。\n如果当前场景不是细节展示或特写场景，titleDescription 必须使用 Language 指定语言。\ntitleDescription 必须不超过 ${titleDescriptionLimit} 个字符，字符数包含空格、数字和标点。\ntitleDescription 应说明当前场景中的产品功能、使用方式或适用场景，并与 prompt 语义一致。\n不得写长句、大段文字，不得虚构参数、认证、功能或用户未提供的卖点。\n\n# 禁止事项\n\n不得输出 JSON 以外的任何内容。\n不得生成图片。\n不得生成完整图生图提示词。\n不得把这些参考图固定理解为正面、背面、侧面。\n不得虚构产品不存在的功能、参数、配件、认证、材质或使用方式。\n不得把图片中看不到的细节写成确定事实。\n不得改变产品外观、颜色、结构、比例和关键细节。\n不得添加图片中不存在的按钮、屏幕、喷嘴、支架、收纳盒等结构。\n不得使用“最强、第一、100%、永久”等绝对化表述。\n不得让人物、背景、文字遮挡商品主体。\n不得所有产品都使用同一套场景逻辑。\n不得让 title 或 titleDescription 超过长度限制。\n不得让 title 和 titleDescription 使用错误语言。\n不得生成超过 2 个细节展示或特写场景。\n\n# 最终自检\n\n输出前检查：\n1. 是否只输出 JSON；\n2. 是否字段完整且顺序正确；\n3. 是否 JSON 格式合法；\n4. 是否 sellingPoints 正好 7 条；\n5. 是否 scenePrompt01 到 scenePrompt07 共 7 个；\n6. 是否每个 scenePrompt 都包含 prompt、title、titleDescription；\n7. 是否细节展示和特写场景合计不超过 2 个；\n8. 是否至少 4 个场景属于真实使用、模特试穿、模特试用、生活方式、多场景应用或动态体验；\n9. 如果是穿戴类产品，是否至少 2 个场景为模特试穿、上脚、上身、背包、手持或穿搭展示；\n10. 是否 title 和 titleDescription 符合语言与长度要求；\n11. 是否没有虚构功能、参数、配件、认证；\n12. 是否没有 JSON 以外的任何文字。\n\n最终回复只能是 JSON 对象。\n`.trim();\n\nreturn [\n  {\n    json: {\n      ...constantsInput,\n      ...sourceInput,\n      sysPrompt: baseSystemPrompt,\n      normalizedCategory,\n      categoryRule,\n      categoryRulesVersion: rules.version || '',\n      titleLimit,\n      titleDescriptionLimit\n    }\n  }\n];"
+        "jsCode": "const sourceInput = $('When Executed by Another Workflow').first().json || {};\nconst constantsInput = $('Global Constants').first().json || {};\n\nconst fallbackRules = {\n  \"version\": \"1.0.0\",\n  \"categoryAliases\": {\n    \"运动鞋\": \"shoes.sports_shoes\",\n    \"休闲鞋\": \"shoes.sports_shoes\",\n    \"男鞋\": \"shoes.sports_shoes\",\n    \"女鞋\": \"shoes.sports_shoes\",\n    \"鞋子\": \"shoes.sports_shoes\",\n    \"跑步鞋\": \"shoes.sports_shoes\",\n    \"单肩包\": \"bags.crossbody_bag\",\n    \"斜挎包\": \"bags.crossbody_bag\",\n    \"手提包\": \"bags.crossbody_bag\",\n    \"包包\": \"bags.crossbody_bag\",\n    \"吹风机\": \"beauty.hair_dryer\",\n    \"电吹风\": \"beauty.hair_dryer\",\n    \"收纳盒\": \"home.storage_box\",\n    \"收纳架\": \"home.storage_box\",\n    \"厨具\": \"kitchen.cookware\",\n    \"锅具\": \"kitchen.cookware\",\n    \"小家电\": \"electronics.small_appliance\",\n    \"台灯\": \"lighting.table_lamp\",\n    \"灯具\": \"lighting.table_lamp\",\n    \"服装\": \"clothing.general\"\n  },\n  \"categories\": {\n    \"generic.product\": {\n      \"categoryName\": \"通用产品\",\n      \"keywords\": [],\n      \"appearanceFocus\": [\"颜色、形状、结构、材质质感、可见部件和关键细节\"],\n      \"sellingPointFocus\": [\"核心功能\", \"使用便利\", \"适用场景\", \"外观细节\", \"电商展示价值\"],\n      \"sceneStrategy\": [\"商品整体展示\", \"核心卖点展示\", \"真实使用场景\", \"多场景应用\", \"生活方式场景\", \"产品试用场景\", \"最多 2 个细节或特写场景\"],\n      \"sceneDistribution\": {\n        \"maxDetailOrCloseUpScenes\": 2,\n        \"minUsageLifestyleOrTrialScenes\": 4,\n        \"minModelTryOnScenes\": 0\n      },\n      \"forbiddenClaims\": [\"不得虚构功能、参数、认证、配件、材质或使用效果\"],\n      \"titleGuidance\": [\"标题简短，描述对应场景\"],\n      \"detailSceneGuidance\": [\"细节展示和特写场景合计不得超过 2 个\", \"细节展示场景 title 和 titleDescription 必须为空字符串\"]\n    }\n  }\n};\n\nfunction normalizeText(value) {\n  return value === undefined || value === null ? '' : String(value).trim();\n}\n\nconst S013_TITLE_LANGUAGE_POLICY_V1 = '2026-09-06';\nfunction normalizeTitleLanguage(value) {\n  const raw = value === undefined || value === null ? '' : String(value).trim();\n  const lower = raw.toLowerCase();\n  if (raw === '俄文' || lower === 'ru-ru') {\n    return {\n      code: 'ru-RU',\n      label: '俄语',\n      promptInstruction: '非空的 title 和 titleDescription 必须使用俄语，至少包含一个西里尔字母（Unicode U+0400-U+04FF），禁止出现任何汉字；允许保留必要的拉丁品牌名、型号、数字和标点。',\n    };\n  }\n  if (raw === '英文' || lower === 'en-us') {\n    return {\n      code: 'en-US',\n      label: '英语',\n      promptInstruction: '非空的 title 和 titleDescription 必须使用英语，至少包含一个拉丁字母 A-Z 或 a-z，禁止出现任何汉字和西里尔字母；允许保留必要的品牌名、型号、数字和标点。',\n    };\n  }\n  if (raw === '简体中文' || lower === 'zh-cn') {\n    return {\n      code: 'zh-CN',\n      label: '简体中文',\n      promptInstruction: '非空的 title 和 titleDescription 必须使用现代简体中文，至少包含一个汉字，不使用繁体表达，禁止出现任何西里尔字母；允许保留必要的拉丁品牌名、型号、数字和标点。',\n    };\n  }\n  const preview = raw.replace(/[\\r\\n\\t]+/g, ' ').slice(0, 80) || 'EMPTY';\n  throw new Error('S013_LANGUAGE_UNSUPPORTED: Language=' + JSON.stringify(preview) + '; supported=俄文/ru-RU,英文/en-US,简体中文/zh-CN');\n}\n\nconst languagePolicy = normalizeTitleLanguage(sourceInput.Language ?? sourceInput.language);\n\nfunction getInputCategory(input) {\n  return normalizeText(input.Category || input.category || input.productCategory || '');\n}\n\nfunction positiveNumber(value, fallback) {\n  return typeof value === 'number' && Number.isFinite(value) && value > 0\n    ? value\n    : fallback;\n}\n\nlet rules = fallbackRules;\ntry {\n  const buffer = await this.helpers.getBinaryDataBuffer(0, 'data');\n  const text = buffer.toString('utf8').trim();\n  if (text) {\n    rules = JSON.parse(text);\n  }\n} catch (error) {\n  rules = fallbackRules;\n}\n\nif (!rules || typeof rules !== 'object') {\n  rules = fallbackRules;\n}\nif (!rules.categories || typeof rules.categories !== 'object') {\n  rules.categories = fallbackRules.categories;\n}\nif (!rules.categoryAliases || typeof rules.categoryAliases !== 'object') {\n  rules.categoryAliases = fallbackRules.categoryAliases;\n}\n\nconst rawCategory = getInputCategory(sourceInput);\nlet normalizedCategory = rules.categoryAliases[rawCategory] || rawCategory;\n\nfunction findCategoryByKeywords() {\n  const haystack = [\n    sourceInput.Category,\n    sourceInput.productName,\n    sourceInput.productDescription\n  ].map(normalizeText).join(' ').toLowerCase();\n\n  for (const [key, rule] of Object.entries(rules.categories)) {\n    const keywords = Array.isArray(rule.keywords) ? rule.keywords : [];\n    if (keywords.some((word) => haystack.includes(String(word).toLowerCase()))) {\n      return key;\n    }\n  }\n  return '';\n}\n\nif (!normalizedCategory || !rules.categories[normalizedCategory]) {\n  const detected = findCategoryByKeywords();\n  normalizedCategory = detected || 'generic.product';\n}\nif (!rules.categories[normalizedCategory]) {\n  normalizedCategory = 'generic.product';\n}\n\nconst categoryRule = rules.categories[normalizedCategory] || rules.categories['generic.product'];\n\nconst titleLimit = positiveNumber(sourceInput.titleLength, 20);\nconst titleDescriptionLimit = positiveNumber(sourceInput.titleDescriptionLenth, 60);\n\nconst categoryRuleText = JSON.stringify(categoryRule, null, 2);\n\nconst baseSystemPrompt = `\n你是“电商产品主图展示场景智能编排助手”。\n\n你的任务：根据用户输入的产品信息、电商平台信息、销售国家、标题语言和产品参考视图图片，生成用于电商主图的产品展示场景描述。\n\n你不是图片生成模型。\n你不直接生成图片。\n你不生成完整图生图提示词。\n你只负责生成：productAppearance、sellingPoints、targetMarket、scenePrompt01 到 scenePrompt07。\n\n下游子工作流会根据你的输出继续组装最终图生图提示词、平台规则、视觉风格、外观一致性约束和图像生成参数。\n\n# 输入字段\n\n上游可能提供：\n- productName：产品名称\n- productDescription：产品描述\n- Category：产品类目\n- targetPlatform：目标平台，如 WB / OZON / WB/OZON\n- Country：销售国家\n- Language：标题和标题描述语言，本次已规范化为 ${languagePolicy.code}\n- ratio：图片比例\n- titleLength：标题长度限制，当前限制为 ${titleLimit} 字符内\n- titleDescriptionLenth：标题描述长度限制，当前限制为 ${titleDescriptionLimit} 字符内\n- viewImageAdd1 / viewImageAdd2 / viewImageAdd3 / viewImageAdd4 / viewImageAdd5，或数组字段 viewImageAdds / imageUrls / images / viewImages：1-5 张产品参考图\n\n# 当前标题语言策略（只适用于 title 和 titleDescription）\n\n当前规范语言代码：${languagePolicy.code}\n${languagePolicy.promptInstruction}\n该语言策略不得改变 productAppearance、sellingPoints、targetMarket 和 scenePrompt.prompt 的既有中文要求。\n\n# 参考视图规则\n\n用户提供 1-5 张产品参考图。这些参考图不是固定的正面、背面、侧面，而是来自以下 5 种视图中的任意 1-5 张组合：\n正面视图、背面视图、侧面视图、45° 斜俯视图、顶视图 / 底视图。\n\n如果图片或文件名有明确标签，按标签识别具体视图类型。\n如果没有标签，不要强行判断为正面、背面、侧面，只按上传顺序理解为参考视图，不预设具体视图类型。\n\n只描述图片中真实可见的内容。看不清的细节不要编造。\n用户没有提供、图片也看不到的功能、结构、配件、认证、参数，不得写入 JSON。\n\n# 当前类目规则\n\n当前标准类目：${normalizedCategory}\n当前类目名称：${categoryRule.categoryName || normalizedCategory}\n\n当前类目规则包如下，必须优先参考：\n${categoryRuleText}\n\n# 输出硬性要求\n\n最终只能输出一个 JSON 对象。\n禁止输出 Markdown、代码块、解释、注释或 JSON 以外的任何文字。\nJSON 必须可以被 JSON.parse 正常解析。\n字段完整，字段顺序固定，无尾逗号，无未转义换行。\n\n必须严格输出以下字段名：\nscenePrompt01、scenePrompt02、scenePrompt03、scenePrompt04、scenePrompt05、scenePrompt06、scenePrompt07。\n\n字段名中的 0 必须是阿拉伯数字 0，不得写成英文字母 O 或 o。\n必须输出 scenePrompt03，不得输出 scenePromptO3、scenePrompto3、scenePrompt3、scenePrompt_03、scene_prompt03 或任何其他变体。\n\n# 固定 JSON 结构\n\n{\n  \"productAppearance\": \"\",\n  \"sellingPoints\": [],\n  \"targetMarket\": \"\",\n  \"scenePrompt01\": {\"prompt\":\"\",\"title\":\"\",\"titleDescription\":\"\"},\n  \"scenePrompt02\": {\"prompt\":\"\",\"title\":\"\",\"titleDescription\":\"\"},\n  \"scenePrompt03\": {\"prompt\":\"\",\"title\":\"\",\"titleDescription\":\"\"},\n  \"scenePrompt04\": {\"prompt\":\"\",\"title\":\"\",\"titleDescription\":\"\"},\n  \"scenePrompt05\": {\"prompt\":\"\",\"title\":\"\",\"titleDescription\":\"\"},\n  \"scenePrompt06\": {\"prompt\":\"\",\"title\":\"\",\"titleDescription\":\"\"},\n  \"scenePrompt07\": {\"prompt\":\"\",\"title\":\"\",\"titleDescription\":\"\"}\n}\n\n# productAppearance 规则\n\nproductAppearance 是产品外观描述，必须基于参考图和产品信息总结：\n颜色、形状、结构、材质质感、按钮/按键/开关/旋钮、接口/孔位/指示灯、风口/开口、线缆/手柄/支架/配件等可见细节。\n\nproductAppearance 必须强调：后续生成产品图时，必须严格保持参考图中的产品外观、颜色、结构、比例、材质质感、按键位置、接口位置、孔位和关键细节一致。\n\nproductAppearance 只描述外观，不要把功能卖点写成外观结构，不得添加图片中不存在的外观、结构或配件。\n\n# sellingPoints 规则\n\nsellingPoints 必须输出 7 条中文产品卖点。\n卖点应根据 productName、productDescription、productAppearance、Category、targetPlatform、Country 和当前类目规则生成。\n卖点必须真实有效，不得虚构用户没有提供、图片中也看不到的功能、参数、认证、配件或效果。\n不得使用“最强、第一、100%、永久”等绝对化表述。\n\n# targetMarket 规则\n\ntargetMarket 必须使用中文。\n根据 Country、targetPlatform、productDescription、sellingPoints 和 Category 生成目标市场和目标人群描述。\n内容应包括销售国家、销售平台、适合人群、典型使用场景、产品适用需求。\n\n# 7 条主图展示场景规则\n\n必须输出 scenePrompt01 到 scenePrompt07，共 7 个场景对象。\n每个 scenePrompt 包含：\n- prompt：中文产品主图展示场景描述\n- title：根据当前标题语言策略生成的标题；细节展示或特写场景必须为空字符串 \"\"\n- titleDescription：根据当前标题语言策略生成的标题描述；细节展示或特写场景必须为空字符串 \"\"\n\nscenePrompt.prompt 只描述产品主图展示场景，不是完整图生图提示词。\n不要写模型参数、分辨率、采样、镜头参数、完整风格堆词或最终图生图模板。\n\n# 场景分布硬性规则\n\n生成 7 个场景时，必须控制场景类型分布，避免大量重复的细节图、特写图或局部结构图。\n\n硬性要求：\n1. 7 个场景中，细节展示场景和特写展示场景合计不得超过 2 个。\n2. 7 个场景中，至少 4 个场景必须属于以下类型之一：\n   - 真实使用场景\n   - 模特试穿 / 模特试用场景\n   - 产品试用场景\n   - 生活方式场景\n   - 多场景应用场景\n   - 动态体验场景\n3. 不得生成 3 个或以上仅展示局部结构、材质纹理、鞋底、接口、按钮、孔位、配件或工艺的场景。\n4. 每个场景必须有明确展示目的，7 个场景要覆盖：展示外观、使用体验、适用场景、生活方式、卖点强化、适量细节。\n5. 如果产品适合被人物穿着、佩戴、手持或试用，应优先增加模特试穿、模特试用、真实使用、生活方式场景的数量，但人物不得遮挡商品主体。\n\n对于鞋类、服饰、包袋等穿戴类产品：\n- 至少 2 个场景必须是模特试穿 / 上脚 / 上身 / 背包 / 手持 / 穿搭展示场景；\n- 至少 1 个场景必须是动态穿着、出行使用或生活方式场景；\n- 细节图和特写图合计最多 2 个。\n\n对于小家电、个护、家居工具、厨具等产品：\n- 至少 2 个场景必须是真实试用或使用场景；\n- 至少 1 个场景必须是生活方式或多场景应用场景；\n- 细节图和特写图合计最多 2 个。\n\n# 细节展示和特写场景定义\n\n只有当画面主体明确聚焦于产品局部区域，并且主要目的是展示局部结构、材质纹理、工艺细节或微距质感时，才可判定为细节展示或特写场景。\n\n细节展示或特写场景包括：\n- 微距特写\n- 局部结构特写\n- 材质纹理特写\n- 工艺细节特写\n- 近距离聚焦局部区域\n\n以下场景不应判定为细节展示或特写场景：\n- 商品整体展示图\n- 模特试穿图\n- 真实使用图\n- 生活方式图\n- 穿搭展示图\n- 多场景应用图\n- 带有完整产品主体的卖点强化图\n\n如果某个场景属于细节展示或特写场景：\n- title 必须输出空字符串 \"\"\n- titleDescription 必须输出空字符串 \"\"\n- prompt 中应说明该场景不添加标题和描述文字\n\n# scenePrompt.prompt 规则\n\n每个 prompt 必须使用中文，具体、清晰，让下游图生图提示词组装节点能理解该主图应该展示什么场景。\n\n每个 prompt 应包含：\n- 当前场景主题\n- 要突出的卖点或功能\n- 产品主体展示方式\n- 场景环境\n- 使用方式、试穿方式、试用方式或展示方式\n- 画面应突出商品主体\n- 必须保持参考图产品外观一致\n- 非细节展示场景可以使用少量清晰文字，且文字不得遮挡产品\n- 不改变产品结构、颜色、比例和关键细节\n\n7 个场景必须动态编排，不能机械套用同一套场景结构，不能重复表达同一个卖点。\n应适当增加产品真实使用、模特试穿、模特试用、生活方式和动态体验场景数量，避免 7 张图过于单一。\n\n# title 规则\n\n每个 scenePrompt 必须包含 title 字段。\n如果当前场景是细节展示或特写场景，title 必须输出空字符串 \"\"。\n如果当前场景不是细节展示或特写场景，title 必须严格遵守当前标题语言策略。\ntitle 必须不超过 ${titleLimit} 个字符，字符数包含空格、数字和标点。\ntitle 应简短醒目，概括当前场景核心卖点或展示主题。\n不得使用夸张营销词，不得虚构产品参数。\n\n# titleDescription 规则\n\n每个 scenePrompt 必须包含 titleDescription 字段。\n如果当前场景是细节展示或特写场景，titleDescription 必须输出空字符串 \"\"。\n如果当前场景不是细节展示或特写场景，titleDescription 必须严格遵守当前标题语言策略。\ntitleDescription 必须不超过 ${titleDescriptionLimit} 个字符，字符数包含空格、数字和标点。\ntitleDescription 应说明当前场景中的产品功能、使用方式或适用场景，并与 prompt 语义一致。\n不得写长句、大段文字，不得虚构参数、认证、功能或用户未提供的卖点。\n\n# 禁止事项\n\n不得输出 JSON 以外的任何内容。\n不得生成图片。\n不得生成完整图生图提示词。\n不得把这些参考图固定理解为正面、背面、侧面。\n不得虚构产品不存在的功能、参数、配件、认证、材质或使用方式。\n不得把图片中看不到的细节写成确定事实。\n不得改变产品外观、颜色、结构、比例和关键细节。\n不得添加图片中不存在的按钮、屏幕、喷嘴、支架、收纳盒等结构。\n不得使用“最强、第一、100%、永久”等绝对化表述。\n不得让人物、背景、文字遮挡商品主体。\n不得所有产品都使用同一套场景逻辑。\n不得让 title 或 titleDescription 超过长度限制。\n不得让 title 和 titleDescription 使用错误语言。\n不得生成超过 2 个细节展示或特写场景。\n\n# 最终自检\n\n输出前检查：\n1. 是否只输出 JSON；\n2. 是否字段完整且顺序正确；\n3. 是否 JSON 格式合法；\n4. 是否 sellingPoints 正好 7 条；\n5. 是否 scenePrompt01 到 scenePrompt07 共 7 个；\n6. 是否每个 scenePrompt 都包含 prompt、title、titleDescription；\n7. 是否细节展示和特写场景合计不超过 2 个；\n8. 是否至少 4 个场景属于真实使用、模特试穿、模特试用、生活方式、多场景应用或动态体验；\n9. 如果是穿戴类产品，是否至少 2 个场景为模特试穿、上脚、上身、背包、手持或穿搭展示；\n10. 是否 title 和 titleDescription 符合语言与长度要求；\n11. 是否没有虚构功能、参数、配件、认证；\n12. 是否没有 JSON 以外的任何文字。\n\n最终回复只能是 JSON 对象。\n`.trim();\n\nreturn [\n  {\n    json: {\n      ...constantsInput,\n      ...sourceInput,\n      Language: languagePolicy.code,\n      languagePolicy,\n      sysPrompt: baseSystemPrompt,\n      normalizedCategory,\n      categoryRule,\n      categoryRulesVersion: rules.version || '',\n      titleLimit,\n      titleDescriptionLimit\n    }\n  }\n];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -320,7 +320,7 @@
       "id": "a2f12614-ea71-41ca-832c-54207ed16049",
       "name": "sysPrompt",
       "notesInFlow": true,
-      "notes": "动态生成：通用基础 System Prompt + Category 类目规则包"
+      "notes": "按当前任务动态规范 ru-RU/en-US/zh-CN 标题语言，并生成类目场景系统提示词"
     },
     {
       "parameters": {
@@ -399,6 +399,125 @@
         976,
         480
       ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "34cdd131-86fd-450b-aead-d05d716aefc4",
+              "leftValue": "={{ $json.needsTitleLanguageCorrection }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "2f0f9c21-58ca-4c09-a74d-c0bc2e4023ac",
+      "name": "Needs Title Language Correction",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1984,
+        480
+      ],
+      "notesInFlow": true,
+      "notes": "仅当非空 title/titleDescription 不符合当前语言策略时进入一次纠正"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json || {};\nconst languagePolicy = input.languagePolicy;\nconst violations = Array.isArray(input.violations) ? input.violations : [];\nconst originalResult = input.result;\nif (!originalResult || typeof originalResult !== 'object' || Array.isArray(originalResult)) {\n  throw new Error('S013_TITLE_LANGUAGE_CORRECTION_FAILED: missing original result');\n}\nif (!languagePolicy || !['ru-RU', 'en-US', 'zh-CN'].includes(languagePolicy.code)) {\n  throw new Error('S013_LANGUAGE_UNSUPPORTED: correction branch received invalid language policy');\n}\nif (violations.length < 1) {\n  throw new Error('S013_TITLE_LANGUAGE_CORRECTION_FAILED: correction branch received no violations');\n}\n\nconst requestSource = $('Build Qwen Request with SiliconFlow URLs').first().json || {};\nconst constants = requestSource.constants || {};\nconst model = String(constants.model?.Model_Run || '').trim();\nconst baseUrl = String(constants.BaseUrl?.BaseUrl_Run || '').trim();\nconst authorization = String(constants.Authorization?.APIKey_Run || '').trim();\nif (!model) throw new Error('Missing constants.model.Model_Run');\nif (!baseUrl) throw new Error('Missing constants.BaseUrl.BaseUrl_Run');\nif (!authorization) throw new Error('Missing constants.Authorization.APIKey_Run');\n\nconst limits = $('sysPrompt').first().json || {};\nconst correctionItems = violations.map((violation) => ({\n  sceneKey: violation.sceneKey,\n  field: violation.field,\n  invalidValue: violation.value,\n  reasons: violation.reasons,\n  scenePrompt: String(originalResult?.[violation.sceneKey]?.prompt ?? ''),\n  maxLength: violation.field === 'title' ? limits.titleLimit : limits.titleDescriptionLimit,\n}));\n\nconst correctionSystemPrompt = [\n  '你只负责修正电商主图 JSON 中语言不合格的标题字段。',\n  '当前规范语言代码：' + languagePolicy.code,\n  languagePolicy.promptInstruction,\n  '只修正输入 violations 列出的字段，不得新增、删除或修改其他字段。',\n  '每个违规字段必须且只能返回一次，value 必须是非空字符串并遵守 maxLength。',\n  '只能输出 JSON 对象，结构必须严格为：{\"corrections\":[{\"sceneKey\":\"scenePrompt01\",\"field\":\"title\",\"value\":\"修正后的值\"}]}',\n  '禁止输出 Markdown、解释或 JSON 以外的内容。',\n].join('\\n');\n\nconst request = {\n  model,\n  messages: [\n    { role: 'system', content: correctionSystemPrompt },\n    { role: 'user', content: JSON.stringify({ language: languagePolicy.code, violations: correctionItems }) },\n  ],\n  enable_thinking: false,\n  response_format: { type: 'json_object' },\n  temperature: 0,\n};\n\nreturn [{ json: { request, constants, originalResult, languagePolicy, violations } }];"
+      },
+      "id": "f0e40e82-8858-4eec-a07d-f54af31812b3",
+      "name": "Build Controlled Title Correction",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2208,
+        384
+      ],
+      "notesInFlow": true,
+      "notes": "仅提交违规标题字段，构造一次受控 Qwen 纠正请求"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.constants.BaseUrl.BaseUrl_Run }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ $json.constants.Authorization.APIKey_Run }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.request }}",
+        "options": {
+          "timeout": 180000
+        }
+      },
+      "id": "18777f5a-dd8f-40ed-a013-c77e7e4b3ff6",
+      "name": "HTTP Request Title Correction",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2432,
+        384
+      ],
+      "notesInFlow": true,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "notes": "仅在标题语言校验失败时调用一次 Qwen，复用 Model_Run、BaseUrl_Run、APIKey_Run"
+    },
+    {
+      "parameters": {
+        "jsCode": "function parseAssistantJson(response, errorCode = 'S013_QWEN_OUTPUT_INVALID') {\n  let content = response?.choices?.[0]?.message?.content ?? response?.message?.content ?? response?.content;\n  if (content && typeof content === 'object' && !Array.isArray(content)) return content;\n  if (typeof content !== 'string') throw new Error(errorCode + ': response did not include object content');\n  let text = content.trim();\n  const fenced = text.match(/^```(?:json)?\\s*([\\s\\S]*?)\\s*```$/i);\n  if (fenced) text = fenced[1].trim();\n  let parsed;\n  try {\n    parsed = JSON.parse(text);\n  } catch (firstError) {\n    const firstBrace = text.indexOf('{');\n    const lastBrace = text.lastIndexOf('}');\n    if (firstBrace === -1 || lastBrace <= firstBrace) throw new Error(errorCode + ': response is not valid JSON');\n    try {\n      parsed = JSON.parse(text.slice(firstBrace, lastBrace + 1));\n    } catch (secondError) {\n      throw new Error(errorCode + ': response is not valid JSON');\n    }\n  }\n  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {\n    throw new Error(errorCode + ': response JSON must be an object');\n  }\n  return parsed;\n}\n\nfunction findTitleLanguageViolations(result, languagePolicy) {\n  const sceneKeys = Array.from({ length: 7 }, (_, index) => `scenePrompt${String(index + 1).padStart(2, '0')}`);\n  const titleFields = ['title', 'titleDescription'];\n  const violations = [];\n  const code = languagePolicy?.code;\n  if (!['ru-RU', 'en-US', 'zh-CN'].includes(code)) {\n    throw new Error('S013_LANGUAGE_UNSUPPORTED: normalized Language=' + String(code || 'EMPTY'));\n  }\n  for (const sceneKey of sceneKeys) {\n    const scene = result?.[sceneKey];\n    if (!scene || typeof scene !== 'object' || Array.isArray(scene)) continue;\n    for (const field of titleFields) {\n      const raw = scene[field];\n      const value = raw === undefined || raw === null ? '' : String(raw).trim();\n      if (!value) continue;\n      const reasons = [];\n      const hasCyrillic = /[\\u0400-\\u04FF]/.test(value);\n      const hasHan = /[\\u3400-\\u9FFF]/.test(value);\n      const hasLatin = /[A-Za-z]/.test(value);\n      if (code === 'ru-RU') {\n        if (!hasCyrillic) reasons.push('missing_cyrillic');\n        if (hasHan) reasons.push('contains_han');\n      } else if (code === 'en-US') {\n        if (!hasLatin) reasons.push('missing_latin');\n        if (hasHan) reasons.push('contains_han');\n        if (hasCyrillic) reasons.push('contains_cyrillic');\n      } else {\n        if (!hasHan) reasons.push('missing_han');\n        if (hasCyrillic) reasons.push('contains_cyrillic');\n      }\n      if (reasons.length) violations.push({ sceneKey, field, value, reasons });\n    }\n  }\n  return violations;\n}\n\nconst response = $input.first().json || {};\nconst context = $('Build Controlled Title Correction').first().json || {};\nconst languagePolicy = context.languagePolicy;\nconst originalResult = context.originalResult;\nconst violations = Array.isArray(context.violations) ? context.violations : [];\nlet parsed;\ntry {\n  parsed = parseAssistantJson(response, 'S013_TITLE_LANGUAGE_CORRECTION_FAILED');\n} catch (error) {\n  throw new Error(error.message);\n}\nconst corrections = parsed.corrections;\nif (!Array.isArray(corrections)) {\n  throw new Error('S013_TITLE_LANGUAGE_CORRECTION_FAILED: corrections must be an array');\n}\nconst expected = new Map();\nfor (const violation of violations) {\n  const key = violation.sceneKey + '.' + violation.field;\n  if (expected.has(key)) throw new Error('S013_TITLE_LANGUAGE_CORRECTION_FAILED: duplicate source violation ' + key);\n  expected.set(key, violation);\n}\nif (corrections.length !== expected.size) {\n  throw new Error('S013_TITLE_LANGUAGE_CORRECTION_FAILED: expected ' + expected.size + ' corrections, received ' + corrections.length);\n}\nconst corrected = JSON.parse(JSON.stringify(originalResult));\nconst seen = new Set();\nfor (const correction of corrections) {\n  if (!correction || typeof correction !== 'object' || Array.isArray(correction)) {\n    throw new Error('S013_TITLE_LANGUAGE_CORRECTION_FAILED: every correction must be an object');\n  }\n  const keys = Object.keys(correction).sort();\n  if (JSON.stringify(keys) !== JSON.stringify(['field', 'sceneKey', 'value'])) {\n    throw new Error('S013_TITLE_LANGUAGE_CORRECTION_FAILED: correction fields must be sceneKey, field, value');\n  }\n  const key = String(correction.sceneKey) + '.' + String(correction.field);\n  if (!expected.has(key) || seen.has(key)) {\n    throw new Error('S013_TITLE_LANGUAGE_CORRECTION_FAILED: unexpected or duplicate correction ' + key);\n  }\n  if (typeof correction.value !== 'string' || !correction.value.trim()) {\n    throw new Error('S013_TITLE_LANGUAGE_CORRECTION_FAILED: corrected value must be a non-empty string for ' + key);\n  }\n  if (!corrected[correction.sceneKey] || typeof corrected[correction.sceneKey] !== 'object' || Array.isArray(corrected[correction.sceneKey])) {\n    throw new Error('S013_TITLE_LANGUAGE_CORRECTION_FAILED: missing scene object ' + String(correction.sceneKey));\n  }\n  corrected[correction.sceneKey][correction.field] = correction.value.trim();\n  seen.add(key);\n}\nconst remaining = findTitleLanguageViolations(corrected, languagePolicy);\nif (remaining.length) {\n  const details = remaining.map((item) => item.sceneKey + '.' + item.field + ':' + item.reasons.join('+')).join(',');\n  throw new Error('S013_TITLE_LANGUAGE_CORRECTION_FAILED: language=' + languagePolicy.code + '; violations=' + details);\n}\nreturn [{ json: { result: corrected } }];"
+      },
+      "id": "8d9fbe46-2a9e-40c7-8daf-8dfdaf67891b",
+      "name": "Apply and Validate Title Correction",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2656,
+        384
+      ],
+      "notesInFlow": true,
+      "notes": "严格应用完整且唯一的字段修正，并再次执行同一语言校验"
+    },
+    {
+      "parameters": {
+        "jsCode": "const result = $input.first().json?.result;\nif (!result || typeof result !== 'object' || Array.isArray(result)) {\n  throw new Error('S013_QWEN_OUTPUT_INVALID: validated result is missing');\n}\nreturn [{ json: result }];"
+      },
+      "id": "2cb7d532-7f39-4103-8a19-2e3c2603904a",
+      "name": "Emit Validated Qwen Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2880,
+        544
+      ],
+      "notesInFlow": true,
+      "notes": "移除内部语言策略和纠正元数据，只输出原有 S013 JSON 对象"
     }
   ],
   "connections": {
@@ -546,6 +665,68 @@
         [
           {
             "node": "Upload Images to SiliconFlow",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Qwen JSON Output": {
+      "main": [
+        [
+          {
+            "node": "Needs Title Language Correction",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Needs Title Language Correction": {
+      "main": [
+        [
+          {
+            "node": "Build Controlled Title Correction",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Emit Validated Qwen Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Controlled Title Correction": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request Title Correction",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request Title Correction": {
+      "main": [
+        [
+          {
+            "node": "Apply and Validate Title Correction",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply and Validate Title Correction": {
+      "main": [
+        [
+          {
+            "node": "Emit Validated Qwen Output",
             "type": "main",
             "index": 0
           }
