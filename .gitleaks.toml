@@ -1,0 +1,12 @@
+title = "MerchRoute secret scanning"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "S013 fixed scenePrompt01-scenePrompt07 field identifiers are schema keys, not credentials"
+targetRules = ["generic-api-key"]
+regexTarget = "line"
+regexes = [
+  '''sceneKey(?:["']|\\?["'])?\s*:\s*(?:\\?["'])scenePrompt0[1-7](?:\\?["'])'''
+]
