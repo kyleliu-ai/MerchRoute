@@ -15,19 +15,50 @@
 - Windows：`%LOCALAPPDATA%\MerchRoute\secrets\credentials.local.json`
 - macOS：`~/Library/Application Support/MerchRoute/secrets/credentials.local.json`
 
-## 1. `jimeng-session.token`
+## 1. `qwen-runtime`（共享 Global Constants）
 
-**用途**：让本机 Jimeng 代理以用户自己的即梦账号执行后续图片/视频请求。该值等同账号会话权限，会过期，退出登录或修改账号安全设置后也可能失效。
+**用途**：同一份 n8n Global Constants 同时保存千问和即梦代理参数。逻辑别名继续使用 `qwen-runtime` 以兼容既有安装配置；工作流运行时分别读取以下字段：
 
-**获取步骤**：
+| 本机配置字段 | Global Constants 字段 | 用途 |
+|---|---|---|
+| `model` | `model.Model_Run` | OpenAI 兼容模型名 |
+| `baseUrl` | `BaseUrl.BaseUrl_Run` | OpenAI 兼容 `chat/completions` URL |
+| `apiKey` | `Authorization.APIKey_Run` | OpenAI 兼容服务授权，导入时自动添加 `Bearer ` |
+| `jimengModel` | `model.jimengModel` | 即梦代理模型名 |
+| `jimengUrl` | `BaseUrl.JimengUrl` | 即梦代理 HTTP(S) 服务根 URL，不含 API 路径、查询参数或片段 |
+| `jimengAuthorValue` | `Authorization.jimengAuthorValue` | 即梦代理 `Authorization` 请求头完整值 |
 
-1. 用 Chrome 打开 <https://jimeng.jianying.com/> 并登录用户自己的账号。
-2. macOS 按 `Option + Command + I`；Windows 按 `F12` 打开开发者工具。
-3. 进入 `Application` → `Storage` → `Cookies` → `https://jimeng.jianying.com`。如果看不到 `Application`，点击顶部 `»` 展开。
-4. 搜索名称严格等于 `sessionid` 的 Cookie，只复制它的 `Value`。
-5. 把 Value 填入 `jimeng-session.token`。不要填写 `sessionid=`，不要添加 `Bearer `，也不要复制整段 Cookie 头。
+### 千问字段 `model` / `baseUrl` / `apiKey`
 
-**只读验证**：本机 Jimeng `POST http://127.0.0.1:8000/token/check` 必须返回 `live: true`；不得通过生成付费媒体验证。获取方式与上游说明一致：<https://github.com/zhizinan1997/jimeng-free-api-all#-接入指南>。
+`model` 和 `baseUrl` 不是秘钥；`apiKey` 是秘钥。默认中国区非敏感参数为：
+
+```json
+{
+  "model": "qwen3.7-plus",
+  "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+}
+```
+
+1. 登录阿里云百炼控制台的 API Key 管理页：<https://bailian.console.aliyun.com/?tab=model#/api-key>。
+2. 确认选择的地域/业务空间与 `baseUrl` 一致。上述默认地址对应中国站华北 2（北京）的 OpenAI 兼容接口。
+3. 在“API Key”/“密钥管理”中为 MerchRoute 创建专用 Key，优先使用只能访问所需模型的业务空间。
+4. 只复制 Key 本身到 `qwen-runtime.apiKey`，不要添加 `Bearer `。凭据导入器会在写入 n8n 加密凭据时自动生成 `Authorization: Bearer <API-Key>`。
+5. 不要把 Coding Plan 专用 Key、新加坡/美国地域 Key 与上述北京默认 `baseUrl` 混用。如用户明确选择其他地域或 OpenAI 兼容服务，必须让用户确认该服务的 `model` 和 `baseUrl`，但仍不得在聊天中收集 `apiKey`。
+
+官方说明：<https://help.aliyun.com/zh/model-studio/get-api-key/>。
+
+### 即梦字段 `jimengModel` / `jimengUrl` / `jimengAuthorValue`
+
+`jimengModel` 和 `jimengUrl` 不是秘钥；`jimengAuthorValue` 是秘钥。`jimengUrl` 必须填写当前机器可访问的代理服务根 URL，例如 `http://127.0.0.1:8000`，不要追加 `/v1/images/...`。工作流会按操作类型拼接 API 路径。
+
+1. 按已部署的 `jimeng-free-api-all` 配置确认代理根 URL 和受支持的模型名，分别填入 `qwen-runtime.jimengUrl`、`qwen-runtime.jimengModel`。
+2. 用 Chrome 打开 <https://jimeng.jianying.com/> 并登录用户自己的账号。
+3. macOS 按 `Option + Command + I`；Windows 按 `F12` 打开开发者工具。
+4. 进入 `Application` → `Storage` → `Cookies` → `https://jimeng.jianying.com`。如果看不到 `Application`，点击顶部 `»` 展开。
+5. 搜索名称严格等于 `sessionid` 的 Cookie，只复制它的 `Value`。
+6. 把 `Bearer ` 与 Cookie Value 组成完整请求头值并填入 `qwen-runtime.jimengAuthorValue`，例如格式为 `Bearer <sessionid>`。不要填写 `sessionid=`，也不要复制整段 Cookie 头。
+
+**只读验证**：部署脚本根据 `qwen-runtime.jimengUrl` 拼接 `/token/check`，并用 `jimengAuthorValue` 中的 token 验证 `live: true`；不得通过生成付费媒体验证。获取方式与上游说明一致：<https://github.com/zhizinan1997/jimeng-free-api-all#-接入指南>。
 
 ## 2. `siliconflow-api.token`
 
@@ -42,30 +73,7 @@
 
 官方步骤：<https://docs.siliconflow.cn/cn/userguide/quickstart>。
 
-## 3. `qwen-runtime.model` / `baseUrl` / `apiKey`
-
-**用途**：为 n8n 工作流提供 OpenAI 兼容的千问模型调用。`model` 和 `baseUrl` 不是秘钥；`apiKey` 是秘钥。
-
-**默认中国区配置**：
-
-```json
-{
-  "model": "qwen3.7-plus",
-  "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
-}
-```
-
-**获取步骤**：
-
-1. 登录阿里云百炼控制台的 API Key 管理页：<https://bailian.console.aliyun.com/?tab=model#/api-key>。
-2. 确认选择的地域/业务空间与 `baseUrl` 一致。上述默认地址对应中国站华北 2（北京）的 OpenAI 兼容接口。
-3. 在“API Key”/“密钥管理”中为 MerchRoute 创建专用 Key，优先使用只能访问所需模型的业务空间。
-4. 只复制 Key 本身到 `qwen-runtime.apiKey`，不要添加 `Bearer `。凭据导入器会在写入 n8n 加密凭据时自动生成 `Authorization: Bearer <API-Key>`。
-5. 不要把 Coding Plan 专用 Key、新加坡/美国地域 Key 与上述北京默认 `baseUrl` 混用。如用户明确选择其他地域或 OpenAI 兼容服务，必须让用户确认该服务的 `model` 和 `baseUrl`，但仍不得在聊天中收集 `apiKey`。
-
-官方说明：<https://help.aliyun.com/zh/model-studio/get-api-key/>。
-
-## 4. `merchroute-runtime.runtimeKey`
+## 3. `merchroute-runtime.runtimeKey`
 
 **用途**：MerchRoute 服务与本机 n8n 访问 Runtime API 时共用的认证密钥。
 
@@ -81,7 +89,7 @@
 
 重复执行部署必须复用已存在的值。只有当用户明确要恢复另一台电脑的旧 n8n 数据库时，才需要作为完整密钥恢复计划的一部分单独处理；不得临时在聊天中传递。
 
-## 5. `wb-seller-api.token`
+## 4. `wb-seller-api.token`
 
 **用途**：访问 Wildberries Seller API。部署探测只读取类目；以后启用 WB 自动上品时，Token 还必须拥有对应的商品内容、价格和库存/仓库权限。
 
@@ -95,7 +103,7 @@
 
 官方说明：<https://dev.wildberries.ru/knowledge-base/articles/019d49a0-f9f7-79a4-b5ee-df5dabe9cff4>。若权限不足，只读探测可能返回 `401/403`；不得改用创建商品来试错。
 
-## 6. `ozon-seller-api.clientId` / `apiKey`
+## 5. `ozon-seller-api.clientId` / `apiKey`
 
 **用途**：以 `Client-Id` 和 `Api-Key` 两个请求头访问 Ozon Seller API。`clientId` 和 `apiKey` 都按敏感授权信息处理，都不得进入 Git 或聊天。
 
@@ -114,5 +122,5 @@ Ozon Seller API 官方文档入口：<https://docs.ozon.ru/api/seller/>。部署
 
 1. 用户保存并关闭本机编辑器，只告诉智能体“已保存”，不提供文件内容。
 2. 智能体确认文件仍在仓库外且仅当前用户可读；不回显文件。
-3. 执行标准 `import-n8n` 与 `probe --allow-network-probes=true`，只报告六组凭据逐项的成功/失败和 HTTP 状态。
+3. 执行标准 `import-n8n` 与 `probe --allow-network-probes=true`，只报告五组逻辑凭据、六项只读探测逐项的成功/失败和 HTTP 状态。
 4. 如任一必需账号尚未开通、用户无权创建 Key，或不愿在当前阶段提供，保持 36 个工作流全部停用，把部署结论标记为“未完成：等待用户在本机填写 `<逻辑别名>`”，不得伪造值、不得跳过验收。

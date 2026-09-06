@@ -179,9 +179,9 @@ Profile 已完成且状态文件一致时，重复执行默认复用现有目录
 
 讲解完成后，再明确告诉用户：
 
-> 请只在已打开的本机文件中填写五组平台凭据；`merchroute-runtime.runtimeKey` 保持为空，脚本会自动使用仓库外已生成的值。保存并关闭编辑器后，只需在聊天中回复“已保存”。不要把文件内容、密钥、Cookie、Client-Id 或截图发到聊天中。
+> 请只在已打开的本机文件中填写四组平台配置；`merchroute-runtime.runtimeKey` 保持为空，脚本会自动使用仓库外已生成的值。保存并关闭编辑器后，只需在聊天中回复“已保存”。不要把文件内容、密钥、Cookie、Client-Id 或截图发到聊天中。
 
-所需逻辑凭据以 `deployment/n8n/credential-requirements.json` 为准，共 6 组：Jimeng session、SiliconFlow、Qwen/OpenAI 兼容配置、MerchRoute 运行密钥、WB Seller API、OZON Seller API。MerchRoute 运行密钥由脚本自动生成，留空时自动使用外部环境中的值。
+所需逻辑凭据以 `deployment/n8n/credential-requirements.json` 为准，共 5 组：共享 Global Constants（同时包含 Jimeng 与 Qwen/OpenAI 兼容配置）、SiliconFlow、MerchRoute 运行密钥、WB Seller API、OZON Seller API。MerchRoute 运行密钥由脚本自动生成，留空时自动使用外部环境中的值。
 
 如果用户尚无某个平台账号、没有创建密钥的权限，或不愿在当前阶段填写，不得伪造、使用示例值或跳过该凭据。保持工作流全部停用，将部署标记为“未完成”，并告诉用户稍后可从该暂停点幂等重跑。
 

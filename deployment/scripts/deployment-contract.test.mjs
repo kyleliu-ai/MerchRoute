@@ -46,18 +46,24 @@ function fixtureWorkflow(id, nodeName, type, existingId) {
 
 function validCredentialInput() {
   return { credentials: {
-    'jimeng-session': { token: 'fixture-jimeng' },
     'siliconflow-api': { token: 'fixture-silicon' },
-    'qwen-runtime': { model: 'fixture-model', baseUrl: 'https://example.invalid/v1/chat/completions', apiKey: 'fixture-qwen' },
+    'qwen-runtime': {
+      model: 'fixture-model',
+      baseUrl: 'https://example.invalid/v1/chat/completions',
+      apiKey: 'fixture-qwen',
+      jimengModel: 'fixture-jimeng-model',
+      jimengUrl: 'http://127.0.0.1:8000/',
+      jimengAuthorValue: 'Bearer fixture-jimeng',
+    },
     'merchroute-runtime': { runtimeKey: '' },
     'wb-seller-api': { token: 'fixture-wb' },
     'ozon-seller-api': { clientId: 'fixture-client', apiKey: 'fixture-ozon' },
   } };
 }
 
-test('credential requirements replace live IDs and names with six logical aliases', () => {
+test('credential requirements replace live IDs and names with five logical aliases', () => {
   const workflows = [
-    fixtureWorkflow('Wxng7hVbjMNhVOaO', 'Generate Cutout Image', 'httpBearerAuth', 'secret-live-id-1'),
+    fixtureWorkflow('Wxng7hVbjMNhVOaO', 'Global Constants', 'globalConstantsApi', 'secret-live-id-3'),
     fixtureWorkflow('5fKlIwJWfXJM1y4E', 'Upload Image', 'httpBearerAuth', 'secret-live-id-2'),
     fixtureWorkflow('pLoryDijfFiNwKiI', 'Global Constants', 'globalConstantsApi', 'secret-live-id-3'),
     fixtureWorkflow('WbwJ8ufnL349l9hk', 'POST Create Job', 'httpHeaderAuth', 'secret-live-id-4'),
@@ -66,7 +72,7 @@ test('credential requirements replace live IDs and names with six logical aliase
   ];
   const result = buildCredentialRequirements(workflows);
   const serialized = JSON.stringify(result);
-  assert.equal(result.requirements.length, 6);
+  assert.equal(result.requirements.length, 5);
   assert.equal(result.bindings.length, 6);
   assert.doesNotMatch(serialized, /secret-live-id|must-not-persist/);
 });
@@ -74,8 +80,12 @@ test('credential requirements replace live IDs and names with six logical aliase
 test('credential import data uses the generated runtime key without logging it', () => {
   const input = validCredentialInput();
   const result = buildCredentialImportData(input, 'fixture-runtime');
+  const constants = JSON.parse(result['qwen-runtime'].globalConstants);
   assert.equal(result['merchroute-runtime'].value, 'fixture-runtime');
-  assert.equal(JSON.parse(result['qwen-runtime'].globalConstants).Authorization.APIKey_Run, 'Bearer fixture-qwen');
+  assert.equal(constants.Authorization.APIKey_Run, 'Bearer fixture-qwen');
+  assert.equal(constants.Authorization.jimengAuthorValue, 'Bearer fixture-jimeng');
+  assert.equal(constants.model.jimengModel, 'fixture-jimeng-model');
+  assert.equal(constants.BaseUrl.JimengUrl, 'http://127.0.0.1:8000');
   assert.equal(JSON.parse(result['ozon-seller-api'].json).headers['Client-Id'], 'fixture-client');
 });
 
@@ -84,6 +94,15 @@ test('credential import normalizes an accidental Qwen Bearer prefix without dupl
   input.credentials['qwen-runtime'].apiKey = 'Bearer fixture-qwen';
   const result = buildCredentialImportData(input, 'fixture-runtime');
   assert.equal(JSON.parse(result['qwen-runtime'].globalConstants).Authorization.APIKey_Run, 'Bearer fixture-qwen');
+});
+
+test('credential import rejects a Jimeng URL that is not a service root', () => {
+  const input = validCredentialInput();
+  input.credentials['qwen-runtime'].jimengUrl = 'http://127.0.0.1:8000/v1/images';
+  assert.throws(
+    () => buildCredentialImportData(input, 'fixture-runtime'),
+    /jimengUrl 必须是无路径、查询参数和片段的 HTTP\(S\) 服务根 URL/,
+  );
 });
 
 test('workflow importer dry-run validates all inputs without writing to n8n', async () => {
@@ -590,10 +609,10 @@ test('project agent rules keep local MerchRoute state authoritative until a seco
 
 test('credential acquisition guide covers every logical alias and prevents secret disclosure', async () => {
   const guide = await readFile(path.join(projectRoot, 'deployment', 'CREDENTIAL_SETUP.zh-CN.md'), 'utf8');
-  for (const alias of ['jimeng-session', 'siliconflow-api', 'qwen-runtime', 'merchroute-runtime', 'wb-seller-api', 'ozon-seller-api']) {
+  for (const alias of ['siliconflow-api', 'qwen-runtime', 'merchroute-runtime', 'wb-seller-api', 'ozon-seller-api']) {
     assert.match(guide, new RegExp(alias));
   }
-  for (const required of ['sessionid', 'cloud.siliconflow.cn/account/ak', 'bailian.console.aliyun.com', 'seller.wildberries.ru', 'seller.ozon.ru', '不得只说“请填写 Key”', 'runtimeKey', '保持为空', '不要添加 `Bearer `']) {
+  for (const required of ['sessionid', 'jimengModel', 'jimengUrl', 'jimengAuthorValue', 'cloud.siliconflow.cn/account/ak', 'bailian.console.aliyun.com', 'seller.wildberries.ru', 'seller.ozon.ru', '不得只说“请填写 Key”', 'runtimeKey', '保持为空', 'Authorization: Bearer']) {
     assert.match(guide, new RegExp(required.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
 });

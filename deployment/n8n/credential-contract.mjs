@@ -1,13 +1,6 @@
 import { createHash } from 'node:crypto';
 
 export const CREDENTIAL_DEFINITIONS = Object.freeze({
-  'jimeng-session': {
-    credentialId: 'mrJimengSession01',
-    type: 'httpBearerAuth',
-    displayName: 'MerchRoute / Jimeng session',
-    fields: [{ name: 'token', required: true, secret: true, description: '即梦 sessionid；不要添加 Bearer 前缀' }],
-    probe: { kind: 'jimeng-token-check', method: 'POST', url: 'http://127.0.0.1:8000/token/check', sideEffect: 'none' },
-  },
   'siliconflow-api': {
     credentialId: 'mrSiliconFlow01',
     type: 'httpBearerAuth',
@@ -18,13 +11,16 @@ export const CREDENTIAL_DEFINITIONS = Object.freeze({
   'qwen-runtime': {
     credentialId: 'mrQwenRuntime001',
     type: 'globalConstantsApi',
-    displayName: 'MerchRoute / Qwen runtime',
+    displayName: 'MerchRoute / Global constants',
     fields: [
       { name: 'model', required: true, secret: false, description: 'OpenAI 兼容模型名' },
       { name: 'baseUrl', required: true, secret: false, description: 'OpenAI 兼容 chat/completions URL' },
       { name: 'apiKey', required: true, secret: true, description: '模型服务 API Key' },
+      { name: 'jimengModel', required: true, secret: false, description: '即梦代理模型名，对应 constants.model.jimengModel' },
+      { name: 'jimengUrl', required: true, secret: false, description: '即梦代理服务根 URL，对应 constants.BaseUrl.JimengUrl' },
+      { name: 'jimengAuthorValue', required: true, secret: true, description: '即梦代理 Authorization 请求头完整值，对应 constants.Authorization.jimengAuthorValue' },
     ],
-    probe: { kind: 'openai-compatible-model-list', method: 'GET', sideEffect: 'none' },
+    probe: { kind: 'global-model-provider-readiness', checks: ['openai-compatible-model-list', 'jimeng-token-check'], sideEffect: 'none' },
   },
   'merchroute-runtime': {
     credentialId: 'mrRuntimeKey0001',
@@ -56,7 +52,6 @@ function classifyBinding(type, workflowId, nodeName) {
   if (type === 'globalConstantsApi') return 'qwen-runtime';
   if (type === 'httpCustomAuth' && workflowId === '3hyAiON1l3fEHBzA') return 'ozon-seller-api';
   if (type === 'httpBearerAuth') {
-    if (['Wxng7hVbjMNhVOaO', 'HpCtxAZJdy9RgWk2', 'ieWnRGeC7KdeS1GT'].includes(workflowId)) return 'jimeng-session';
     if (['5fKlIwJWfXJM1y4E', 'JEl0xCKTgtiIP9UT', 'uKkH5O0dpfzFuAag'].includes(workflowId)) return 'siliconflow-api';
   }
   if (type === 'httpHeaderAuth') {
@@ -119,15 +114,39 @@ export function buildCredentialImportData(input, runtimeKey) {
   const qwenBaseUrl = requireValue('qwen-runtime', 'baseUrl');
   const qwenApiKey = requireValue('qwen-runtime', 'apiKey').replace(/^Bearer\s+/i, '').trim();
   if (!qwenApiKey) throw new Error('缺少 credentials.qwen-runtime.apiKey');
+  const jimengUrlValue = requireValue('qwen-runtime', 'jimengUrl');
+  let jimengUrl;
+  try {
+    const parsed = new URL(jimengUrlValue);
+    if (!['http:', 'https:'].includes(parsed.protocol)
+      || parsed.username
+      || parsed.password
+      || parsed.search
+      || parsed.hash
+      || !['', '/'].includes(parsed.pathname)) {
+      throw new Error('invalid-service-root');
+    }
+    jimengUrl = parsed.origin;
+  } catch {
+    throw new Error('credentials.qwen-runtime.jimengUrl 必须是无路径、查询参数和片段的 HTTP(S) 服务根 URL');
+  }
   return {
-    'jimeng-session': { token: requireValue('jimeng-session', 'token') },
     'siliconflow-api': { token: requireValue('siliconflow-api', 'token') },
     'qwen-runtime': {
       format: 'json',
       globalConstants: JSON.stringify({
-        model: { Model_Run: requireValue('qwen-runtime', 'model') },
-        BaseUrl: { BaseUrl_Run: qwenBaseUrl },
-        Authorization: { APIKey_Run: `Bearer ${qwenApiKey}` },
+        model: {
+          Model_Run: requireValue('qwen-runtime', 'model'),
+          jimengModel: requireValue('qwen-runtime', 'jimengModel'),
+        },
+        BaseUrl: {
+          BaseUrl_Run: qwenBaseUrl,
+          JimengUrl: jimengUrl,
+        },
+        Authorization: {
+          APIKey_Run: `Bearer ${qwenApiKey}`,
+          jimengAuthorValue: requireValue('qwen-runtime', 'jimengAuthorValue'),
+        },
       }),
     },
     'merchroute-runtime': { name: 'X-MerchRoute-Runtime-Key', value: requireValue('merchroute-runtime', 'runtimeKey', runtimeKey) },
