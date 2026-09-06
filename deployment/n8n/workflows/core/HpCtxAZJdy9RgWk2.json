@@ -25,7 +25,7 @@
       "typeVersion": 1,
       "position": [
         640,
-        32
+        -96
       ]
     },
     {
@@ -38,7 +38,7 @@
       "typeVersion": 2,
       "position": [
         864,
-        32
+        -96
       ]
     },
     {
@@ -52,7 +52,7 @@
       "typeVersion": 1,
       "position": [
         1760,
-        32
+        -96
       ]
     },
     {
@@ -65,7 +65,7 @@
       "typeVersion": 2,
       "position": [
         1984,
-        32
+        -96
       ]
     },
     {
@@ -153,7 +153,7 @@
             {
               "id": "28d023e4-172d-453a-b37a-1e8e3856a42d",
               "name": "model",
-              "value": "即梦4.5",
+              "value": "={{ $json.constants.model.jimengModel }}",
               "type": "string"
             },
             {
@@ -173,6 +173,12 @@
               "name": "variants",
               "value": "={{ $json.variants }}",
               "type": "string"
+            },
+            {
+              "id": "merchroute-jimeng-global-constants-e002",
+              "name": "constants",
+              "value": "={{ $json.constants }}",
+              "type": "object"
             }
           ]
         },
@@ -184,20 +190,20 @@
       "typeVersion": 3.4,
       "position": [
         2208,
-        32
+        -96
       ]
     },
     {
       "parameters": {
-        "jsCode": "const input = $input.first().json || {};\n\nif (typeof input.SKU !== 'string') throw new Error('n8n_setParameter_xxx.json 的 SKU 必须是 String。');\nif (typeof input.productName !== 'string') throw new Error('n8n_setParameter_xxx.json 的 productName 必须是 String。');\nif (typeof input.variants !== 'string') throw new Error('n8n_setParameter_xxx.json 的 variants 必须是 String。');\nconst SKU = input.SKU.trim();\nconst productName = input.productName.trim();\nconst variants = input.variants.trim();\nconst executionId = String($execution.id || '').trim();\nconst sourceSubmissionId = String(input.sourceSubmissionId || '').trim();\nif (!sourceSubmissionId) throw new Error('sourceSubmissionId 不能为空。');\nif (!/^\\d{7}$/.test(SKU)) throw new Error('n8n_setParameter_xxx.json 的 SKU 必须是保留前导零的 7 位数字。');\nif (!productName) throw new Error('n8n_setParameter_xxx.json 的 productName 不能为空。');\nif (!variants) throw new Error('n8n_setParameter_xxx.json 的 variants 不能为空。');\nif (!/^\\d+$/.test(executionId)) throw new Error('当前工作流 executionId 无效。');\n\nconst imageUrls = Array.isArray(input.imageUrls) ? input.imageUrls.map((value) => String(value || '').trim()) : [];\nif (imageUrls.length < 1 || imageUrls.length > 5 || imageUrls.some((url) => !/^https?:\\/\\//i.test(url))) {\n  throw new Error('imageUrls must contain 1-5 valid HTTP(S) image URLs.');\n}\n\nconst cleanName = (value) => String(value || '')\n  .trim()\n  .replace(/[<>:\"/\\\\|?*\\x00-\\x1F]/g, '_')\n  .replace(/[. ]+$/g, '')\n  || 'product';\n\nconst normalizeFolderPath = (value) => {\n  let result = String(value || '').trim().replace(/\\\\/g, '/');\n  while (result.length > 1 && result.endsWith('/')) result = result.slice(0, -1);\n  return result;\n};\n\nconst modelInput = String(input.model || '即梦4.5').trim();\nconst modelApiName = modelInput === '即梦4.5' ? 'jimeng-4.5' : modelInput;\nconst folderPath = normalizeFolderPath(input.downloadFatherFolder) + '/' + SKU + '-' + cleanName(productName) + '-' + executionId;\n\nconst views = [\n  { taskId: '01', view: 'front', label: '正面视图', promptField: 'promptFront', prompt: String(input.promptFront || '').trim() },\n  { taskId: '02', view: 'side', label: '侧俯视图', promptField: 'promptSide', prompt: String(input.promptSide || '').trim() },\n  { taskId: '03', view: 'top', label: '顶视图', promptField: 'promptTop', prompt: String(input.promptTop || '').trim() },\n  { taskId: '04', view: 'back', label: '背面视图', promptField: 'promptBack', prompt: String(input.promptBack || '').trim() },\n  { taskId: '05', view: 'bottom', label: '底部视图', promptField: 'promptBottom', prompt: String(input.promptBottom || '').trim() },\n];\n\nfor (const entry of views) {\n  if (!entry.prompt) throw new Error('setParameter.' + entry.promptField + ' is required.');\n}\n\nreturn views.map((entry, index) => ({\n  json: {\n    ...input,\n    SKU,\n    productName,\n    variants,\n    sourceSubmissionId,\n    n8nExecutionId: executionId,\n    modelApiName,\n    taskId: entry.taskId,\n    view: entry.view,\n    viewLabel: entry.label,\n    viewIndex: index + 1,\n    promptField: entry.promptField,\n    folderPath,\n    viewPrompt: entry.prompt,\n    imageUrls,\n  },\n  pairedItem: { item: 0 },\n}));"
+        "jsCode": "const input = $input.first().json || {};\n\nif (typeof input.SKU !== 'string') throw new Error('n8n_setParameter_xxx.json 的 SKU 必须是 String。');\nif (typeof input.productName !== 'string') throw new Error('n8n_setParameter_xxx.json 的 productName 必须是 String。');\nif (typeof input.variants !== 'string') throw new Error('n8n_setParameter_xxx.json 的 variants 必须是 String。');\nconst SKU = input.SKU.trim();\nconst productName = input.productName.trim();\nconst variants = input.variants.trim();\nconst executionId = String($execution.id || '').trim();\nconst sourceSubmissionId = String(input.sourceSubmissionId || '').trim();\nif (!sourceSubmissionId) throw new Error('sourceSubmissionId 不能为空。');\nif (!/^\\d{7}$/.test(SKU)) throw new Error('n8n_setParameter_xxx.json 的 SKU 必须是保留前导零的 7 位数字。');\nif (!productName) throw new Error('n8n_setParameter_xxx.json 的 productName 不能为空。');\nif (!variants) throw new Error('n8n_setParameter_xxx.json 的 variants 不能为空。');\nif (!/^\\d+$/.test(executionId)) throw new Error('当前工作流 executionId 无效。');\n\nconst imageUrls = Array.isArray(input.imageUrls) ? input.imageUrls.map((value) => String(value || '').trim()) : [];\nif (imageUrls.length < 1 || imageUrls.length > 5 || imageUrls.some((url) => !/^https?:\\/\\//i.test(url))) {\n  throw new Error('imageUrls must contain 1-5 valid HTTP(S) image URLs.');\n}\n\nconst cleanName = (value) => String(value || '')\n  .trim()\n  .replace(/[<>:\"/\\\\|?*\\x00-\\x1F]/g, '_')\n  .replace(/[. ]+$/g, '')\n  || 'product';\n\nconst normalizeFolderPath = (value) => {\n  let result = String(value || '').trim().replace(/\\\\/g, '/');\n  while (result.length > 1 && result.endsWith('/')) result = result.slice(0, -1);\n  return result;\n};\n\nconst constants = input.constants;\nfunction requireConstant(value, field) {\n  const text = typeof value === 'string' ? value.trim() : '';\n  if (!text) throw new Error('CONFIG_INVALID: Global Constants 缺少 ' + field);\n  return text;\n}\nconst jimengModel = requireConstant(constants?.model?.jimengModel, 'constants.model.jimengModel');\nconst jimengUrl = requireConstant(constants?.BaseUrl?.JimengUrl, 'constants.BaseUrl.JimengUrl');\nrequireConstant(constants?.Authorization?.jimengAuthorValue, 'constants.Authorization.jimengAuthorValue');\nconst jimengUrlMatch = /^(https?):\\/\\/(\\[[0-9a-f:.]+\\]|[a-z0-9.-]+)(?::([0-9]{1,5}))?\\/?$/i.exec(jimengUrl);\nconst jimengPort = jimengUrlMatch?.[3] ? Number(jimengUrlMatch[3]) : null;\nif (!jimengUrlMatch || (jimengPort !== null && (jimengPort < 1 || jimengPort > 65535))) {\n  throw new Error('CONFIG_INVALID: constants.BaseUrl.JimengUrl 必须是合法的 HTTP(S) 服务根地址');\n}\nconst folderPath = normalizeFolderPath(input.downloadFatherFolder) + '/' + SKU + '-' + cleanName(productName) + '-' + executionId;\n\nconst views = [\n  { taskId: '01', view: 'front', label: '正面视图', promptField: 'promptFront', prompt: String(input.promptFront || '').trim() },\n  { taskId: '02', view: 'side', label: '侧俯视图', promptField: 'promptSide', prompt: String(input.promptSide || '').trim() },\n  { taskId: '03', view: 'top', label: '顶视图', promptField: 'promptTop', prompt: String(input.promptTop || '').trim() },\n  { taskId: '04', view: 'back', label: '背面视图', promptField: 'promptBack', prompt: String(input.promptBack || '').trim() },\n  { taskId: '05', view: 'bottom', label: '底部视图', promptField: 'promptBottom', prompt: String(input.promptBottom || '').trim() },\n];\n\nfor (const entry of views) {\n  if (!entry.prompt) throw new Error('setParameter.' + entry.promptField + ' is required.');\n}\n\nreturn views.map((entry, index) => ({\n  json: {\n    ...input,\n    SKU,\n    productName,\n    variants,\n    sourceSubmissionId,\n    n8nExecutionId: executionId,\n    taskId: entry.taskId,\n    view: entry.view,\n    viewLabel: entry.label,\n    viewIndex: index + 1,\n    promptField: entry.promptField,\n    folderPath,\n    viewPrompt: entry.prompt,\n    imageUrls,\n  },\n  pairedItem: { item: 0 },\n}));"
       },
       "id": "ba928b0e-b70e-4e1a-a363-bda4084d13ec",
       "name": "Build View Tasks",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        800,
-        16
+        2880,
+        -96
       ]
     },
     {
@@ -209,8 +215,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        4384,
-        16
+        1664,
+        592
       ]
     },
     {
@@ -323,8 +329,8 @@
       "type": "n8n-nodes-base.executeWorkflow",
       "typeVersion": 1.3,
       "position": [
-        5056,
-        16
+        2336,
+        592
       ]
     },
     {
@@ -336,8 +342,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        4608,
-        16
+        1888,
+        592
       ],
       "notes": "使用 fs/path 原子创建下载目录；保留旧 Execute Command 的 stdout/stderr/exitCode 返回契约。"
     },
@@ -350,8 +356,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        4832,
-        16
+        2112,
+        592
       ]
     },
     {
@@ -380,7 +386,7 @@
       "typeVersion": 1,
       "position": [
         1088,
-        32
+        -96
       ]
     },
     {
@@ -393,7 +399,7 @@
       "typeVersion": 2,
       "position": [
         1312,
-        32
+        -96
       ]
     },
     {
@@ -469,7 +475,7 @@
       "typeVersion": 1.3,
       "position": [
         1536,
-        32
+        -96
       ]
     },
     {
@@ -512,7 +518,7 @@
       "typeVersion": 1.3,
       "position": [
         2432,
-        -176
+        -96
       ]
     },
     {
@@ -525,34 +531,37 @@
       "typeVersion": 2,
       "position": [
         2656,
-        -176
+        -96
       ]
     },
     {
       "parameters": {
-        "jsCode": "const items = $input.all().map((item) => item.json || {});\nif (items.length !== 5) throw new Error('Build View Tasks 必须输出 5 个视图任务。');\nconst first = items[0];\nconst sourceSubmissionId = String(first.sourceSubmissionId || '').trim();\nif (!sourceSubmissionId) {\n  throw new Error('sourceSubmissionId 不能为空；禁止回退到目录名创建即梦任务。');\n}\nif (items.some((task) => String(task.sourceSubmissionId || '').trim() !== sourceSubmissionId)) {\n  throw new Error('五个视图任务的 sourceSubmissionId 必须一致。');\n}\nconst imageUrls = Array.isArray(first.imageUrls)\n  ? first.imageUrls.map((value) => String(value || '').trim())\n  : [];\nif (imageUrls.length < 1 || imageUrls.length > 5 || imageUrls.some((url) => !/^https?:\\/\\//i.test(url))) {\n  throw new Error('异步提交需要 1-5 个有效的 OSS HTTP(S) imageUrls。');\n}\nconst sourceImages = Array.isArray(first.sourceImages)\n  ? first.sourceImages.map((entry, index) => ({\n      sourceFileName: String(entry?.sourceFileName || entry?.fileName || ''),\n      fileExtension: String(entry?.fileExtension || ''),\n      mimeType: String(entry?.mimeType || ''),\n      fileSize: Number(entry?.fileSize ?? entry?.bytes ?? 0),\n      originalIndex: index,\n    }))\n  : [];\nif (sourceImages.length !== imageUrls.length || sourceImages.some((entry) => !entry.sourceFileName)) {\n  throw new Error('sourceImages 必须与 imageUrls 同序同数量，并包含稳定的 sourceFileName。');\n}\nconst batchKey = ['E002', 'v1', sourceSubmissionId, 'attempt-0'].join(':');\nconst tasks = items.map((task, index) => ({\n  taskId: String(task.taskId || ''),\n  view: String(task.view || ''),\n  viewLabel: String(task.viewLabel || ''),\n  promptField: String(task.promptField || ''),\n  originalIndex: index,\n  prompt: String(task.viewPrompt || ''),\n  idempotencyKey: ['E002', 'v1', sourceSubmissionId, String(task.view || ''), 'attempt-0'].join(':'),\n  retryAttempt: 0,\n  SKU: String(task.SKU || ''),\n  productName: String(task.productName || ''),\n  variants: String(task.variants || ''),\n  variantId: String(task.variantId || ''),\n  sourceSubmissionId,\n  sourceImages,\n  n8nExecutionId: String(task.n8nExecutionId || ''),\n  folderPath: String(task.folderPath || ''),\n}));\nif (tasks.some((task) => !task.taskId || !task.view || !task.prompt)) {\n  throw new Error('异步提交任务缺少 taskId、view 或 prompt。');\n}\nreturn [{ json: {\n  batchKey,\n  phase: 'initial',\n  concurrency: 5,\n  common: {\n    model: String(first.modelApiName || ''),\n    ratio: String(first.ratio || ''),\n    resolution: String(first.resolution || ''),\n  },\n  images: imageUrls,\n  sourceImages,\n  tasks,\n} }];"
+        "jsCode": "const items = $input.all().map((item) => item.json || {});\nif (items.length !== 5) throw new Error('Build View Tasks 必须输出 5 个视图任务。');\nconst first = items[0];\nconst sourceSubmissionId = String(first.sourceSubmissionId || '').trim();\nif (!sourceSubmissionId) {\n  throw new Error('sourceSubmissionId 不能为空；禁止回退到目录名创建即梦任务。');\n}\nif (items.some((task) => String(task.sourceSubmissionId || '').trim() !== sourceSubmissionId)) {\n  throw new Error('五个视图任务的 sourceSubmissionId 必须一致。');\n}\nconst imageUrls = Array.isArray(first.imageUrls)\n  ? first.imageUrls.map((value) => String(value || '').trim())\n  : [];\nif (imageUrls.length < 1 || imageUrls.length > 5 || imageUrls.some((url) => !/^https?:\\/\\//i.test(url))) {\n  throw new Error('异步提交需要 1-5 个有效的 OSS HTTP(S) imageUrls。');\n}\nconst sourceImages = Array.isArray(first.sourceImages)\n  ? first.sourceImages.map((entry, index) => ({\n      sourceFileName: String(entry?.sourceFileName || entry?.fileName || ''),\n      fileExtension: String(entry?.fileExtension || ''),\n      mimeType: String(entry?.mimeType || ''),\n      fileSize: Number(entry?.fileSize ?? entry?.bytes ?? 0),\n      originalIndex: index,\n    }))\n  : [];\nif (sourceImages.length !== imageUrls.length || sourceImages.some((entry) => !entry.sourceFileName)) {\n  throw new Error('sourceImages 必须与 imageUrls 同序同数量，并包含稳定的 sourceFileName。');\n}\nconst batchKey = ['E002', 'v1', sourceSubmissionId, 'attempt-0'].join(':');\nconst tasks = items.map((task, index) => ({\n  taskId: String(task.taskId || ''),\n  view: String(task.view || ''),\n  viewLabel: String(task.viewLabel || ''),\n  promptField: String(task.promptField || ''),\n  originalIndex: index,\n  prompt: String(task.viewPrompt || ''),\n  idempotencyKey: ['E002', 'v1', sourceSubmissionId, String(task.view || ''), 'attempt-0'].join(':'),\n  retryAttempt: 0,\n  SKU: String(task.SKU || ''),\n  productName: String(task.productName || ''),\n  variants: String(task.variants || ''),\n  variantId: String(task.variantId || ''),\n  sourceSubmissionId,\n  sourceImages,\n  n8nExecutionId: String(task.n8nExecutionId || ''),\n  folderPath: String(task.folderPath || ''),\n}));\nif (tasks.some((task) => !task.taskId || !task.view || !task.prompt)) {\n  throw new Error('异步提交任务缺少 taskId、view 或 prompt。');\n}\nreturn [{ json: {\n  constants: first.constants,\n  batchKey,\n  phase: 'initial',\n  concurrency: 5,\n  common: {\n    model: String(first.constants?.model?.jimengModel || ''),\n    ratio: String(first.ratio || ''),\n    resolution: String(first.resolution || ''),\n  },\n  images: imageUrls,\n  sourceImages,\n  tasks,\n} }];"
       },
       "id": "f903859d-3b52-4614-b459-f431f23bacd8",
       "name": "Build Async Submit Batch",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1024,
-        16
+        3104,
+        -96
       ]
     },
     {
       "parameters": {
         "method": "POST",
-        "url": "http://localhost:8000/v1/images/tasks/batch",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpBearerAuth",
+        "url": "={{ String($json.constants.BaseUrl.JimengUrl).trim().replace(/\\/+$/, '') + '/v1/images/tasks/batch' }}",
+        "authentication": "none",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
             {
               "name": "Content-Type",
               "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "={{ $json.constants.Authorization.jimengAuthorValue }}"
             }
           ]
         },
@@ -573,8 +582,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.4,
       "position": [
-        1248,
-        16
+        3328,
+        -96
       ],
       "retryOnFail": true,
       "maxTries": 2,
@@ -582,15 +591,15 @@
     },
     {
       "parameters": {
-        "jsCode": "const response = $input.first().json || {};\nfunction safeDiagnosticText(value, limit = 600) {\n  if (value === undefined || value === null || value === '') return '';\n  const raw = typeof value === 'string' ? value : JSON.stringify(value);\n  return String(raw)\n    .replace(/\\b(?:https?|data):[^\\s\"'<>]+/gi, '[redacted-url]')\n    .replace(/<[^>]*>/g, '[redacted-html]')\n    .replace(/\\s+/g, ' ')\n    .trim()\n    .slice(0, limit);\n}\nfunction failureSummary(value) {\n  return {\n    code: value.code,\n    stage: safeDiagnosticText(value.stage || value.details?.stage),\n    automaticRetriesExhausted: value.automaticRetriesExhausted ?? value.details?.automaticRetriesExhausted ?? null,\n    reservationState: safeDiagnosticText(value.reservationState || value.details?.reservationState),\n    message: safeDiagnosticText(value.message),\n    error: safeDiagnosticText(value.error),\n    details: safeDiagnosticText(value.details, 1000),\n  };\n}\nconst responseCode = String(response.code ?? '').trim();\nconst acceptsSubmissionUnknown = responseCode === 'submission_unknown';\nconst responseOk = response.ok === true && (response.code === undefined || Number(response.code) === 0);\nif (!responseOk && !acceptsSubmissionUnknown) {\n  throw new Error('异步提交失败：' + JSON.stringify(failureSummary(response)));\n}\nif (!Array.isArray(response.tasks) || response.tasks.length !== 5) {\n  throw new Error('异步提交必须返回 5 个 tasks：' + JSON.stringify(response));\n}\nconst allowedStatuses = new Set(['reserved', 'processing', 'success', 'failed', 'submission_unknown']);\nconst historyRequiredStatuses = new Set(['processing', 'success', 'failed']);\nconst invalid = response.tasks.filter((task) => {\n  const status = String(task?.status || '');\n  return !allowedStatuses.has(status)\n    || (historyRequiredStatuses.has(status) && !String(task?.historyId || '').trim());\n});\nif (invalid.length) {\n  throw new Error('异步提交存在无效状态或应有但缺失的 historyId，禁止自动重提：' + JSON.stringify(invalid));\n}\nconst batch = $('Build Async Submit Batch').first().json || {};\nreturn [{ json: {\n  ...response,\n  batchKey: batch.batchKey,\n  phase: 'initial',\n  pollCount: 0,\n  maxPollCount: 120,\n  pollIntervalSeconds: 10,\n  allTerminal: false,\n  pollLimitReached: false,\n  terminalOrLimit: false,\n} }];"
+        "jsCode": "const response = $input.first().json || {};\nfunction safeDiagnosticText(value, limit = 600) {\n  if (value === undefined || value === null || value === '') return '';\n  const raw = typeof value === 'string' ? value : JSON.stringify(value);\n  return String(raw)\n    .replace(/\\b(?:https?|data):[^\\s\"'<>]+/gi, '[redacted-url]')\n    .replace(/<[^>]*>/g, '[redacted-html]')\n    .replace(/\\s+/g, ' ')\n    .trim()\n    .slice(0, limit);\n}\nfunction failureSummary(value) {\n  return {\n    code: value.code,\n    stage: safeDiagnosticText(value.stage || value.details?.stage),\n    automaticRetriesExhausted: value.automaticRetriesExhausted ?? value.details?.automaticRetriesExhausted ?? null,\n    reservationState: safeDiagnosticText(value.reservationState || value.details?.reservationState),\n    message: safeDiagnosticText(value.message),\n    error: safeDiagnosticText(value.error),\n    details: safeDiagnosticText(value.details, 1000),\n  };\n}\nconst responseCode = String(response.code ?? '').trim();\nconst acceptsSubmissionUnknown = responseCode === 'submission_unknown';\nconst responseOk = response.ok === true && (response.code === undefined || Number(response.code) === 0);\nif (!responseOk && !acceptsSubmissionUnknown) {\n  throw new Error('异步提交失败：' + JSON.stringify(failureSummary(response)));\n}\nif (!Array.isArray(response.tasks) || response.tasks.length !== 5) {\n  throw new Error('异步提交必须返回 5 个 tasks：' + JSON.stringify(response));\n}\nconst allowedStatuses = new Set(['reserved', 'processing', 'success', 'failed', 'submission_unknown']);\nconst historyRequiredStatuses = new Set(['processing', 'success', 'failed']);\nconst invalid = response.tasks.filter((task) => {\n  const status = String(task?.status || '');\n  return !allowedStatuses.has(status)\n    || (historyRequiredStatuses.has(status) && !String(task?.historyId || '').trim());\n});\nif (invalid.length) {\n  throw new Error('异步提交存在无效状态或应有但缺失的 historyId，禁止自动重提：' + JSON.stringify(invalid));\n}\nconst batch = $('Build Async Submit Batch').first().json || {};\nreturn [{ json: {\n  ...response,\n  constants: batch.constants,\n  batchKey: batch.batchKey,\n  phase: 'initial',\n  pollCount: 0,\n  maxPollCount: 120,\n  pollIntervalSeconds: 10,\n  allTerminal: false,\n  pollLimitReached: false,\n  terminalOrLimit: false,\n} }];"
       },
       "id": "abf23a3c-4f61-4445-a908-38d3a18c94a9",
       "name": "Initialize View Polling",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1472,
-        16
+        736,
+        256
       ]
     },
     {
@@ -602,22 +611,25 @@
       "type": "n8n-nodes-base.wait",
       "typeVersion": 1.1,
       "position": [
-        1696,
-        16
+        960,
+        256
       ]
     },
     {
       "parameters": {
         "method": "POST",
-        "url": "http://localhost:8000/v1/images/tasks/status",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpBearerAuth",
+        "url": "={{ String($json.constants.BaseUrl.JimengUrl).trim().replace(/\\/+$/, '') + '/v1/images/tasks/status' }}",
+        "authentication": "none",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
             {
               "name": "Content-Type",
               "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "={{ $json.constants.Authorization.jimengAuthorValue }}"
             }
           ]
         },
@@ -638,8 +650,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.4,
       "position": [
-        1920,
-        16
+        1184,
+        176
       ],
       "retryOnFail": true,
       "maxTries": 3,
@@ -647,15 +659,15 @@
     },
     {
       "parameters": {
-        "jsCode": "const input = $input.first().json || {};\nconst responseCode = String(input.code ?? '').trim();\nconst acceptsSubmissionUnknown = responseCode === 'submission_unknown';\nconst responseOk = input.ok === true && (input.code === undefined || Number(input.code) === 0);\nif (!responseOk && !acceptsSubmissionUnknown) {\n  throw new Error('查询即梦任务状态失败；已保留原 historyId，禁止重新生成：' + JSON.stringify({ code: input.code, message: input.message, error: input.error }));\n}\nconst tasks = Array.isArray(input.tasks) ? input.tasks : [];\nif (tasks.length !== 5) throw new Error('查询即梦任务状态必须返回 5 个 tasks。');\nconst allowed = new Set(['reserved', 'processing', 'success', 'failed', 'submission_unknown']);\nconst historyRequiredStatuses = new Set(['processing', 'success', 'failed']);\nif (tasks.some((task) => {\n  const status = String(task?.status || '');\n  return !allowed.has(status)\n    || (historyRequiredStatuses.has(status) && !String(task?.historyId || '').trim());\n})) {\n  throw new Error('查询结果包含无效状态或缺少 historyId，禁止重新生成：' + JSON.stringify(tasks));\n}\nconst pollCount = Number(input.pollCount || 0) + 1;\nconst maxPollCount = Math.max(1, Number(input.maxPollCount || 120));\nconst terminalStatuses = new Set(['success', 'failed', 'submission_unknown']);\nconst allTerminal = tasks.every((task) => terminalStatuses.has(String(task.status || '')));\nconst pollLimitReached = pollCount >= maxPollCount;\nreturn [{ json: {\n  ...input,\n  phase: 'initial',\n  pollCount,\n  maxPollCount,\n  allTerminal,\n  pollLimitReached,\n  terminalOrLimit: allTerminal || pollLimitReached,\n} }];"
+        "jsCode": "const input = $input.first().json || {};\nconst responseCode = String(input.code ?? '').trim();\nconst acceptsSubmissionUnknown = responseCode === 'submission_unknown';\nconst responseOk = input.ok === true && (input.code === undefined || Number(input.code) === 0);\nif (!responseOk && !acceptsSubmissionUnknown) {\n  throw new Error('查询即梦任务状态失败；已保留原 historyId，禁止重新生成：' + JSON.stringify({ code: input.code, message: input.message, error: input.error }));\n}\nconst tasks = Array.isArray(input.tasks) ? input.tasks : [];\nif (tasks.length !== 5) throw new Error('查询即梦任务状态必须返回 5 个 tasks。');\nconst allowed = new Set(['reserved', 'processing', 'success', 'failed', 'submission_unknown']);\nconst historyRequiredStatuses = new Set(['processing', 'success', 'failed']);\nif (tasks.some((task) => {\n  const status = String(task?.status || '');\n  return !allowed.has(status)\n    || (historyRequiredStatuses.has(status) && !String(task?.historyId || '').trim());\n})) {\n  throw new Error('查询结果包含无效状态或缺少 historyId，禁止重新生成：' + JSON.stringify(tasks));\n}\nconst pollCount = Number(input.pollCount || 0) + 1;\nconst maxPollCount = Math.max(1, Number(input.maxPollCount || 120));\nconst terminalStatuses = new Set(['success', 'failed', 'submission_unknown']);\nconst allTerminal = tasks.every((task) => terminalStatuses.has(String(task.status || '')));\nconst pollLimitReached = pollCount >= maxPollCount;\nreturn [{ json: {\n  ...input,\n  constants: $('Build Async Submit Batch').first().json.constants,\n  phase: 'initial',\n  pollCount,\n  maxPollCount,\n  allTerminal,\n  pollLimitReached,\n  terminalOrLimit: allTerminal || pollLimitReached,\n} }];"
       },
       "id": "cf42193c-5b04-4e7e-8593-1ebbcca4d621",
       "name": "Evaluate View Tasks",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2144,
-        16
+        1408,
+        176
       ]
     },
     {
@@ -688,21 +700,21 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        2368,
-        16
+        1632,
+        256
       ]
     },
     {
       "parameters": {
-        "jsCode": "const initial = $input.first().json || {};\nconst firstResults = Array.isArray(initial.tasks) ? initial.tasks : [];\nif (firstResults.length !== 5) throw new Error('初次轮询结果必须包含 5 个任务。');\nconst sourceTasks = $('Build View Tasks').all().map((item) => item.json || {});\nconst sourceBatch = $('Build Async Submit Batch').first().json || {};\nconst explicitFailures = firstResults.filter((task) => task.status === 'failed');\nconst retryTasks = explicitFailures.map((failed) => {\n  const source = sourceTasks.find((task) => String(task.taskId) === String(failed.taskId)) || {};\n  const priorContext = failed.context || {};\n  const sourceSubmissionId = String(source.sourceSubmissionId || priorContext.sourceSubmissionId || '').trim();\n  const view = String(source.view || priorContext.view || '').trim();\n  if (!sourceSubmissionId || !view) throw new Error('明确失败任务缺少 sourceSubmissionId 或 view。');\n  return {\n    taskId: String(source.taskId || failed.taskId || ''),\n    view,\n    viewLabel: String(source.viewLabel || priorContext.viewLabel || ''),\n    promptField: String(source.promptField || priorContext.promptField || ''),\n    originalIndex: Number(priorContext.originalIndex ?? (Number(source.viewIndex || 1) - 1)),\n    prompt: String(source.viewPrompt || priorContext.prompt || ''),\n    idempotencyKey: ['E002', 'v1', sourceSubmissionId, view, 'attempt-1'].join(':'),\n    retryAttempt: 1,\n    retryReason: 'explicit_generation_failure',\n    SKU: String(source.SKU || priorContext.SKU || ''),\n    productName: String(source.productName || priorContext.productName || ''),\n    variants: String(source.variants || priorContext.variants || ''),\n    variantId: String(source.variantId || priorContext.variantId || ''),\n    sourceSubmissionId,\n    sourceImages: Array.isArray(source.sourceImages) ? source.sourceImages : (priorContext.sourceImages || []),\n    n8nExecutionId: String(source.n8nExecutionId || priorContext.n8nExecutionId || ''),\n    folderPath: String(source.folderPath || priorContext.folderPath || ''),\n  };\n});\nreturn [{ json: {\n  firstResults,\n  hasRetryItems: retryTasks.length > 0,\n  retryCount: retryTasks.length,\n  batchKey: ['E002', 'v1', String(sourceTasks[0]?.sourceSubmissionId || ''), 'attempt-1'].join(':'),\n  phase: 'retry',\n  concurrency: 5,\n  common: sourceBatch.common,\n  images: sourceBatch.images,\n  sourceImages: sourceBatch.sourceImages,\n  tasks: retryTasks,\n  initialPollCount: initial.pollCount || 0,\n  initialPollLimitReached: Boolean(initial.pollLimitReached),\n} }];"
+        "jsCode": "const initial = $input.first().json || {};\nconst firstResults = Array.isArray(initial.tasks) ? initial.tasks : [];\nif (firstResults.length !== 5) throw new Error('初次轮询结果必须包含 5 个任务。');\nconst sourceTasks = $('Build View Tasks').all().map((item) => item.json || {});\nconst sourceBatch = $('Build Async Submit Batch').first().json || {};\nconst explicitFailures = firstResults.filter((task) => task.status === 'failed');\nconst retryTasks = explicitFailures.map((failed) => {\n  const source = sourceTasks.find((task) => String(task.taskId) === String(failed.taskId)) || {};\n  const priorContext = failed.context || {};\n  const sourceSubmissionId = String(source.sourceSubmissionId || priorContext.sourceSubmissionId || '').trim();\n  const view = String(source.view || priorContext.view || '').trim();\n  if (!sourceSubmissionId || !view) throw new Error('明确失败任务缺少 sourceSubmissionId 或 view。');\n  return {\n    taskId: String(source.taskId || failed.taskId || ''),\n    view,\n    viewLabel: String(source.viewLabel || priorContext.viewLabel || ''),\n    promptField: String(source.promptField || priorContext.promptField || ''),\n    originalIndex: Number(priorContext.originalIndex ?? (Number(source.viewIndex || 1) - 1)),\n    prompt: String(source.viewPrompt || priorContext.prompt || ''),\n    idempotencyKey: ['E002', 'v1', sourceSubmissionId, view, 'attempt-1'].join(':'),\n    retryAttempt: 1,\n    retryReason: 'explicit_generation_failure',\n    SKU: String(source.SKU || priorContext.SKU || ''),\n    productName: String(source.productName || priorContext.productName || ''),\n    variants: String(source.variants || priorContext.variants || ''),\n    variantId: String(source.variantId || priorContext.variantId || ''),\n    sourceSubmissionId,\n    sourceImages: Array.isArray(source.sourceImages) ? source.sourceImages : (priorContext.sourceImages || []),\n    n8nExecutionId: String(source.n8nExecutionId || priorContext.n8nExecutionId || ''),\n    folderPath: String(source.folderPath || priorContext.folderPath || ''),\n  };\n});\nreturn [{ json: {\n  constants: sourceBatch.constants,\n  firstResults,\n  hasRetryItems: retryTasks.length > 0,\n  retryCount: retryTasks.length,\n  batchKey: ['E002', 'v1', String(sourceTasks[0]?.sourceSubmissionId || ''), 'attempt-1'].join(':'),\n  phase: 'retry',\n  concurrency: 5,\n  common: sourceBatch.common,\n  images: sourceBatch.images,\n  sourceImages: sourceBatch.sourceImages,\n  tasks: retryTasks,\n  initialPollCount: initial.pollCount || 0,\n  initialPollLimitReached: Boolean(initial.pollLimitReached),\n} }];"
       },
       "id": "077db80d-9007-48ff-ab15-a6508c195dac",
       "name": "Build Explicit Retry Batch",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2592,
-        16
+        1856,
+        256
       ]
     },
     {
@@ -735,22 +747,25 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        2816,
-        16
+        2080,
+        256
       ]
     },
     {
       "parameters": {
         "method": "POST",
-        "url": "http://localhost:8000/v1/images/tasks/batch",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpBearerAuth",
+        "url": "={{ String($json.constants.BaseUrl.JimengUrl).trim().replace(/\\/+$/, '') + '/v1/images/tasks/batch' }}",
+        "authentication": "none",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
             {
               "name": "Content-Type",
               "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "={{ $json.constants.Authorization.jimengAuthorValue }}"
             }
           ]
         },
@@ -771,8 +786,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.4,
       "position": [
-        3040,
-        144
+        2304,
+        320
       ],
       "retryOnFail": true,
       "maxTries": 2,
@@ -780,15 +795,15 @@
     },
     {
       "parameters": {
-        "jsCode": "const response = $input.first().json || {};\nfunction safeDiagnosticText(value, limit = 600) {\n  if (value === undefined || value === null || value === '') return '';\n  const raw = typeof value === 'string' ? value : JSON.stringify(value);\n  return String(raw)\n    .replace(/\\b(?:https?|data):[^\\s\"'<>]+/gi, '[redacted-url]')\n    .replace(/<[^>]*>/g, '[redacted-html]')\n    .replace(/\\s+/g, ' ')\n    .trim()\n    .slice(0, limit);\n}\nfunction failureSummary(value) {\n  return {\n    code: value.code,\n    stage: safeDiagnosticText(value.stage || value.details?.stage),\n    automaticRetriesExhausted: value.automaticRetriesExhausted ?? value.details?.automaticRetriesExhausted ?? null,\n    reservationState: safeDiagnosticText(value.reservationState || value.details?.reservationState),\n    message: safeDiagnosticText(value.message),\n    error: safeDiagnosticText(value.error),\n    details: safeDiagnosticText(value.details, 1000),\n  };\n}\nconst responseCode = String(response.code ?? '').trim();\nconst acceptsSubmissionUnknown = responseCode === 'submission_unknown';\nconst responseOk = response.ok === true && (response.code === undefined || Number(response.code) === 0);\nif (!responseOk && !acceptsSubmissionUnknown) {\n  throw new Error('明确失败任务的重试提交失败：' + JSON.stringify(failureSummary(response)));\n}\nconst retryBatch = $('Build Explicit Retry Batch').first().json || {};\nif (!Array.isArray(response.tasks) || response.tasks.length !== Number(retryBatch.retryCount || 0)) {\n  throw new Error('重试提交返回的 tasks 数量不正确：' + JSON.stringify(response));\n}\nconst allowedStatuses = new Set(['reserved', 'processing', 'success', 'failed', 'submission_unknown']);\nconst historyRequiredStatuses = new Set(['processing', 'success', 'failed']);\nconst invalid = response.tasks.filter((task) => {\n  const status = String(task?.status || '');\n  return !allowedStatuses.has(status)\n    || (historyRequiredStatuses.has(status) && !String(task?.historyId || '').trim());\n});\nif (invalid.length) throw new Error('重试提交存在无效状态或应有但缺失的 historyId，禁止自动重提：' + JSON.stringify(invalid));\nreturn [{ json: {\n  ...response,\n  batchKey: retryBatch.batchKey,\n  phase: 'retry',\n  pollCount: 0,\n  maxPollCount: 120,\n  pollIntervalSeconds: 10,\n  allTerminal: false,\n  pollLimitReached: false,\n  terminalOrLimit: false,\n} }];"
+        "jsCode": "const response = $input.first().json || {};\nfunction safeDiagnosticText(value, limit = 600) {\n  if (value === undefined || value === null || value === '') return '';\n  const raw = typeof value === 'string' ? value : JSON.stringify(value);\n  return String(raw)\n    .replace(/\\b(?:https?|data):[^\\s\"'<>]+/gi, '[redacted-url]')\n    .replace(/<[^>]*>/g, '[redacted-html]')\n    .replace(/\\s+/g, ' ')\n    .trim()\n    .slice(0, limit);\n}\nfunction failureSummary(value) {\n  return {\n    code: value.code,\n    stage: safeDiagnosticText(value.stage || value.details?.stage),\n    automaticRetriesExhausted: value.automaticRetriesExhausted ?? value.details?.automaticRetriesExhausted ?? null,\n    reservationState: safeDiagnosticText(value.reservationState || value.details?.reservationState),\n    message: safeDiagnosticText(value.message),\n    error: safeDiagnosticText(value.error),\n    details: safeDiagnosticText(value.details, 1000),\n  };\n}\nconst responseCode = String(response.code ?? '').trim();\nconst acceptsSubmissionUnknown = responseCode === 'submission_unknown';\nconst responseOk = response.ok === true && (response.code === undefined || Number(response.code) === 0);\nif (!responseOk && !acceptsSubmissionUnknown) {\n  throw new Error('明确失败任务的重试提交失败：' + JSON.stringify(failureSummary(response)));\n}\nconst retryBatch = $('Build Explicit Retry Batch').first().json || {};\nif (!Array.isArray(response.tasks) || response.tasks.length !== Number(retryBatch.retryCount || 0)) {\n  throw new Error('重试提交返回的 tasks 数量不正确：' + JSON.stringify(response));\n}\nconst allowedStatuses = new Set(['reserved', 'processing', 'success', 'failed', 'submission_unknown']);\nconst historyRequiredStatuses = new Set(['processing', 'success', 'failed']);\nconst invalid = response.tasks.filter((task) => {\n  const status = String(task?.status || '');\n  return !allowedStatuses.has(status)\n    || (historyRequiredStatuses.has(status) && !String(task?.historyId || '').trim());\n});\nif (invalid.length) throw new Error('重试提交存在无效状态或应有但缺失的 historyId，禁止自动重提：' + JSON.stringify(invalid));\nreturn [{ json: {\n  ...response,\n  constants: retryBatch.constants,\n  batchKey: retryBatch.batchKey,\n  phase: 'retry',\n  pollCount: 0,\n  maxPollCount: 120,\n  pollIntervalSeconds: 10,\n  allTerminal: false,\n  pollLimitReached: false,\n  terminalOrLimit: false,\n} }];"
       },
       "id": "8e354147-c079-44ab-b9bc-b43fe36bbf4b",
       "name": "Initialize Retry Polling",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        3264,
-        144
+        2528,
+        320
       ]
     },
     {
@@ -800,22 +815,25 @@
       "type": "n8n-nodes-base.wait",
       "typeVersion": 1.1,
       "position": [
-        3488,
-        144
+        768,
+        656
       ]
     },
     {
       "parameters": {
         "method": "POST",
-        "url": "http://localhost:8000/v1/images/tasks/status",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpBearerAuth",
+        "url": "={{ String($json.constants.BaseUrl.JimengUrl).trim().replace(/\\/+$/, '') + '/v1/images/tasks/status' }}",
+        "authentication": "none",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
             {
               "name": "Content-Type",
               "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "={{ $json.constants.Authorization.jimengAuthorValue }}"
             }
           ]
         },
@@ -836,8 +854,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.4,
       "position": [
-        3712,
-        144
+        992,
+        592
       ],
       "retryOnFail": true,
       "maxTries": 3,
@@ -845,15 +863,15 @@
     },
     {
       "parameters": {
-        "jsCode": "const input = $input.first().json || {};\nconst responseCode = String(input.code ?? '').trim();\nconst acceptsSubmissionUnknown = responseCode === 'submission_unknown';\nconst responseOk = input.ok === true && (input.code === undefined || Number(input.code) === 0);\nif (!responseOk && !acceptsSubmissionUnknown) {\n  throw new Error('查询重试任务状态失败；已保留原 historyId，禁止再次生成：' + JSON.stringify({ code: input.code, message: input.message, error: input.error }));\n}\nconst tasks = Array.isArray(input.tasks) ? input.tasks : [];\nconst retryPlan = $('Build Explicit Retry Batch').first().json || {};\nif (!tasks.length || tasks.length !== Number(retryPlan.retryCount || 0)) {\n  throw new Error('查询重试任务状态返回的 tasks 数量不正确。');\n}\nconst allowed = new Set(['reserved', 'processing', 'success', 'failed', 'submission_unknown']);\nconst historyRequiredStatuses = new Set(['processing', 'success', 'failed']);\nif (tasks.some((task) => {\n  const status = String(task?.status || '');\n  return !allowed.has(status)\n    || (historyRequiredStatuses.has(status) && !String(task?.historyId || '').trim());\n})) {\n  throw new Error('重试查询结果包含无效状态或缺少 historyId，禁止再次生成：' + JSON.stringify(tasks));\n}\nconst pollCount = Number(input.pollCount || 0) + 1;\nconst maxPollCount = Math.max(1, Number(input.maxPollCount || 120));\nconst terminalStatuses = new Set(['success', 'failed', 'submission_unknown']);\nconst allTerminal = tasks.every((task) => terminalStatuses.has(String(task.status || '')));\nconst pollLimitReached = pollCount >= maxPollCount;\nreturn [{ json: {\n  ...input,\n  phase: 'retry',\n  pollCount,\n  maxPollCount,\n  allTerminal,\n  pollLimitReached,\n  terminalOrLimit: allTerminal || pollLimitReached,\n} }];"
+        "jsCode": "const input = $input.first().json || {};\nconst responseCode = String(input.code ?? '').trim();\nconst acceptsSubmissionUnknown = responseCode === 'submission_unknown';\nconst responseOk = input.ok === true && (input.code === undefined || Number(input.code) === 0);\nif (!responseOk && !acceptsSubmissionUnknown) {\n  throw new Error('查询重试任务状态失败；已保留原 historyId，禁止再次生成：' + JSON.stringify({ code: input.code, message: input.message, error: input.error }));\n}\nconst tasks = Array.isArray(input.tasks) ? input.tasks : [];\nconst retryPlan = $('Build Explicit Retry Batch').first().json || {};\nif (!tasks.length || tasks.length !== Number(retryPlan.retryCount || 0)) {\n  throw new Error('查询重试任务状态返回的 tasks 数量不正确。');\n}\nconst allowed = new Set(['reserved', 'processing', 'success', 'failed', 'submission_unknown']);\nconst historyRequiredStatuses = new Set(['processing', 'success', 'failed']);\nif (tasks.some((task) => {\n  const status = String(task?.status || '');\n  return !allowed.has(status)\n    || (historyRequiredStatuses.has(status) && !String(task?.historyId || '').trim());\n})) {\n  throw new Error('重试查询结果包含无效状态或缺少 historyId，禁止再次生成：' + JSON.stringify(tasks));\n}\nconst pollCount = Number(input.pollCount || 0) + 1;\nconst maxPollCount = Math.max(1, Number(input.maxPollCount || 120));\nconst terminalStatuses = new Set(['success', 'failed', 'submission_unknown']);\nconst allTerminal = tasks.every((task) => terminalStatuses.has(String(task.status || '')));\nconst pollLimitReached = pollCount >= maxPollCount;\nreturn [{ json: {\n  ...input,\n  constants: retryPlan.constants,\n  phase: 'retry',\n  pollCount,\n  maxPollCount,\n  allTerminal,\n  pollLimitReached,\n  terminalOrLimit: allTerminal || pollLimitReached,\n} }];"
       },
       "id": "f0cce826-74ff-4750-9252-8855514f79fc",
       "name": "Evaluate Retry Tasks",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        3936,
-        144
+        1216,
+        592
       ]
     },
     {
@@ -886,9 +904,20 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        4160,
-        144
+        1440,
+        656
       ]
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-globals.globalConstants",
+      "typeVersion": 1,
+      "position": [
+        2096,
+        -96
+      ],
+      "id": "11d281cd-f5de-4061-ad5a-ac24e0eea9cd",
+      "name": "Global Constants"
     }
   ],
   "connections": {
@@ -929,7 +958,7 @@
       "main": [
         [
           {
-            "node": "setParameter",
+            "node": "Global Constants",
             "type": "main",
             "index": 0
           }
@@ -1226,6 +1255,17 @@
         [
           {
             "node": "Ensure Download Folder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Global Constants": {
+      "main": [
+        [
+          {
+            "node": "setParameter",
             "type": "main",
             "index": 0
           }

@@ -383,12 +383,18 @@ async function prepare() {
   if (!await exists(credentialsPath)) {
     const credentialTemplate = {
       schemaVersion: 1,
-      instructions: '先按仓库 deployment/CREDENTIAL_SETUP.zh-CN.md 获取五组平台凭据，只在本机编辑此文件。merchroute-runtime.runtimeKey 保持为空，由部署脚本自动填充。禁止提交 Git、粘贴到聊天或截图分享。',
+      instructions: '先按仓库 deployment/CREDENTIAL_SETUP.zh-CN.md 获取四组平台配置，只在本机编辑此文件。merchroute-runtime.runtimeKey 保持为空，由部署脚本自动填充。禁止提交 Git、粘贴到聊天或截图分享。',
       credentialGuide: 'deployment/CREDENTIAL_SETUP.zh-CN.md',
       credentials: {
-        'jimeng-session': { token: '' },
         'siliconflow-api': { token: '' },
-        'qwen-runtime': { model: 'qwen3.7-plus', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', apiKey: '' },
+        'qwen-runtime': {
+          model: 'qwen3.7-plus',
+          baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
+          apiKey: '',
+          jimengModel: '',
+          jimengUrl: '',
+          jimengAuthorValue: '',
+        },
         'merchroute-runtime': { runtimeKey: '' },
         'wb-seller-api': { token: '' },
         'ozon-seller-api': { clientId: '', apiKey: '' },
@@ -648,7 +654,24 @@ async function probe() {
   };
   const probes = [
     ['jimeng', async () => {
-      const response = await request('http://127.0.0.1:8000/token/check', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: credentials['jimeng-session']?.token }) });
+      const configuredRoot = String(credentials['qwen-runtime']?.jimengUrl || '').trim();
+      let target;
+      try {
+        const parsed = new URL(configuredRoot);
+        if (!['http:', 'https:'].includes(parsed.protocol)
+          || parsed.username
+          || parsed.password
+          || parsed.search
+          || parsed.hash
+          || !['', '/'].includes(parsed.pathname)) {
+          throw new Error('invalid-service-root');
+        }
+        target = new URL('/token/check', `${parsed.origin}/`).href;
+      } catch {
+        throw new Error('credentials.qwen-runtime.jimengUrl 必须是无路径、查询参数和片段的 HTTP(S) 服务根 URL');
+      }
+      const token = String(credentials['qwen-runtime']?.jimengAuthorValue || '').trim().replace(/^Bearer\s+/i, '').trim();
+      const response = await request(target, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token }) });
       const body = response.ok ? await response.json().catch(() => ({})) : {};
       return { ok: response.ok && body.live === true, status: response.status };
     }],

@@ -123,7 +123,7 @@
             {
               "id": "5ad659be-470f-4e4c-aa78-8fa24e435fd1",
               "name": "model",
-              "value": "即梦4.5",
+              "value": "={{ $json.constants.model.jimengModel }}",
               "type": "string"
             },
             {
@@ -160,7 +160,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const input = $input.first().json || {};\n\nconst productName = String(input.productName || '').trim();\nif (!productName) throw new Error('productName is required.');\n\nconst imageTasks = Array.isArray(input.imageTasks) ? input.imageTasks : [];\nif (imageTasks.length < 1) {\n  throw new Error('imageTasks must contain at least 1 image.');\n}\n\nconst concurrent = Math.max(1, Math.floor(Number(input.concurrent || 8)));\nconst modelInput = String(input.model || '即梦4.5').trim();\nconst modelApiName = modelInput === '即梦4.5' ? 'jimeng-4.5' : modelInput;\nconst basePrompt = String(input.prompt || '').trim();\nif (!basePrompt) throw new Error('setParameter.prompt is required.');\n\nreturn imageTasks.map((task, index) => {\n  const taskId = task.taskId || String(index + 1).padStart(2, '0');\n  const imageUrl = String(task.imageUrl || '').trim();\n  if (!/^https?:\\/\\//i.test(imageUrl)) {\n    throw new Error('imageUrl is missing or invalid for task ' + taskId);\n  }\n  const viewPrompt = basePrompt.replace(/\\{\\{\\s*\\$json\\.productName\\s*\\}\\}/g, productName);\n  return {\n    json: {\n      ...input,\n      concurrent,\n      modelApiName,\n      taskId,\n      originalIndex: index,\n      sourceFileName: task.sourceFileName,\n      sourceBaseName: task.sourceBaseName,\n      sourceExtension: task.sourceExtension,\n      folderPath: input.productFolderPath,\n      viewPrompt,\n      imageUrls: [imageUrl],\n    },\n    pairedItem: { item: 0 },\n  };\n});"
+        "jsCode": "const input = $input.first().json || {};\n\nconst productName = String(input.productName || '').trim();\nif (!productName) throw new Error('productName is required.');\n\nconst imageTasks = Array.isArray(input.imageTasks) ? input.imageTasks : [];\nif (imageTasks.length < 1) {\n  throw new Error('imageTasks must contain at least 1 image.');\n}\n\nconst concurrent = Math.max(1, Math.floor(Number(input.concurrent || 8)));\nconst constants = input.constants;\nfunction requireConstant(value, field) {\n  const text = typeof value === 'string' ? value.trim() : '';\n  if (!text) throw new Error('CONFIG_INVALID: Global Constants 缺少 ' + field);\n  return text;\n}\nconst jimengModel = requireConstant(constants?.model?.jimengModel, 'constants.model.jimengModel');\nconst jimengUrl = requireConstant(constants?.BaseUrl?.JimengUrl, 'constants.BaseUrl.JimengUrl');\nrequireConstant(constants?.Authorization?.jimengAuthorValue, 'constants.Authorization.jimengAuthorValue');\nconst jimengUrlMatch = /^(https?):\\/\\/(\\[[0-9a-f:.]+\\]|[a-z0-9.-]+)(?::([0-9]{1,5}))?\\/?$/i.exec(jimengUrl);\nconst jimengPort = jimengUrlMatch?.[3] ? Number(jimengUrlMatch[3]) : null;\nif (!jimengUrlMatch || (jimengPort !== null && (jimengPort < 1 || jimengPort > 65535))) {\n  throw new Error('CONFIG_INVALID: constants.BaseUrl.JimengUrl 必须是合法的 HTTP(S) 服务根地址');\n}\nconst basePrompt = String(input.prompt || '').trim();\nif (!basePrompt) throw new Error('setParameter.prompt is required.');\n\nreturn imageTasks.map((task, index) => {\n  const taskId = task.taskId || String(index + 1).padStart(2, '0');\n  const imageUrl = String(task.imageUrl || '').trim();\n  if (!/^https?:\\/\\//i.test(imageUrl)) {\n    throw new Error('imageUrl is missing or invalid for task ' + taskId);\n  }\n  const viewPrompt = basePrompt.replace(/\\{\\{\\s*\\$json\\.productName\\s*\\}\\}/g, productName);\n  return {\n    json: {\n      ...input,\n      concurrent,\n      taskId,\n      originalIndex: index,\n      sourceFileName: task.sourceFileName,\n      sourceBaseName: task.sourceBaseName,\n      sourceExtension: task.sourceExtension,\n      folderPath: input.productFolderPath,\n      viewPrompt,\n      imageUrls: [imageUrl],\n    },\n    pairedItem: { item: 0 },\n  };\n});"
       },
       "id": "c3aa8674-c611-451a-87bd-3331d515db2b",
       "name": "Build Jimeng Tasks",
@@ -174,21 +174,24 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://localhost:8000/v1/images/generations",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpBearerAuth",
+        "url": "={{ String($json.constants.BaseUrl.JimengUrl).trim().replace(/\\/+$/, '') + '/v1/images/generations' }}",
+        "authentication": "none",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
             {
               "name": "Content-Type",
               "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "={{ $json.constants.Authorization.jimengAuthorValue }}"
             }
           ]
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ model: $json.modelApiName, prompt: $json.viewPrompt, images: $json.imageUrls, ratio: $json.ratio, resolution: $json.resolution }) }}",
+        "jsonBody": "={{ JSON.stringify({ model: $json.constants.model.jimengModel, prompt: $json.viewPrompt, images: $json.imageUrls, ratio: $json.ratio, resolution: $json.resolution }) }}",
         "options": {
           "batching": {
             "batch": {
@@ -431,21 +434,24 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://localhost:8000/v1/images/generations",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpBearerAuth",
+        "url": "={{ String($json.constants.BaseUrl.JimengUrl).trim().replace(/\\/+$/, '') + '/v1/images/generations' }}",
+        "authentication": "none",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
             {
               "name": "Content-Type",
               "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "={{ $json.constants.Authorization.jimengAuthorValue }}"
             }
           ]
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ model: $json.modelApiName, prompt: $json.viewPrompt, images: $json.imageUrls, ratio: $json.ratio, resolution: $json.resolution }) }}",
+        "jsonBody": "={{ JSON.stringify({ model: $json.constants.model.jimengModel, prompt: $json.viewPrompt, images: $json.imageUrls, ratio: $json.ratio, resolution: $json.resolution }) }}",
         "options": {
           "batching": {
             "batch": {
@@ -688,6 +694,17 @@
         1280,
         160
       ]
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-globals.globalConstants",
+      "typeVersion": 1,
+      "position": [
+        720,
+        160
+      ],
+      "id": "b1fd5c56-b210-4f0d-88e9-8cf7afaf5cfc",
+      "name": "Global Constants"
     }
   ],
   "connections": {
@@ -890,7 +907,7 @@
       "main": [
         [
           {
-            "node": "setParameter",
+            "node": "Global Constants",
             "type": "main",
             "index": 0
           }
@@ -913,6 +930,17 @@
         [
           {
             "node": "Build Jimeng Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Global Constants": {
+      "main": [
+        [
+          {
+            "node": "setParameter",
             "type": "main",
             "index": 0
           }
