@@ -72,7 +72,7 @@
     "portablePathTemplates": true
   },
   "securityTotals": {
-    "removedCredentialBindings": 34,
+    "removedCredentialBindings": 27,
     "removedWebhookIds": 30,
     "redactedLiterals": 1
   },
@@ -83,14 +83,14 @@
       "category": "core",
       "active": true,
       "file": "workflows/core/Wxng7hVbjMNhVOaO.json",
-      "sha256": "20eb278c37ebd3204ec7deb075d7881c5bbdab96124d524cdf30e241ad17f80b",
+      "sha256": "d0d6cb5d1a7073d00213d15b1d69e3dcf1d8f109283e423bec5db9da2c4f5f75",
       "dependencies": [
         "5fKlIwJWfXJM1y4E",
         "KmZ1AibtVGxzCgzc",
         "gDMR3Mxnm9dKQJtO"
       ],
       "security": {
-        "removedCredentialBindings": 2,
+        "removedCredentialBindings": 1,
         "removedWebhookIds": 0,
         "redactedLiterals": 0,
         "redactionKinds": {},
@@ -103,14 +103,14 @@
       "category": "core",
       "active": true,
       "file": "workflows/core/HpCtxAZJdy9RgWk2.json",
-      "sha256": "09c046b8e9ae9c9f381936ebe149bf187a2f58b80b19ce9b16682f05eb301d31",
+      "sha256": "4b88fab1c7fe3372998cf7f972c886af6fe6712228ce466a1f817eb08c6ab30d",
       "dependencies": [
         "5fKlIwJWfXJM1y4E",
         "KmZ1AibtVGxzCgzc",
         "gDMR3Mxnm9dKQJtO"
       ],
       "security": {
-        "removedCredentialBindings": 4,
+        "removedCredentialBindings": 1,
         "removedWebhookIds": 2,
         "redactedLiterals": 0,
         "redactionKinds": {},
@@ -234,10 +234,10 @@
       "category": "core",
       "active": true,
       "file": "workflows/core/ieWnRGeC7KdeS1GT.json",
-      "sha256": "f6f6f2ae81f237cab8711439d53d0288fe83d1edb1091b2149b7fa448828c5a4",
+      "sha256": "667cd09baa7fb3335c773ec5eac3eb658b75116494f7c09d6705de1be9271b0e",
       "dependencies": [],
       "security": {
-        "removedCredentialBindings": 4,
+        "removedCredentialBindings": 1,
         "removedWebhookIds": 2,
         "redactedLiterals": 0,
         "redactionKinds": {},
@@ -316,7 +316,7 @@
       "category": "core",
       "active": true,
       "file": "workflows/core/JEl0xCKTgtiIP9UT.json",
-      "sha256": "053454586072b7e1b7d154da47359b1c022867fd9691459d6451138cf907ad92",
+      "sha256": "559afb6a6a35d919c3c23e5f6102782396ee18a32542bb5d4c619c50015f66c0",
       "dependencies": [],
       "security": {
         "removedCredentialBindings": 2,
@@ -728,5 +728,5 @@
       }
     }
   ],
-  "generatedAt": "2026-09-04T01:27:33.811Z"
+  "generatedAt": "2026-09-06T08:18:24.487Z"
 }

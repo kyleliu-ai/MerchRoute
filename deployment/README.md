@@ -6,7 +6,7 @@
 
 - 给 Codex、Claude Code 等智能体执行：[AGENT_INSTALL_PROMPT.zh-CN.md](AGENT_INSTALL_PROMPT.zh-CN.md)
 - 已有数据库、凭据或浏览器 Profile 的电脑安全更新：[AGENT_UPDATE_PROMPT.zh-CN.md](AGENT_UPDATE_PROMPT.zh-CN.md)
-- 六组凭据的含义、官方获取入口与安全填写步骤：[CREDENTIAL_SETUP.zh-CN.md](CREDENTIAL_SETUP.zh-CN.md)
+- 五组逻辑凭据（共享 Global Constants 同时承载千问与即梦）的含义、官方获取入口与安全填写步骤：[CREDENTIAL_SETUP.zh-CN.md](CREDENTIAL_SETUP.zh-CN.md)
 - 人工排错：[TROUBLESHOOTING.zh-CN.md](TROUBLESHOOTING.zh-CN.md)
 - Windows：`powershell -ExecutionPolicy Bypass -File deployment/scripts/bootstrap-windows.ps1`
 - macOS：`chmod +x deployment/scripts/bootstrap-macos.sh && ./deployment/scripts/bootstrap-macos.sh`

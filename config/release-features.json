@@ -50,6 +50,11 @@
       "name": "work/wb-publish-retry-20260905-0537",
       "head": "71efaf6a0a2e3fa1e5a545733287080ba3bce4c8",
       "featureId": "project-release-guardrails"
+    },
+    {
+      "name": "work/ozon-duplicate-card-recovery-20260905-1923",
+      "head": "061bf84fb7ee24da2ab6879546255c93bdaf0319",
+      "featureId": "project-release-guardrails"
     }
   ],
   "branches": [
@@ -689,18 +694,42 @@
       "title": "OZON 自动上品单店重试与失败位置接续",
       "action": "INTEGRATE",
       "sourceChecks": [
-        { "path": "packages/shared/src/ozon-retry.ts" },
-        { "path": "apps/server/src/repositories/ozon-retry.ts" },
-        { "path": "apps/server/src/services/ozon-publishing/retry.ts" },
-        { "path": "apps/server/src/repositories/ozon-duplicate-card-recovery.integration.test.ts" },
-        { "path": "apps/server/src/repositories/ozon-stores.ts" },
-        { "path": "apps/web/src/ozon-retry.tsx" },
-        { "path": "apps/web/src/ozon-retry.test.ts" },
-        { "path": "packages/shared/src/ozon-retry.test.ts" },
-        { "path": "docs/ozon-publish-retry.md" }
+        {
+          "path": "packages/shared/src/ozon-retry.ts"
+        },
+        {
+          "path": "apps/server/src/repositories/ozon-retry.ts"
+        },
+        {
+          "path": "apps/server/src/services/ozon-publishing/retry.ts"
+        },
+        {
+          "path": "apps/server/src/repositories/ozon-duplicate-card-recovery.integration.test.ts"
+        },
+        {
+          "path": "apps/server/src/repositories/ozon-stores.ts"
+        },
+        {
+          "path": "apps/web/src/ozon-retry.tsx"
+        },
+        {
+          "path": "apps/web/src/ozon-retry.test.ts"
+        },
+        {
+          "path": "packages/shared/src/ozon-retry.test.ts"
+        },
+        {
+          "path": "docs/ozon-publish-retry.md"
+        }
       ],
-      "checkIds": ["check", "postgres-integration", "e2e"],
-      "acceptance": ["仅选中店铺；保留冻结身份；未知写入先回查；重建先确认；旧新任务可追溯；隔离验收不触发真实上品"]
+      "checkIds": [
+        "check",
+        "postgres-integration",
+        "e2e"
+      ],
+      "acceptance": [
+        "仅选中店铺；保留冻结身份；未知写入先回查；重建先确认；旧新任务可追溯；隔离验收不触发真实上品"
+      ]
     },
     {
       "id": "wb-controlled-publish-retry",

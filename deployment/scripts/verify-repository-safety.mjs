@@ -34,9 +34,16 @@ for (const relative of candidates) {
 }
 
 const requirements = JSON.parse(await readFile(path.join(projectRoot, 'deployment', 'n8n', 'credential-requirements.json'), 'utf8'));
-if (requirements.requirements?.length !== 6 || requirements.bindings?.length !== 34) errors.push('凭据需求清单必须是 6 组逻辑凭据、34 处绑定');
+if (requirements.requirements?.length !== 5 || requirements.bindings?.length !== 27) errors.push('凭据需求清单必须是 5 组逻辑凭据、27 处绑定');
 const requirementText = JSON.stringify(requirements);
 if (/original(?:Credential)?(?:Id|Name)/i.test(requirementText)) errors.push('凭据需求清单包含原凭据标识');
+if (requirements.requirements?.some((item) => item.logicalAlias === 'jimeng-session')) errors.push('凭据需求清单仍包含已退役的 jimeng-session');
+const sharedConstants = requirements.requirements?.find((item) => item.logicalAlias === 'qwen-runtime');
+for (const field of ['jimengModel', 'jimengUrl', 'jimengAuthorValue']) {
+  if (!sharedConstants?.fields?.some((item) => item.name === field && item.required === true)) {
+    errors.push(`共享 Global Constants 缺少必填字段 ${field}`);
+  }
+}
 
 const jimengRoot = path.join(projectRoot, 'integrations', 'jimeng-free-api-all');
 for (const file of await listFiles(jimengRoot)) {
