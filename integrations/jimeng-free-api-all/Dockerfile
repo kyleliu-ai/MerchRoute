@@ -24,8 +24,9 @@ RUN npm ci --omit=dev \
     && chown -R node:node /app /ms-playwright
 COPY --from=build --chown=node:node /app/dist ./dist
 COPY --from=build --chown=node:node /app/configs ./configs
+COPY --from=build --chown=node:node /app/public ./public
 USER node
 EXPOSE 8000
 HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=5 \
-  CMD node -e "fetch('http://127.0.0.1:8000/ping').then(r=>r.text()).then(v=>{if(v.replace(/\"/g,'')!=='pong')process.exit(1)}).catch(()=>process.exit(1))"
+  CMD node -e "Promise.all([fetch('http://127.0.0.1:8000/ping').then(async r=>{if(!r.ok||(await r.text()).replace(/\"/g,'')!=='pong')throw new Error('ping')}),fetch('http://127.0.0.1:8000/').then(async r=>{const b=await r.text();if(!r.ok||!(r.headers.get('content-type')||'').includes('text/html')||!b.includes('jimeng-free-api'))throw new Error('welcome')})]).catch(()=>process.exit(1))"
 CMD ["npm", "start"]

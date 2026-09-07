@@ -55,6 +55,11 @@
       "name": "work/ozon-duplicate-card-recovery-20260905-1923",
       "head": "061bf84fb7ee24da2ab6879546255c93bdaf0319",
       "featureId": "project-release-guardrails"
+    },
+    {
+      "name": "work/jimeng-global-config-20260906-0331",
+      "head": "61a5d54bc5876a740df0ed8a1234a5c581c46757",
+      "featureId": "project-release-guardrails"
     }
   ],
   "branches": [
