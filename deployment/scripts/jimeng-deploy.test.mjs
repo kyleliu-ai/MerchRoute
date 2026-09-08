@@ -4,7 +4,7 @@ import { mkdtemp, access, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { BASELINE, ROOT, assertContainer, assertImage, assertMaintenance, assertStorageQuiescent, assertRecord, digest, profile, safeName, summarize } from './jimeng-deploy-lib.mjs';
+import { BASELINE, ROOT, assertContainer, assertImage, assertMaintenance, assertStorageQuiescent, assertRecord, digest, profile, releaseIdentity, safeName, summarize } from './jimeng-deploy-lib.mjs';
 
 const imageId='sha256:'+'1'.repeat(64), oldId='2'.repeat(64);
 function record() {
@@ -20,6 +20,28 @@ test('deployment profiles do not allow arbitrary production ports or Docker argu
   assert.equal(profile('production').port,8000); assert.equal(profile('test').port,18001);
   for(const bad of ['other','8000'])assert.throws(()=>profile(bad));
   for(const bad of ['--privileged','a,b','../data','/root',''])assert.throws(()=>safeName(bad));
+});
+test('release names bind product and component versions and reject unsafe or mismatched identities',()=>{
+  const release=releaseIdentity('1.0.0');
+  assert.equal(release.formalTag,'merchroute/jimeng-free-api-all:1.0.0');
+  assert.equal(release.containerName,profile('production','1.0.0').container);
+  assert.equal(profile('production','1.2.3').container,'merchroute-jimeng-v1.2.3');
+  for(const version of ['v1.0.0','1.0.0-rc.1','1.0.0/other',''])assert.throws(()=>releaseIdentity(version));
+  assert.throws(()=>releaseIdentity('1.0.0','0.9.1'));
+  assert.throws(()=>releaseIdentity('1.0.0','1.0.0','--bad'));
+});
+test('versioned records require matching image labels while legacy rollback records remain valid',()=>{
+  const r={...record(),release:releaseIdentity('1.0.0')};
+  const image={Id:imageId,Os:'linux',Architecture:'amd64',Config:{Labels:{
+    'org.merchroute.jimeng.source-sha256':r.sourceHash,'org.merchroute.jimeng.baseline':BASELINE,
+    'org.merchroute.jimeng.rc':'3','org.opencontainers.image.revision':r.commit+'-dirty',
+    'org.opencontainers.image.version':'1.0.0','org.merchroute.product.version':'1.0.0'}}};
+  assertImage(r,image);
+  for(const label of ['org.opencontainers.image.version','org.merchroute.product.version']){
+    const changed=structuredClone(image);delete changed.Config.Labels[label];assert.throws(()=>assertImage(r,changed));
+  }
+  const changed=structuredClone(r);changed.release.containerName='merchroute-jimeng';assert.throws(()=>assertRecord(changed));
+  assertRecord(record());
 });
 test('identity verification rejects a healthy container with wrong image, port, mount or user',()=>{
   const valid=container(); assertContainer(valid,record(),valid.Mounts[0].Name,profile('test'));

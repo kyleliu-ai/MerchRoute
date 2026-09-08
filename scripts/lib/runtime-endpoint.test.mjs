@@ -6,6 +6,17 @@ import {
 } from './runtime-endpoint.mjs';
 import { productionEnvironment } from '../release-runtime.mjs';
 
+test('local RC startup preserves candidate identity without inheriting a formal release tag', () => {
+  const binding = { schemaVersion: 2, runtimeEndpoint: createRuntimeEndpoint(43173), releaseTag: 'v0.1.10', manifestSha256: 'verified-manifest' };
+  const inherited = { MERCHROUTE_RELEASE_TAG: 'v0.1.10', DATABASE_URL: 'must-not-inherit' };
+  const candidate = productionEnvironment({ ...binding, formalRelease: false }, inherited);
+  assert.equal(candidate.MERCHROUTE_RELEASE_TAG, undefined);
+  assert.equal(candidate.MERCHROUTE_INSTALLED_MANIFEST_SHA256, binding.manifestSha256);
+  assert.equal(candidate.DATABASE_URL, undefined);
+  assert.equal(productionEnvironment(binding, inherited).MERCHROUTE_RELEASE_TAG, 'v0.1.10');
+  assert.equal(productionEnvironment({ ...binding, formalRelease: true }, inherited).MERCHROUTE_RELEASE_TAG, 'v0.1.10');
+});
+
 test('默认正式端口为 43173，并允许合法显式覆盖', () => {
   assert.equal(DEFAULT_MERCHROUTE_PORT, 43173);
   assert.deepEqual(runtimeEndpointFromEnvironment({}), { host: '127.0.0.1', port: 43173, origin: 'http://127.0.0.1:43173' });

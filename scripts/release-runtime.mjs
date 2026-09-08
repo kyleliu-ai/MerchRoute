@@ -19,7 +19,8 @@ export function productionEnvironment(binding,inherited=process.env) {
   const endpoint=runtimeEndpointFromBinding(binding,{allowLegacy:true});
   const env=Object.fromEntries(Object.entries(inherited).filter(([key])=>/^(PATH|PATHEXT|SYSTEMROOT|WINDIR|COMSPEC|TEMP|TMP|HOME|USERPROFILE|LOCALAPPDATA|APPDATA|LANG|LC_ALL)$/i.test(key)));
   return {...env,MERCHROUTE_ENV_FILE:binding.runtimeEnvFile,APP_DATA_DIR:binding.appDataDir,
-    MERCHROUTE_INSTALLED_MANIFEST_SHA256:binding.manifestSha256,MERCHROUTE_RELEASE_TAG:binding.releaseTag,
+    MERCHROUTE_INSTALLED_MANIFEST_SHA256:binding.manifestSha256,
+    ...(binding.formalRelease===false?{}:{MERCHROUTE_RELEASE_TAG:binding.releaseTag}),
     HOST:endpoint.host,PORT:String(endpoint.port),MERCHROUTE_PORT:String(endpoint.port),MERCHROUTE_RUNTIME_BASE_URL:endpoint.origin,NODE_ENV:'production'};
 }
 export async function startBoundRelease(binding) {

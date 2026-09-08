@@ -2,7 +2,10 @@ name: merchroute-jimeng
 services:
   jimeng:
     image: ${JIMENG_IMAGE:?Use the verified immutable image ID from the build record}
-    container_name: merchroute-jimeng
+    container_name: merchroute-jimeng-v${JIMENG_RELEASE_VERSION:?Use the accepted MerchRoute release version}
+    labels:
+      org.merchroute.product.version: ${JIMENG_RELEASE_VERSION:?Use the accepted MerchRoute release version}
+      org.opencontainers.image.version: ${JIMENG_RELEASE_VERSION:?Use the accepted MerchRoute release version}
     user: node
     restart: unless-stopped
     ports:

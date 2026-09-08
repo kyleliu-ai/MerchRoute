@@ -7,6 +7,7 @@ import cors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';
 import pino from 'pino';
 import sharp from 'sharp';
+import { DIRECT_DIRECTORY_REVIEW_STAGE_IDS, type DirectDeliveryItem } from '@n8n-media-review/shared';
 import { APP_VERSION, AppError, E001_VARIANT_MAX_IMAGE_COUNT, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, appConfigSchema, workflowParameterFileName, workflowParameterOptionsFileName, pricingBatchCalculationInputSchema, pricingCalculationInputSchema, pricingProductQueryInputSchema, shippingCalculationInputSchema, type AppConfig, type ReviewOperation, type TaskDetail, type OzonCatalogDictionaryValue, type OzonColorIdentity, type PendingSubmission, type ProductVariant, type ReviewRecord, type StageConfig, type StageSummary, type SubmissionRecord, type VariantSelectionGroup, type WbColorIdentity, type WorkflowParameterOptions, type WorkflowParameters } from '@n8n-media-review/shared';
 import { ConfigService, getAppDataDir, parseOzonMediaOutputRootTemplate, parseWbMediaOutputRootTemplate } from './config/service.js';
 import { acquireStateWriterLock } from './utils/state-writer-lock.js';
@@ -789,6 +790,9 @@ async function buildAppWithWriter(options: BuildAppOptions) {
     const persistedTaskId = store.resolvePersistedTaskId(taskId);
     const resolvedProduct = operation.input.resolvedProduct as Awaited<ReturnType<ProductIdentityService['requireResolvedTask']>>;
     const stage = operation.input.stage as StageConfig;
+    // Persisted approvals predating this mode retain their original queue behavior.
+    const directDirectory = operation.input.deliveryMode === 'DIRECT_DIRECTORY';
+    if (directDirectory && operation.input.directDeliveryItems) return submissions.runDirect(operation);
     requireEnabledStage(config, task.stageId);
     assertTaskContextIdentity(task, resolvedProduct.identity);
     if (stage.id === 'E004' || stage.id === 'E005') {
@@ -857,7 +861,7 @@ async function buildAppWithWriter(options: BuildAppOptions) {
     }
     let variantGroups = stage.id === 'E001' ? await validateVariantSelectionGroups(task, body.variantSelectionGroups || [], wb, ozonCatalog, resolvedProduct.identity.variants) : undefined;
     const selected = variantGroups ? [...new Set(variantGroups.flatMap((group) => group.selectedRelativePaths))] : validateSelected(task, body.selectedRelativePaths || [], true);
-    for (const relativePath of selected) await scanner.resolveIndexedMedia(taskId, relativePath);
+    if (!directDirectory) for (const relativePath of selected) await scanner.resolveIndexedMedia(taskId, relativePath);
     const configuredTargets = new Set(stage.targets.map((item) => item.targetStageId));
     const enabledStageIds = new Set(config.get().stages.filter((item) => item.enabled).map((item) => item.id));
     const validTargets = new Set(stage.targets.filter((item) => enabledStageIds.has(item.targetStageId)).map((item) => item.targetStageId));
@@ -890,6 +894,39 @@ async function buildAppWithWriter(options: BuildAppOptions) {
     }
     const now = new Date().toISOString();
     const pendingCreated: PendingSubmission[] = [];
+    if (directDirectory) {
+      const items: DirectDeliveryItem[] = [];
+      for (const group of variantGroups || [{ groupId: undefined, variantName: undefined, selectedRelativePaths: selected }]) {
+        const variant = group.groupId && 'wbColor' in group && group.wbColor ? groupVariants.get(group.wbColor.colorKey) : undefined;
+        if (stage.id === 'E001' && !variant) throw new AppError('CONFIG_INVALID', '无法解析审核任务变体');
+        for (const targetStageId of targets) {
+          const template = targetParameterDefaults.get(targetStageId)!;
+          items.push({
+            id: randomUUID(), submissionId: submissions.submissionId(), taskId: persistedTaskId, sourceStageId: stage.id, targetStageId,
+            selectedRelativePaths: [...group.selectedRelativePaths],
+            n8nTaskParameters: variant ? productIdentity.injectVariant(template.parameters, resolvedProduct.identity, variant.name) : template.parameters,
+            n8nTaskParameterOptions: template.parameterOptions, conflictPolicy: 'new-revision', status: 'PENDING',
+            productSku: resolvedProduct.identity.sku, productNameSnapshot: resolvedProduct.identity.productName,
+            variantGroupId: group.groupId, variantId: variant?.variantId, variantName: variant?.name,
+            createdAt: now, updatedAt: now
+          });
+        }
+      }
+      // Freeze all item identities before any directory writes. Recovery never regenerates them.
+      await store.updateSections(['reviews', 'reviewOperations', 'appEvents'], (db) => {
+        const current = db.reviewOperations!.find((row) => row.operationId === operation.operationId)!;
+        current.input.directDeliveryItems = structuredClone(items);
+        current.input.taskSnapshots = { [persistedTaskId]: structuredClone(task) };
+        let review = db.reviews.find((row) => row.taskId === persistedTaskId);
+        if (!review) {
+          review = { taskId: persistedTaskId, stageId: stage.id, sourceFolder: task.sourceFolder, sourceFolderName: task.sourceFolderName, selectedRelativePaths: selected, selectedTargetStageIds: targets, status: 'PACKAGING', createdAt: now, updatedAt: now };
+          db.reviews.push(review);
+        }
+        Object.assign(review, { selectedRelativePaths: selected, selectedTargetStageIds: targets, status: 'PACKAGING', updatedAt: now, approvedAt: now, productSku: resolvedProduct.identity.sku, productNameSnapshot: resolvedProduct.identity.productName, productIdentitySource: resolvedProduct.source, variantSelectionGroups: variantGroups });
+        store.appendEvent(db, 'REVIEW_APPROVED', '审核通过，正在投递到目标目录', { taskId, targets });
+      });
+      return submissions.runDirect(store.getOperation(operation.operationId)!);
+    }
     await store.updateSections(['reviews', 'pendingSubmissions', 'appEvents', 'reviewOperations'], (db) => {
       let review = db.reviews.find((item) => item.taskId === persistedTaskId);
       if (!review) {
@@ -1015,7 +1052,7 @@ async function buildAppWithWriter(options: BuildAppOptions) {
     if (stages?.some((stage) => stableHash(config.get().stages.find((row) => row.id === stage.id)) !== stableHash(stage))) throw new AppError('CONFIG_CHANGED', '接收任务后流程配置已变化，请核对原任务', undefined, 409);
   };
   reviewOperations.register('APPROVE', async (operation) => {
-    assertFrozenStages(operation);
+    if (operation.input.deliveryMode !== 'DIRECT_DIRECTORY' || !operation.input.directDeliveryItems) assertFrozenStages(operation);
     return approveTask(operation.input.taskId as string, operation.input.body as ApproveBody, operation);
   });
   reviewOperations.register('BATCH', async (operation) => {
@@ -1044,7 +1081,7 @@ async function buildAppWithWriter(options: BuildAppOptions) {
     }
     const operation = await reviewOperations.accept({
       kind: 'APPROVE', requestKey: key, request: requestBody, subjectKeys: ['task:' + persistedTaskId],
-      input: { taskId, body, task, stage, resolvedProduct, terminalVariant, stages: config.get().stages.filter((row) => row.id === stage.id || body.targetStageIds?.includes(row.id)), templates, expectedVersion, submissionIds: { WB: randomUUID(), OZON: randomUUID() } },
+      input: { taskId, body, task, stage, resolvedProduct, terminalVariant, deliveryMode: DIRECT_DIRECTORY_REVIEW_STAGE_IDS.includes(stage.id) ? 'DIRECT_DIRECTORY' : 'LEGACY', stages: config.get().stages.filter((row) => row.id === stage.id || body.targetStageIds?.includes(row.id)), templates, expectedVersion, submissionIds: { WB: randomUUID(), OZON: randomUUID() } },
       validate: (db) => assertVersion(db.reviews.find((row) => row.taskId === persistedTaskId)?.version || 0, expectedVersion)
     });
     return respondOperation(request, reply, operation);
@@ -1093,6 +1130,11 @@ async function buildAppWithWriter(options: BuildAppOptions) {
     if (existing) return respondOperation(request, reply, existing);
     const history = store.getSubmissionView(submissionId);
     if (!history) throw new AppError('CONFIG_INVALID', '投递记录不存在', { submissionId }, 404);
+    if (history.reviewOperationId) {
+      const owner = store.getOperation(history.reviewOperationId);
+      if (!owner || owner.input.deliveryMode !== 'DIRECT_DIRECTORY') throw new AppError('DELIVERY_OUTCOME_UNKNOWN', '原审核操作不存在，请核对投递结果', { submissionId }, 409);
+      return respondOperation(request, reply, history.status === 'SUCCESS' ? owner : await reviewOperations.retry(owner.operationId));
+    }
     const checkpoint = store.select('deliveryCheckpoints', (rows) => rows?.find((row) => row.submissionId === submissionId));
     const owner = checkpoint?.operationId ? store.getOperation(checkpoint.operationId) : undefined;
     if (owner?.status === 'NEEDS_ATTENTION') return respondOperation(request, reply, await reviewOperations.retry(owner.operationId));

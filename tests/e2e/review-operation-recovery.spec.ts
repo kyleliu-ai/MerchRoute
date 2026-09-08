@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 
-test('recovers a lost approval acknowledgement and reloads batch progress without SSE', async ({ page }) => {
+test('recovers a lost approval acknowledgement and reloads delivery history without SSE or a progress panel', async ({ page }) => {
   const before = (await (await page.request.get('/api/v1/submissions/history')).json()).items;
   const existingIds = new Set(before.map((record: any) => record.submissionId));
   await page.route('**/api/v1/review-operations/events', (route) => route.abort());
@@ -22,34 +22,22 @@ test('recovers a lost approval acknowledgement and reloads batch progress withou
     await route.abort('connectionfailed');
   });
   await page.getByRole('button', { name: '审核通过' }).click();
-  await page.getByRole('button', { name: '加入待投递清单' }).click();
+  await page.getByRole('button', { name: '审核并投递' }).click();
   await expect.poll(() => operationId).not.toBe('');
   await page.unroute('**/api/v1/tasks/*/approve');
   await page.reload();
-  await page.goto('/pending');
-  const pending = page.locator('.ant-table-tbody tr').filter({ hasText: 'E2E-测试产品A' });
-  await expect(pending).toHaveCount(1);
+  await page.goto('/history');
   const replay = await page.request.post(approveUrl, { headers: { Prefer: 'respond-async', 'Idempotency-Key': key }, data: requestBody });
   expect(replay.status()).toBe(202);
   expect((await replay.json()).operation.operationId).toBe(operationId);
-  await expect(pending).toHaveCount(1);
-  await pending.locator('label.ant-checkbox-wrapper').click();
-  const accepted = page.waitForResponse((response) => response.url().endsWith('/api/v1/submissions/batch') && response.request().method() === 'POST');
-  await page.getByRole('button', { name: '批量投递' }).click();
-  const response = await accepted;
-  expect(response.status()).toBe(202);
-  const batchOperationId = (await response.json()).operation.operationId;
+  await expect.poll(async () => (await (await page.request.get('/api/v1/review-operations/' + operationId)).json()).status).toBe('SUCCEEDED');
   await page.reload();
   await expect(page.getByTestId('review-operation')).toHaveCount(0);
-  await expect.poll(async () => (await (await page.request.get('/api/v1/review-operations/' + batchOperationId)).json()).status).toBe('SUCCEEDED');
-  await expect(pending).toHaveCount(0, { timeout: 35_000 });
-  const batchReplay = await page.request.post(response.url(), {
-    headers: { Prefer: 'respond-async', 'Idempotency-Key': response.request().headers()['idempotency-key']! },
-    data: response.request().postDataJSON()
-  });
-  expect(batchReplay.status()).toBe(202);
-  expect((await batchReplay.json()).operation.operationId).toBe(batchOperationId);
+  await expect(page.getByText('审核与投递进度', { exact: true })).toHaveCount(0);
+  const pending = (await (await page.request.get('/api/v1/pending-submissions')).json()).items;
+  expect(pending.filter((row: any) => row.sourceFolderName === 'E2E-测试产品A')).toEqual([]);
   const history = (await (await page.request.get('/api/v1/submissions/history')).json()).items;
   const delivered = history.filter((record: any) => record.sourceFolder.includes('E2E-测试产品A') && !existingIds.has(record.submissionId));
   expect(delivered).toHaveLength(1);
+  await expect(page.locator('.ant-table-row').filter({ hasText: delivered[0].submissionId })).toContainText('投递成功');
 });

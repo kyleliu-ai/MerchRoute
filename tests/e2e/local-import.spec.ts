@@ -285,11 +285,8 @@ test.describe.serial('E000 local import and E001 delivery', () => {
     expect(approved.ok(), await approved.text()).toBeTruthy();
     const pendingResponse = await page.request.get('/api/v1/pending-submissions');
     const pending = (await pendingResponse.json()).items.find((item: { taskId: string }) => item.taskId === taskId);
-    expect(pending).toBeTruthy();
-    expect(pending.selectedRelativePaths).toEqual(selected);
-    const submit = await page.request.post('/api/v1/submissions/batch', { data: { batchId: `e000-${Date.now()}`, pendingSubmissionIds: [pending.id], conflictPolicy: 'fail' } });
-    expect(submit.ok()).toBeTruthy();
-    expect((await submit.json()).results[0].status).toBe('SUCCESS');
+    expect(pending).toBeUndefined();
+    expect((await approved.json()).submissions[0].status).toBe('SUCCESS');
 
     const targetRoot = path.resolve('.e2e-data', 'roots', 'E001', 'input');
     const targetName = (await readdir(targetRoot)).find((name) => name.startsWith(`${sourceFolderName}-已经审核`));

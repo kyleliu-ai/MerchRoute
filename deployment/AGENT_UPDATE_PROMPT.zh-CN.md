@@ -28,7 +28,7 @@
 
 升级不得把开发 5173/4184、测试 4183 接到正式端口或生产数据库。Windows 如系统排除固定测试端口 4183，只能使用仓库受控 Docker E2E 运行器在隔离容器网络内继续使用 4183；不得改 HNS/WinNAT、停止 Docker或自动换测试端口。正式端口从仓库外 `merchroute.env` 和 schema v2 发布绑定读取，默认 `43173`；`MERCHROUTE_RUNTIME_BASE_URL` 必须与端口完全一致。`merchroute_dev` / `merchroute_dev_app` 仅用于开发，真实 n8n、PostgreSQL、Jimeng、媒体和 Profile 保持原位置。Draft PR 合并并发布 v0.1.4 前不能更改正式启动入口。切换前备份、检查活动任务及 PID，失败只回滚代码/入口，不盲目恢复业务状态，旧目录至少保留七天且清理另批审批。
 
-本提示词对应当前发布快照：Node.js `22.23.1`、npm `10.9.8`、n8n `2.32.6`、PostgreSQL `18.4`、Playwright `1.61.1`、Jimeng `0.9.1`；n8n 清单为 36 个唯一工作流和 3 个部署包；数据库映射为 `merchroute` → `merchroute_app`、`merchroute_n8n` → `merchroute_n8n`。
+本提示词对应当前发布快照：Node.js `22.23.1`、npm `10.9.8`、n8n `2.32.6`、PostgreSQL `18.4`、Playwright `1.61.1`、Jimeng `1.0.0`；n8n 清单为 36 个唯一工作流和 3 个部署包；数据库映射为 `merchroute` → `merchroute_app`、`merchroute_n8n` → `merchroute_n8n`。
 
 升级目标必须从目标 `origin/main` 提交中的以下机器可读文件确定，不能只相信本提示词中的静态文字：
 

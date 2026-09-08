@@ -478,8 +478,13 @@ export type PendingSubmission = {
 
 export type SubmissionStatus = 'SUCCESS' | 'PARTIAL_SUCCESS' | 'FAILED' | 'SKIPPED_CONFLICT';
 
+export const DIRECT_DIRECTORY_REVIEW_STAGE_IDS: readonly string[] = ['E000', 'E001', 'E006', 'E007'];
+// Durable execution snapshots only; these are never inserted into pendingSubmissions.
+export type DirectDeliveryItem = PendingSubmission & { submissionId: string };
+
 export type SubmissionRecord = {
   submissionId: string;
+  reviewOperationId?: string;
   pendingSubmissionId: string;
   taskId: string;
   sourceStageId: string;

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { DIRECT_DIRECTORY_REVIEW_STAGE_IDS } from '@n8n-media-review/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
@@ -551,7 +552,7 @@ export function App() {
           <Space size={18}><div className="header-status"><Badge status={headerConfigurationStatus.badge} /><span>{headerConfigurationStatus.label}</span></div><NotificationHub /></Space>
         </Header>
         <Content className="app-content">
-          {/^\/(review|task|pending|history)(\/|$)/.test(location.pathname) && <ReviewOperationsPanel visible={false} />}
+          {/^\/(review|task|pending|history)(\/|$)/.test(location.pathname) && <ReviewOperationsPanel visible={false} directOnly />}
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/review/downloads" element={<DownloadCenter />} />
@@ -1047,7 +1048,8 @@ function ReviewDetail() {
     return [...new Map(options.map((item) => [item.sku, item])).values()].map((item) => ({ value: item.sku, label: `${item.sku} · ${item.productName}` }));
   }, [productCandidates.data?.items, task?.productIdentity.candidates]);
   const save = useMutation({ mutationFn: () => api.saveDraft(taskId, allSelectedRelativePaths, activeTargets, isVariantSplit ? variantGroups : undefined), onSuccess: () => { message.success('草稿已保存'); void client.invalidateQueries({ queryKey: ['task', taskId] }); } });
-  const approve = useMutation({ mutationFn: () => api.approve(taskId, allSelectedRelativePaths, activeTargets, isVariantSplit ? variantGroups : undefined, task?.reviewVersion), onSuccess: () => { message.success(isTerminalDelivery ? '审核请求已接收，投递结果请查看投递历史' : '审核请求已接收，请查看待投递清单'); void client.invalidateQueries({ queryKey: ['review-operations'] }); navigate(isTerminalDelivery ? '/history' : '/pending'); }, onError: (error) => message.error(error.message) });
+  const isDirectDelivery = isTerminalDelivery || DIRECT_DIRECTORY_REVIEW_STAGE_IDS.includes(task?.stageId || '');
+  const approve = useMutation({ mutationFn: () => api.approve(taskId, allSelectedRelativePaths, activeTargets, isVariantSplit ? variantGroups : undefined, task?.reviewVersion), onSuccess: () => { message.success(isDirectDelivery ? '审核请求已接收，投递结果请查看投递历史' : '审核请求已接收，请查看待投递清单'); void client.invalidateQueries({ queryKey: ['review-operations'] }); navigate(isDirectDelivery ? '/history' : '/pending'); }, onError: (error) => message.error(error.message) });
   const updateActiveSelection = (update: (current: string[]) => string[]) => {
     if (!isVariantSplit) return setSelectedRelativePaths((current) => uniqueSelectedRelativePaths(update(current)));
     if (!activeVariantGroup) return;
@@ -1188,8 +1190,8 @@ function ReviewDetail() {
         </div>)}</div>
       </aside>
     </div>
-    <Modal open={approveOpen} title="确认审核通过" okText={isTerminalDelivery ? '审核并投递' : '加入待投递清单'} cancelText="继续检查" confirmLoading={approve.isPending} onCancel={() => setApproveOpen(false)} onOk={() => { if (!activeTargets.length) return message.warning(isTerminalDelivery ? '至少选择一个可用平台' : '至少选择一个目标阶段'); approve.mutate(); }}>
-      <Alert type="info" showIcon message={`已选择 ${allSelected.size} 个媒体${isVariantSplit ? `，分为 ${variantGroups.length} 个变体组` : ''}`} description={isTerminalDelivery ? '审核通过后将立即投递到下方选中的平台目录；各平台独立记录结果。' : '此操作只加入待投递清单，不会立即启动 n8n。'} />
+    <Modal open={approveOpen} title="确认审核通过" okText={isDirectDelivery ? '审核并投递' : '加入待投递清单'} cancelText="继续检查" confirmLoading={approve.isPending} onCancel={() => setApproveOpen(false)} onOk={() => { if (!activeTargets.length) return message.warning(isTerminalDelivery ? '至少选择一个可用平台' : '至少选择一个目标阶段'); approve.mutate(); }}>
+      <Alert type="info" showIcon message={`已选择 ${allSelected.size} 个媒体${isVariantSplit ? `，分为 ${variantGroups.length} 个变体组` : ''}`} description={isTerminalDelivery ? '审核通过后将立即投递到下方选中的平台目录；各平台独立记录结果。' : isDirectDelivery ? '审核通过后将使用系统默认参数，立即投递到所选目标的工作流监听目录；结果记录在投递历史中。' : '此操作只加入待投递清单，不会立即启动 n8n。'} />
       <Descriptions size="small" column={1} items={[{ key: 'sku', label: '产品 SKU', children: task.productIdentity.sku }, { key: 'name', label: '数据库产品名', children: task.productIdentity.productName }]} />
       {isVariantSplit && <div className="variant-approval-list">{variantGroups.map((group) => <div className="variant-approval-row" key={group.groupId}>
         <strong>{group.variantName || '未命名变体'}</strong>
@@ -1281,7 +1283,7 @@ function PendingPage() {
   ];
   return <div className="page-stack">
     <div className="workflow-navigation-intro">
-      <PageTitle eyebrow="DELIVERY QUEUE" title="待投递清单" description="审批结果在此集中等待。只有点击批量投递后，系统才会向下一阶段监听目录写入完整任务包。" />
+      <PageTitle eyebrow="DELIVERY QUEUE" title="待投递清单" description="E002、E003 的审核结果和已有待投递项在此手动投递。下载中心与 E001 的新审核会直接投递，结果请查看投递历史。" />
       <WorkflowShortcuts context="pending" data={workflowShortcuts} />
     </div>
     <Card className="batch-toolbar"><Flex justify="space-between" align="center" wrap gap={12}><Space><Text strong>已选择 {selected.length} 项</Text><Select value={policy} onChange={setPolicy} options={[{ value: 'skip', label: '目标重名：跳过' }, { value: 'new-revision', label: '目标重名：创建修订版本' }]} /></Space><Button type="primary" icon={<CloudUploadOutlined />} disabled={!selected.length || submit.isPending} loading={submit.isPending} onClick={() => submit.mutate()}>批量投递</Button></Flex></Card>
@@ -1966,7 +1968,9 @@ function PurchaseLocalImportPage() {
 function LocalImportCreateView({ onViewImported }: { onViewImported: (sku: string) => void }) {
   const navigate = useNavigate();
   const client = useQueryClient();
-  const [currentPath, setCurrentPath] = useState('');
+  const [directoryLocation, setDirectoryLocation] = useState({ path: '', page: 1 });
+  const currentPath = directoryLocation.path;
+  const setCurrentPath = (path: string) => setDirectoryLocation({ path, page: 1 });
   const [selected, setSelected] = useState<string[]>([]);
   const [primary, setPrimary] = useState('');
   const [preview, setPreview] = useState<LocalImportPreview>();
@@ -2025,6 +2029,14 @@ function LocalImportCreateView({ onViewImported }: { onViewImported: (sku: strin
   const pathParts = currentPath ? currentPath.split('/') : [];
   const isSourceRoot = pathParts.length === 0;
   const isPlatformDirectory = pathParts.length === 1;
+  const directoryItems = directories.data?.directories || [];
+  const directoryPage = Math.min(directoryLocation.page, Math.max(1, Math.ceil(directoryItems.length / 10)));
+  const visibleDirectories = isPlatformDirectory ? directoryItems.slice((directoryPage - 1) * 10, directoryPage * 10) : directoryItems;
+  useEffect(() => {
+    if (directories.isSuccess && directoryLocation.page !== directoryPage) {
+      setDirectoryLocation((location) => ({ ...location, page: directoryPage }));
+    }
+  }, [directories.isSuccess, directoryLocation.page, directoryPage]);
   const error = directories.error instanceof ApiError ? directories.error : undefined;
   const productNameValidation = validateLocalImportProductName(fields?.productName);
   return <div className="page-stack local-import-create-view">
@@ -2041,7 +2053,7 @@ function LocalImportCreateView({ onViewImported }: { onViewImported: (sku: strin
               {isPlatformDirectory && !directories.isLoading && Boolean(directories.data?.directories.length) && <div className="local-directory-header is-product-media-header" aria-hidden="true">
                 <span>选择</span><span>变体目录</span><span className="creation-date-heading">创建日期 <ArrowDownOutlined /></span><span>平台来源</span><span>导入状态</span><span>操作</span>
               </div>}
-              {directories.isLoading ? <Skeleton active paragraph={{ rows: 3 }} /> : directories.data?.directories.length ? directories.data.directories.map((directory) => <div className={`local-directory-row${isSourceRoot ? ' is-platform-root-row' : ''}${isPlatformDirectory ? ' is-product-media-row' : ''}`} key={directory.relativePath}>
+              {directories.isLoading ? <Skeleton active paragraph={{ rows: 3 }} /> : visibleDirectories.length ? visibleDirectories.map((directory) => <div className={`local-directory-row${isSourceRoot ? ' is-platform-root-row' : ''}${isPlatformDirectory ? ' is-product-media-row' : ''}`} key={directory.relativePath}>
                 {!isSourceRoot && <Checkbox checked={selected.includes(directory.relativePath)} onChange={(event) => toggleDirectory(directory.relativePath, event.target.checked)} aria-label={`选择 ${directory.relativePath}`} />}
                 <div className="local-directory-identity"><FolderOpenOutlined /><button type="button" className="directory-name" disabled={isPlatformDirectory && pendingDirectories.has(directory.relativePath)} aria-busy={isPlatformDirectory && pendingDirectories.has(directory.relativePath)} title={isPlatformDirectory ? `打开变体目录 ${directory.name}` : directory.name} onClick={() => isPlatformDirectory ? void openDirectory(directory.relativePath) : directory.hasChildren ? setCurrentPath(directory.relativePath) : undefined}>{directory.name}</button></div>
                 {isSourceRoot && <span className="local-directory-child-count" data-label="子目录数">{directory.childDirectoryCount}</span>}
@@ -2052,6 +2064,9 @@ function LocalImportCreateView({ onViewImported }: { onViewImported: (sku: strin
                 <div className="local-directory-action" data-label="操作">{directory.hasChildren && <Button type="link" size="small" onClick={() => setCurrentPath(directory.relativePath)}>{isSourceRoot ? '导入产品媒体' : '打开'}</Button>}</div>
               </div>) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前目录没有可选子目录" />}
             </div>
+            {isPlatformDirectory && directories.isSuccess && <div className="local-directory-pagination" aria-label="媒体目录分页">
+              <Pagination size="small" current={directoryPage} pageSize={10} total={directoryItems.length} showSizeChanger={false} showLessItems showTotal={(total) => `共 ${total} 条`} onChange={(page) => setDirectoryLocation((location) => ({ ...location, page }))} />
+            </div>}
           </div>
           <aside className="local-import-selection-panel">
             <div><Text strong>已选 {selected.length} 个目录</Text><Paragraph type="secondary">同一产品的多个颜色媒体目录可一起导入。</Paragraph></div>

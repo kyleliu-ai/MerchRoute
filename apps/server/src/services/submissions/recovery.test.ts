@@ -7,11 +7,12 @@ import type { PendingSubmission } from '@n8n-media-review/shared';
 import { StateStore } from '../../repositories/store.js';
 import { ReviewOperationService } from '../review-operations.js';
 import { SubmissionService } from './index.js';
+import { reviewOperationContext } from '../../utils/review-operation-context.js';
 const roots: string[] = [];
 afterEach(async () => {
   for (const root of roots.splice(0)) { if (!path.basename(root).startsWith('merchroute-copy-fault-')) throw Error('unsafe cleanup'); await rm(root, { recursive: true, force: true }); }
 });
-async function fixture(fault?: (next: any, root: string) => Promise<void>) {
+async function fixture(fault?: (next: any, root: string) => Promise<void>, direct = false) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'merchroute-copy-fault-')); roots.push(root);
   const source = path.join(root, 'source', 'fixture');
   const queue = path.join(root, 'queue'), archive = path.join(root, 'archive'), appData = path.join(root, 'data');
@@ -29,15 +30,90 @@ async function fixture(fault?: (next: any, root: string) => Promise<void>) {
   ] }) };
   const scanner: any = { getTask: async () => ({ taskId: 'task', stageId: 'E006', sourceFolder: source, sourceFolderName: 'fixture', images }), resolveIndexedMedia: async (_task: string, file: string) => ({ absolutePath: path.join(source, file) }) };
   const identity: any = { requirePendingIdentity: async () => ({ sku: '0000001', productName: 'fixture', variants: [] }), inject: (parameters: any) => parameters };
-  const make = (store: StateStore) => new SubmissionService(config, store, scanner, identity, pino({ enabled: false }));
+  const make = (store: StateStore) => new SubmissionService(config, store, scanner, identity, pino({ enabled: false }), new ReviewOperationService(store, pino({ enabled: false })));
   const store = new StateStore(appData, undefined, fault ? { write: async (file, body) => { await fault(JSON.parse(body), root); await writeFile(file, body); } } : undefined);
   await store.initialize();
   await store.update((db) => {
     db.pendingSubmissions.push(pending);
     db.reviews.push({ taskId: 'task', stageId: 'E006', sourceFolder: source, sourceFolderName: 'fixture', selectedRelativePaths: pending.selectedRelativePaths, selectedTargetStageIds: ['E001'], status: 'APPROVED_PENDING_SUBMISSION', createdAt: '2026-01-01', updatedAt: '2026-01-01' });
   });
+  if (direct) {
+    const task = await scanner.getTask();
+    await store.update((db) => {
+      db.pendingSubmissions = [];
+      db.reviewOperations = [{ operationId: 'direct-op', kind: 'APPROVE', requestKey: 'direct', requestHash: 'fixture', subjectKeys: ['task:task'], status: 'RUNNING', attempt: 1, createdAt: '2026-01-01', updatedAt: '2026-01-01', input: {
+        deliveryMode: 'DIRECT_DIRECTORY', stages: config.get().stages, taskSnapshots: { task }, directDeliveryItems: [{ ...pending, submissionId: 'direct-submission' }]
+      } }];
+    });
+  }
   return { root, source, queue, archive, store, scanner, service: make(store), restart: async () => { const next = new StateStore(appData); await next.initialize(); return { store: next, service: make(next) }; } };
 }
+
+async function runDirect(f: { store: StateStore; service: SubmissionService }) {
+  return reviewOperationContext.run({ operationId: 'direct-op', metrics: {} }, () => f.service.runDirect(f.store.getOperation('direct-op')!));
+}
+
+describe('direct directory delivery recovery without pending entries', () => {
+  it.each(['PREPARING', 'VERIFIED', 'COMMIT_INTENT', 'TARGET_COMMITTED'])('keeps its fixed identity after a %s persistence failure', async (phase) => {
+    let failed = false;
+    const f = await fixture(async (next) => {
+      if (!failed && next.deliveryCheckpoints?.some((row: any) => row.phase === phase)) { failed = true; throw Error('simulated persistence failure'); }
+    }, true);
+    await expect(runDirect(f)).rejects.toBeDefined();
+    const restarted = await f.restart();
+    if (phase === 'TARGET_COMMITTED') f.scanner.resolveIndexedMedia = async () => { throw Error('source removed'); };
+    const result = await runDirect(restarted);
+    expect(result.submissions).toEqual([expect.objectContaining({ submissionId: 'direct-submission', status: 'SUCCESS' })]);
+    expect(restarted.store.section('pendingSubmissions')).toEqual([]);
+    expect(restarted.store.section('submissionHistory')).toHaveLength(1);
+    expect(await runDirect(restarted)).toEqual(result);
+    expect((await readdir(f.queue)).filter((name) => name !== '.staging')).toEqual(['fixture']);
+  });
+
+  it('records partial results and retries only the unfinished selection using frozen parameters', async () => {
+    const f = await fixture(undefined, true);
+    await f.store.updateSections(['reviewOperations'], (db) => {
+      const items = db.reviewOperations![0]!.input.directDeliveryItems as any[];
+      items[0].selectedRelativePaths = ['b.png'];
+      items[0].n8nTaskParameters.frozen = 'original';
+      items.push({ ...items[0], id: 'second', submissionId: 'second-submission', selectedRelativePaths: ['a.png'] });
+    });
+    const resolve = f.scanner.resolveIndexedMedia;
+    f.scanner.resolveIndexedMedia = async (task: string, file: string) => {
+      if (file === 'a.png') throw Error('source temporarily unavailable');
+      return resolve(task, file);
+    };
+    const first = await runDirect(f);
+    expect(first.submissions.map((row) => row.status)).toEqual(['SUCCESS', 'FAILED']);
+    expect(f.store.getReview('task')!.status).toBe('PARTIALLY_SUBMITTED');
+    expect(f.store.section('pendingSubmissions')).toEqual([]);
+    const restarted = await f.restart();
+    f.scanner.resolveIndexedMedia = async (task: string, file: string) => {
+      if (file === 'b.png') throw Error('completed source already consumed');
+      return resolve(task, file);
+    };
+    const recovered = await runDirect(restarted);
+    expect(recovered.submissions.map((row) => row.status)).toEqual(['SUCCESS', 'SUCCESS']);
+    expect(restarted.store.getReview('task')!.status).toBe('SUBMITTED');
+    expect(restarted.store.section('submissionHistory')).toHaveLength(2);
+    expect(restarted.store.getSubmission('second-submission')!.n8nTaskParameters!.frozen).toBe('original');
+    expect((await readdir(f.queue)).filter((name) => name !== '.staging').sort()).toEqual(['fixture', 'fixture__R02']);
+  });
+
+  it('retains an unknown consumed target without enqueueing a revision', async () => {
+    let failed = false;
+    const f = await fixture(async (next, root) => {
+      const checkpoint = next.deliveryCheckpoints?.find((row: any) => row.phase === 'TARGET_COMMITTED');
+      if (checkpoint && !failed) { failed = true; await rename(checkpoint.targetFinal, path.join(root, 'consumed')); throw Error('lost commit receipt'); }
+    }, true);
+    await expect(runDirect(f)).rejects.toBeDefined();
+    const restarted = await f.restart();
+    await expect(runDirect(restarted)).rejects.toMatchObject({ code: 'DELIVERY_OUTCOME_UNKNOWN' });
+    expect(restarted.store.section('deliveryCheckpoints')![0]!.submissionId).toBe('direct-submission');
+    expect(restarted.store.section('pendingSubmissions')).toEqual([]);
+    expect((await readdir(f.queue)).filter((name) => name !== '.staging')).toEqual([]);
+  });
+});
 describe('review delivery performance envelope', () => {
   it.each([1, 10])('measures acceptance and 22-file completion at %sx history scale', async (scale) => {
     const f = await fixture();

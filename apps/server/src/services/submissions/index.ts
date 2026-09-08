@@ -9,6 +9,8 @@ import {
   SUBMISSION_STEPS,
   type BatchItemProgress,
   type PendingSubmission,
+  type DirectDeliveryItem,
+  type ReviewOperation,
   type SubmissionBatchRecord,
   type SubmissionRecord,
   type DeliveryCheckpoint,
@@ -48,15 +50,43 @@ export class SubmissionService {
     private readonly operations?: ReviewOperationService
   ) {}
 
+  private directItems(): DirectDeliveryItem[] | undefined {
+    const id = reviewOperationContext.getStore()?.operationId;
+    return id ? this.store.getOperation(id)?.input.directDeliveryItems as DirectDeliveryItem[] | undefined : undefined;
+  }
+
+  private deliveryItem(id: string): PendingSubmission | undefined {
+    return this.directItems()?.find((item) => item.id === id) || this.store.getPending(id);
+  }
+
+  async runDirect(operation: ReviewOperation): Promise<{ submissions: SubmissionResult[] }> {
+    const items = operation.input.directDeliveryItems as DirectDeliveryItem[];
+    const outcome = await this.runItems('DIRECT-' + operation.operationId, items.map((item) => item.id), 'new-revision', items);
+    await this.store.updateSections(['reviews'], (db) => {
+      const review = db.reviews.find((row) => row.taskId === items[0]?.taskId);
+      if (review) {
+        const statuses = outcome.results.map((row) => row.status);
+        review.status = statuses.every((status) => status === 'SUCCESS') ? 'SUBMITTED'
+          : statuses.some((status) => status === 'SUCCESS' || status === 'PARTIAL_SUCCESS') ? 'PARTIALLY_SUBMITTED' : 'FAILED';
+        review.updatedAt = new Date().toISOString();
+      }
+    });
+    return { submissions: outcome.results };
+  }
+
   async runBatch(batchId: string, pendingIds: string[], conflictPolicy: 'skip' | 'new-revision'): Promise<{ batchId: string; results: SubmissionResult[] }> {
+    return this.runItems(batchId, pendingIds, conflictPolicy);
+  }
+
+  private async runItems(batchId: string, pendingIds: string[], conflictPolicy: 'skip' | 'new-revision', directItems?: DirectDeliveryItem[]): Promise<{ batchId: string; results: SubmissionResult[] }> {
     const uniqueIds = [...new Set(pendingIds)];
     if (!uniqueIds.length) throw new AppError('CONFIG_INVALID', '至少选择一个待投递任务');
-    const snapshot = { pendingSubmissions: this.store.section('pendingSubmissions') };
+    const snapshot = { pendingSubmissions: directItems || this.store.section('pendingSubmissions') };
     for (const id of uniqueIds) {
       const pending = snapshot.pendingSubmissions.find((item) => item.id === id);
       if (!pending && this.store.select('deliveryCheckpoints', (rows) => rows?.some((row) => row.pendingSubmissionId === id && row.phase === 'COMPLETE'))) continue;
       if (!pending) throw new AppError('CONFIG_INVALID', '待投递任务不存在', { id }, 404);
-      this.requirePendingStagesEnabled(pending);
+      if (!directItems) this.requirePendingStagesEnabled(pending);
     }
     const now = new Date().toISOString();
     const batch: SubmissionBatchRecord = {
@@ -86,7 +116,7 @@ export class SubmissionService {
       // Variants from one review share the destination-name namespace. Queue them
       // so the existing revision policy can allocate the next folder safely.
       for (const id of ids) {
-        const pending = this.store.getPending(id);
+        const pending = this.deliveryItem(id);
         const stage = this.config.get().stages.find((item) => item.id === pending?.sourceStageId);
         const target = stage?.targets.find((item) => item.targetStageId === pending?.targetStageId);
         const sourceName = pending ? this.store.getReview(pending.taskId)?.sourceFolderName : undefined;
@@ -147,11 +177,18 @@ export class SubmissionService {
       const recovered = await this.reconcile(checkpoint);
       if (recovered) return recovered;
     }
-    const pending = this.store.getPending(pendingId);
+    const pending = this.deliveryItem(pendingId);
     if (!pending) return this.failProgress(batchId, pendingId, 'CONFIG_INVALID', '待投递任务不存在');
     let task: TaskDetail;
     try {
       this.requirePendingStagesEnabled(pending);
+      if (this.directItems()) {
+        const frozen = this.store.getOperation(reviewOperationContext.getStore()!.operationId)!.input.stages as StageConfig[];
+        if (frozen.filter((stage) => stage.id === pending.sourceStageId || stage.id === pending.targetStageId)
+          .some((stage) => stableHash(this.config.get().stages.find((row) => row.id === stage.id)) !== stableHash(stage))) {
+          throw new AppError('CONFIG_CHANGED', '接收任务后流程配置已变化，请核对原任务', undefined, 409);
+        }
+      }
       const snapshotError = this.operations?.currentId ? (this.store.getOperation(this.operations.currentId)?.input.taskSnapshotErrors as Record<string, { code: string; message: string; statusCode: number }> | undefined)?.[pending.taskId] : undefined;
       if (snapshotError) throw new AppError(snapshotError.code, snapshotError.message, undefined, snapshotError.statusCode);
       const snapshots = this.operations?.currentId ? this.store.getOperation(this.operations.currentId)?.input.taskSnapshots as Record<string, TaskDetail> | undefined : undefined;
@@ -192,7 +229,7 @@ export class SubmissionService {
     this.store.assertWritable();
     const operationId = reviewOperationContext.getStore()?.operationId;
     const input = operationId ? this.store.getOperation(operationId)?.input : undefined;
-    const pending = (input?.pending as PendingSubmission[] | undefined)?.find((row) => row.id === pendingId) || this.store.getPending(pendingId);
+    const pending = (input?.pending as PendingSubmission[] | undefined)?.find((row) => row.id === pendingId) || this.deliveryItem(pendingId);
     if (!pending) throw new AppError(errorCode, errorMessage, { pendingSubmissionId: pendingId }, 409);
     const checkpoint = this.store.select('deliveryCheckpoints', (rows) => rows?.find((row) => row.pendingSubmissionId === pendingId));
     if (checkpoint && ['COMMIT_INTENT', 'TARGET_COMMITTED', 'COMPLETE', 'NEEDS_ATTENTION'].includes(checkpoint.phase)) {
@@ -205,13 +242,14 @@ export class SubmissionService {
     await this.store.updateSections(['pendingSubmissions', 'reviews', 'submissionHistory', 'submissionBatches'], (db) => {
       const batch = db.submissionBatches.find((row) => row.batchId === batchId);
       const batchItem = batch?.items.find((row) => row.pendingSubmissionId === pendingId);
-      const failureId = checkpoint?.submissionId || batchItem?.submissionId || this.submissionId();
+      const failureId = checkpoint?.submissionId || this.directItems()?.find((item) => item.id === pendingId)?.submissionId || batchItem?.submissionId || this.submissionId();
       const old = db.submissionHistory.find((row) => row.submissionId === failureId);
       if (old?.status === 'SUCCESS' || old?.status === 'PARTIAL_SUCCESS') throw new AppError('DELIVERY_OUTCOME_UNKNOWN', '该投递已有公开结果，请先核对', { submissionId: failureId }, 409);
       const now = new Date().toISOString();
       const status = errorCode === 'TARGET_FOLDER_EXISTS' ? 'SKIPPED_CONFLICT' : 'FAILED';
       result = { pendingSubmissionId: pendingId, submissionId: failureId, status, errorCode, errorMessage };
       const record: SubmissionRecord = {
+        ...(this.directItems() ? { reviewOperationId: operationId } : {}),
         submissionId: failureId, pendingSubmissionId: pendingId, taskId: pending.taskId,
         sourceStageId: pending.sourceStageId, targetStageId: pending.targetStageId, sourceFolder,
         selectedImageCount: pending.selectedRelativePaths.length, selectedRelativePaths: [...pending.selectedRelativePaths],
@@ -228,7 +266,7 @@ export class SubmissionService {
       const current = db.pendingSubmissions.find((row) => row.id === pendingId);
       if (current) { current.status = 'FAILED'; current.lastError = `${errorCode}: ${errorMessage}`; current.updatedAt = now; }
       const review = db.reviews.find((row) => row.taskId === pending.taskId);
-      if (review) review.status = 'FAILED';
+      if (review && !this.directItems()) review.status = 'FAILED';
     });
     await this.setProgress(batchId, pendingId, result);
     return result;
@@ -282,7 +320,7 @@ export class SubmissionService {
       }
     }
     const nameInfo = existingCheckpoint ? { name: path.basename(existingCheckpoint.targetFinal), revision: existingCheckpoint.revision } : await this.resolveDestinationName(task.sourceFolderName, target, pending.conflictPolicy);
-    const submissionId = existingCheckpoint?.submissionId
+    const submissionId = existingCheckpoint?.submissionId || this.directItems()?.find((item) => item.id === pending.id)?.submissionId
       || this.store.getBatch(batchId)?.items.find((row) => row.pendingSubmissionId === pending.id)?.submissionId || this.submissionId();
     const n8nTaskParameters = pending.n8nTaskParameters || await this.config.getWorkflowParameters(pending.targetStageId);
     const n8nParameterFileName = this.n8nParameterFileName(pending.targetStageId, submissionId);
@@ -294,6 +332,7 @@ export class SubmissionService {
     const archiveStagingRoot = path.join(stage.approvedArchiveRoot, '.staging');
     const archiveTemp = path.join(archiveStagingRoot, `${nameInfo.name}.__tmp__${submissionId}`);
     const record: SubmissionRecord = {
+      ...(this.directItems() ? { reviewOperationId: reviewOperationContext.getStore()?.operationId } : {}),
       submissionId, pendingSubmissionId: pending.id, taskId: pending.taskId, sourceStageId: stage.id,
       targetStageId: target.targetStageId, sourceFolder: task.sourceFolder, selectedImageCount: sourceImages.length,
       selectedRelativePaths: [...pending.selectedRelativePaths],
@@ -506,7 +545,7 @@ export class SubmissionService {
         if (pending) { pending.status = 'FAILED'; pending.lastError = record.errorMessage; }
       }
       const review = db.reviews.find((row) => row.taskId === record.taskId);
-      if (review) review.status = record.status === 'SUCCESS' && !db.pendingSubmissions.some((row) => row.taskId === record.taskId) ? 'SUBMITTED' : 'PARTIALLY_SUBMITTED';
+      if (review && !record.reviewOperationId) review.status = record.status === 'SUCCESS' && !db.pendingSubmissions.some((row) => row.taskId === record.taskId) ? 'SUBMITTED' : 'PARTIALLY_SUBMITTED';
     });
     return this.result(record);
   }
@@ -568,7 +607,7 @@ export class SubmissionService {
 
   private async writeJson(file: string, data: unknown): Promise<void> { await writeFile(file, `${JSON.stringify(data, null, 2)}\n`, 'utf8'); }
 
-  private submissionId(): string {
+  submissionId(): string {
     const stamp = new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14);
     return `SUB-${stamp}-${randomUUID().slice(0, 8)}`;
   }

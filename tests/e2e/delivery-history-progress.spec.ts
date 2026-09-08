@@ -1,8 +1,26 @@
 import { expect, test, type Page } from '@playwright/test';
 
 const operation = { operationId: 'hidden-progress-operation', kind: 'BATCH', subjectKeys: ['task:fixture-task'], attempt: 1, createdAt: '2026-09-05T00:00:00.000Z', updatedAt: new Date().toISOString() };
+const directOperation = { ...operation, kind: 'APPROVE', deliveryMode: 'DIRECT_DIRECTORY' };
 const pending = { id: 'fixture-pending', taskId: 'fixture-task', sourceStageId: 'E006', targetStageId: 'E001', sourceFolderName: 'fixture-product', selectedRelativePaths: ['1.png'], productSku: '9999999', productNameSnapshot: '进度隐藏测试商品', sourceStageEnabled: true, status: 'PACKAGING', conflictPolicy: 'new-revision', version: 1 };
 const record = { submissionId: 'fixture-history', pendingSubmissionId: pending.id, taskId: pending.taskId, sourceStageId: 'E006', targetStageId: 'E001', sourceFolder: '/fixture/product', selectedImageCount: 1, productSku: pending.productSku, productNameSnapshot: pending.productNameSnapshot, startedAt: operation.createdAt, completedAt: operation.createdAt, status: 'SUCCESS' };
+
+for (const status of ['QUEUED', 'RUNNING', 'RETRY_WAIT', 'SUCCEEDED', 'FAILED', 'PARTIAL_SUCCESS', 'NEEDS_ATTENTION']) {
+  test(`history hides the entire direct approval progress panel for ${status}`, async ({ page }) => {
+    await fakeEvents(page);
+    await page.route('**/api/v1/review-operations?*', (request) => request.fulfill({ json: { items: [{ ...directOperation, status }] } }));
+    const loaded = page.waitForResponse((response) => response.url().includes('/api/v1/review-operations?'));
+    await page.goto('/history');
+    await loaded;
+    await expect(page.getByRole('heading', { name: '投递历史', exact: true })).toBeVisible();
+    await expect(page.getByText('审核与投递进度', { exact: true })).toHaveCount(0);
+    await expect(page.getByTestId('review-operation')).toHaveCount(0);
+    await expect(page.getByText(operation.operationId, { exact: true })).toHaveCount(0);
+    await expect(page.getByRole('columnheader', { name: '状态', exact: true })).toBeVisible();
+    await page.goto('/pending');
+    await expect(page.getByTestId('review-operation')).toHaveCount(0);
+  });
+}
 
 async function fakeEvents(page: Page) {
   await page.addInitScript(() => {
@@ -35,7 +53,7 @@ for (const route of ['/pending', '/history']) {
   test(`${route} still refreshes delivery results through SSE without rendering a progress card`, async ({ page }) => {
     let completed = false;
     await fakeEvents(page);
-    await page.route('**/api/v1/review-operations?*', (request) => request.fulfill({ json: { items: [{ ...operation, status: 'RUNNING' }] } }));
+    await page.route('**/api/v1/review-operations?*', (request) => request.fulfill({ json: { items: [{ ...directOperation, status: 'RUNNING' }] } }));
     await page.route('**/api/v1/pending-submissions?*', (request) => request.fulfill({ json: { items: completed ? [] : [pending], total: completed ? 0 : 1, page: 1, pageSize: 20 } }));
     await page.route('**/api/v1/submissions/history?*', (request) => request.fulfill({ json: { items: completed ? [record] : [], total: completed ? 1 : 0, page: 1, pageSize: 20 } }));
     await page.goto(route);
@@ -47,7 +65,7 @@ for (const route of ['/pending', '/history']) {
       const source = (window as any).__reviewEvents as EventTarget;
       source.dispatchEvent(new Event('open'));
       source.dispatchEvent(new MessageEvent('review-operation', { data: JSON.stringify(result) }));
-    }, { ...operation, status: 'SUCCEEDED' });
+    }, { ...directOperation, status: 'SUCCEEDED' });
     await expect(rows).toHaveCount(route === '/pending' ? 0 : 1);
     if (route === '/history') await expect(rows.first()).toContainText('投递成功');
     await expect(page.getByTestId('review-operation')).toHaveCount(0);
@@ -99,7 +117,7 @@ test('hidden progress uses low-frequency polling after SSE disconnects', async (
   let completed = false, requests = 0;
   await fakeEvents(page);
   await page.clock.install();
-  await page.route('**/api/v1/review-operations?*', (request) => { requests++; return request.fulfill({ json: { items: [{ ...operation, status: completed ? 'SUCCEEDED' : 'RUNNING' }] } }); });
+  await page.route('**/api/v1/review-operations?*', (request) => { requests++; return request.fulfill({ json: { items: [{ ...directOperation, status: completed ? 'SUCCEEDED' : 'RUNNING' }] } }); });
   await page.route('**/api/v1/submissions/history?*', (request) => request.fulfill({ json: { items: completed ? [record] : [], total: completed ? 1 : 0, page: 1, pageSize: 20 } }));
   await page.goto('/history');
   await expect.poll(() => requests).toBe(1);

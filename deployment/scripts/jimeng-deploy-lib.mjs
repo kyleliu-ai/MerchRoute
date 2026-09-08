@@ -5,6 +5,7 @@ import { copyFile, lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile, stat
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { readFileSync } from 'node:fs';
 import { assertExternal, withCommandLock } from '../../scripts/workflow/state.mjs';
 import { setTimeout } from 'node:timers/promises';
 
@@ -29,8 +30,15 @@ export async function dockerBuild(args) {
     child.on('close', (code) => code === 0 ? resolve() : reject(new Error(`Docker build failed: ${code}`)));
   });
 }
-export function profile(name = 'test') {
-  if (name === 'production') return { name, port:8000, container:'merchroute-jimeng', network:'bridge' };
+export function releaseIdentity(version, componentVersion = version, repository = 'merchroute/jimeng-free-api-all') {
+  assert.match(version || '', /^\d+\.\d+\.\d+$/, 'Stable product version required');
+  assert.equal(componentVersion, version, 'Jimeng and product versions must match');
+  assert.match(repository, /^[a-z0-9]+(?:[._-][a-z0-9]+)*(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)+$/);
+  return { productVersion:version, componentVersion, releaseTag:`v${version}`, imageRepository:repository,
+    formalTag:`${repository}:${version}`, containerName:`merchroute-jimeng-v${version}` };
+}
+export function profile(name = 'test', version = JSON.parse(readFileSync(path.join(ROOT,'deployment/runtime-versions.json'),'utf8')).jimeng.version) {
+  if (name === 'production') return { name, port:8000, container:releaseIdentity(version).containerName, network:'bridge' };
   if (name === 'test') return { name, port:18001, container:'merchroute-jimeng-isolated', network:'bridge' };
   throw new Error('Only test and production profiles are supported');
 }
@@ -76,6 +84,7 @@ export function assertRecord(record) {
   assert.equal(record.baseline, BASELINE);
   assert.ok(imageId(record.imageId));
   assert.ok(Number.isInteger(record.rc) && record.rc >= 3);
+  if (record.release) assert.deepEqual(record.release, releaseIdentity(record.release.productVersion, record.release.componentVersion, record.release.imageRepository));
   assert.match(record.commit, /^[a-f0-9]{40}$/);
   assert.ok(Array.isArray(record.files) && record.files.length > 0);
   const seen = new Set();
@@ -96,6 +105,10 @@ export function assertImage(record, raw = inspectImage(record.imageId)) {
   assert.equal(labels['org.merchroute.jimeng.baseline'], BASELINE);
   assert.equal(labels['org.merchroute.jimeng.rc'], String(record.rc));
   assert.equal(labels['org.opencontainers.image.revision'], record.commit + (record.dirty ? '-dirty' : ''));
+  if (record.release) {
+    assert.equal(labels['org.opencontainers.image.version'], record.release.componentVersion);
+    assert.equal(labels['org.merchroute.product.version'], record.release.productVersion);
+  }
   return raw;
 }
 
@@ -123,6 +136,8 @@ export async function build({ stateDir, rc = 3, dryRun = false }) {
   await assertExternal(ROOT,stateDir);
   const versions = (await json(path.join(ROOT,'deployment/runtime-versions.json'))).jimeng;
   const pkg = await json(path.join(ROOT,PREFIX,'package.json'));
+  const release = releaseIdentity((await json(path.join(ROOT,'package.json'))).version, versions.version, versions.imageRepository);
+  assert.equal(pkg.version, release.componentVersion);
   assert.equal(pkg.engines.node, versions.node); assert.equal(pkg.engines.npm, versions.npm);
   const files = await sourceFiles(), sourceHash = digest(JSON.stringify(files));
   const git = (...args) => execFileSync('git', ['-C',ROOT,...args], {encoding:'utf8',windowsHide:true}).trim();
@@ -152,11 +167,13 @@ export async function build({ stateDir, rc = 3, dryRun = false }) {
         '--label',`org.merchroute.jimeng.source-sha256=${sourceHash}`,
         '--label',`org.merchroute.jimeng.baseline=${BASELINE}`,
         '--label',`org.merchroute.jimeng.rc=${rc}`,
+        '--label',`org.opencontainers.image.version=${release.componentVersion}`,
+        '--label',`org.merchroute.product.version=${release.productVersion}`,
         '--label',`org.opencontainers.image.revision=${commit}${dirty ? '-dirty' : ''}`,
         '--iidfile',iid,'--tag',tag,snapshot]);
       const id = (await readFile(iid,'utf8')).trim();
       const raw = inspectImage(id);
-      const record = { schemaVersion:1,baseline:BASELINE,rc,tag,imageId:id,commit,dirty,sourceHash,files,
+      const record = { schemaVersion:1,baseline:BASELINE,rc,tag,imageId:id,commit,dirty,sourceHash,files,release,
         platform:`${raw.Os}/${raw.Architecture}`,node:versions.node,npm:versions.npm,createdAt:new Date().toISOString(),
         acceptance:{ node20BuildGate:true, isolatedDeployment:false, candidateLiveGeneration:false, productionActivated:false } };
       assertImage(record,raw);
@@ -175,6 +192,12 @@ export async function verify({ record, container, volume, selected }) {
   assertImage(record);
   const c = inspectContainer(container);
   assertContainer(c,record,volume,selected);
+  if (record.release) {
+    assert.equal(c.Config.Labels['org.merchroute.product.version'], record.release.productVersion);
+    assert.equal(c.Config.Labels['org.opencontainers.image.version'], record.release.componentVersion);
+    assert.equal(docker(['exec',c.Id,'node','-p',"require('./package.json').version"]),record.release.componentVersion);
+    if (selected.name === 'production') assert.equal(c.Name,'/'+record.release.containerName);
+  }
   assert.deepEqual(writers(volume).map((w) => w.Id),[c.Id], 'Unexpected second volume writer');
   const origin = `http://127.0.0.1:${selected.port}`;
   const ping = await fetch(origin+'/ping',{signal:AbortSignal.timeout(3000)});
@@ -255,6 +278,7 @@ export function assertStorageQuiescent(storage, gate, current) {
 }
 export async function deploymentPlan({ action, record, container, volume, selected, expectedImage, handoff = false }) {
   assertImage(record); safeName(volume);
+  if (selected.name === 'production' && record.release) assert.equal(selected.container,record.release.containerName,'Target name must match the accepted release');
   if (selected.name === 'test') assert.ok(volume.startsWith('merchroute-jimeng-test-'),'Test profile requires an explicitly isolated test volume');
   const old = inspectContainer(container || selected.container);
   const exists = docker(['volume','inspect',volume],{allowMissing:true}) !== null;
@@ -360,7 +384,9 @@ export async function deploy(input) {
       candidateId=docker(['run','--detach','--name',selected.container,'--restart','unless-stopped','--user','node',
         '--publish',`127.0.0.1:${selected.port}:8000`,'--mount',`type=volume,src=${volume},dst=/app/data`,
         '--env','IMAGE_TASK_STORE_DIR=/app/data','--label',`org.merchroute.operation=${operationId}`,
-        '--label',`org.merchroute.jimeng.source-sha256=${record.sourceHash}`,record.imageId]);
+        '--label',`org.merchroute.jimeng.source-sha256=${record.sourceHash}`,
+        ...(record.release ? ['--label',`org.merchroute.product.version=${record.release.productVersion}`,
+          '--label',`org.opencontainers.image.version=${record.release.componentVersion}`] : []),record.imageId]);
       assert.ok(containerId(candidateId));
       await log('candidate-started',{candidateId});
       const verified=await waitVerified({record,container:candidateId,volume,selected});
