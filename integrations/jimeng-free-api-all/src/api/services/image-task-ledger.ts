@@ -12,6 +12,8 @@ import {
 } from "./image-input-upload-retry.ts";
 
 export const IMAGE_TASK_STORE_SCHEMA_VERSION = 2;
+// E003/S003 submits seven scenes as one batch; capacity is not concurrency.
+export const MAX_IMAGE_BATCH_TASKS = 7;
 export const DEFAULT_GENERATION_CONCURRENCY = 5;
 export const MAX_GENERATION_CONCURRENCY = 5;
 export const DEFAULT_STATUS_CONCURRENCY = 4;
@@ -809,8 +811,8 @@ function publicRecord(record: ImageTaskRecord, reused: boolean): PublicImageTask
 }
 
 function validateBatchTasks(tasks: Record<string, any>[]): void {
-  if (!Array.isArray(tasks) || tasks.length === 0 || tasks.length > 5) {
-    throw new ImageTaskLedgerError("invalid_tasks", "tasks 必须包含 1-5 个任务");
+  if (!Array.isArray(tasks) || tasks.length === 0 || tasks.length > MAX_IMAGE_BATCH_TASKS) {
+    throw new ImageTaskLedgerError("invalid_tasks", `tasks 必须包含 1-${MAX_IMAGE_BATCH_TASKS} 个任务`);
   }
   const keys = new Set<string>();
   for (const task of tasks) {
@@ -1186,8 +1188,8 @@ export async function queryIdempotentBatch(input: QueryBatchInput): Promise<{
   allTerminal: boolean;
   tasks: PublicImageTaskRecord[];
 }> {
-  if (!Array.isArray(input.tasks) || input.tasks.length === 0 || input.tasks.length > 5) {
-    throw new ImageTaskLedgerError("invalid_tasks", "tasks 必须包含 1-5 个任务");
+  if (!Array.isArray(input.tasks) || input.tasks.length === 0 || input.tasks.length > MAX_IMAGE_BATCH_TASKS) {
+    throw new ImageTaskLedgerError("invalid_tasks", `tasks 必须包含 1-${MAX_IMAGE_BATCH_TASKS} 个任务`);
   }
   if (!Array.isArray(input.tokens) || input.tokens.length === 0) {
     throw new ImageTaskLedgerError("missing_token", "未配置可用的 refresh_token");
