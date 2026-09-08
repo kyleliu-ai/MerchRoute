@@ -188,7 +188,7 @@ E006/E007 使用的 Playwright、Sharp、幂等控制、登录和下载脚本也
 
 工作流依赖 `n8n-nodes-globals@1.1.0`；36 个工作流及其三类部署包见 [deployment/n8n/README.md](deployment/n8n/README.md)。凭据必须在新机器本地重新输入，并由 n8n 使用新安装的 `N8N_ENCRYPTION_KEY` 加密。
 
-Jimeng 代理由 [Docker Compose](integrations/jimeng-free-api-all/compose.yaml) 构建，只监听 `127.0.0.1:8000`，运行数据保存在仓库外的 Docker 卷 `/app/data`。验收请求 `GET /ping` 必须返回 `pong`。镜像基础与浏览器依赖支持 Docker Desktop 的 `linux/amd64`、`linux/arm64` 平台。
+Jimeng 代理通过[受控部署入口](deployment/JIMENG_DEPLOYMENT.zh-CN.md)构建不可变候选；[Docker Compose](integrations/jimeng-free-api-all/compose.yaml)仅引用经过核验的镜像 ID 和显式外部卷，不再自动构建。生产只监听 `127.0.0.1:8000`，测试固定 `127.0.0.1:18001`，运行数据保存在仓库外的 Docker 卷 `/app/data`。验收同时核对镜像、卷、权限、账本、欢迎页和 `GET /ping` 的 `pong`；仅健康成功不代表生图成功。镜像基础支持 `linux/amd64`、`linux/arm64`，实际平台验收分别记录。
 
 ## 数据与安全边界
 

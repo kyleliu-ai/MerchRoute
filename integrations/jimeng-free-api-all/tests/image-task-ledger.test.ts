@@ -53,6 +53,20 @@ const common = {
   intelligentRatio: false,
 };
 
+test('status uses persisted effective model, not a caller override; request hash is unchanged',async(t)=>{
+  const {ledger}=tempLedger(t), currentTask=task('front','SUB-stored-model');
+  const input=submitInput(ledger,[currentTask],{common:{...common,model:'jimeng-4.7'}});
+  const expectedHash=buildImageTaskRequestHash({task:currentTask,common:input.common,sourceImages:sourceImages()});
+  await submitIdempotentBatch(input);
+  assert.equal(ledger.get(currentTask.idempotencyKey)?.requestHash,expectedHash);
+  await queryIdempotentBatch({ledger,batchKey:input.batchKey,tasks:[{...currentTask,model:'jimeng-4.5',imageModel:'jimeng-4.5'}],tokens:input.tokens,
+    queryTask:async(historyId,_token,context)=>{
+      assert.equal(context.imageModel,'jimeng-4.7');
+      return {historyId,status:'success',count:1,imageUrls:['https://fixture.invalid/generated.png']};
+    }});
+  assert.equal(ledger.get(currentTask.idempotencyKey)?.status,'success');
+});
+
 function submitInput(
   ledger: ImageTaskLedger,
   tasks: Record<string, any>[],
@@ -341,7 +355,7 @@ test("status 在成功或明确失败时用 allTerminal 表达终态，ok 保持
     tokens: ["token-a", "token-b"],
     queryTask: async (historyId) => historyId.endsWith("side")
       ? { historyId, status: "failed", rawStatus: 30, failCode: "2038", count: 0, imageUrls: [] }
-      : { historyId, status: "success", rawStatus: 10, count: 4, imageUrls: ["1", "2", "3", "4"] },
+      : { historyId, status: "success", rawStatus: 10, count: 4, imageUrls: [1,2,3,4].map(n=>`https://fixture.invalid/${n}.png`) },
   });
   assert.equal(terminal.ok, true);
   assert.equal(terminal.allTerminal, true);

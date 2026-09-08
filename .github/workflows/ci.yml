@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, 'work/merchroute-github-publish-*']
+    branches: [main, 'work/**']
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened, ready_for_review]
@@ -95,10 +95,16 @@ jobs:
           npm install --global npm@10.9.8
           npm ci
       - name: Run original offline regression and same real TAP tests
+        env:
+          JIMENG_BUILD_STATE_DIR: ${{ runner.temp }}/jimeng-build
         run: node --import tsx scripts/run-ci-check.mjs --id jimeng-tests --record-dir "$RUNNER_TEMP/ci-records" --expected-commit "$MERCHROUTE_CI_EXPECTED_COMMIT" -- node --import tsx scripts/ci-regression-tests.mjs --suite jimeng
       - name: Build pinned Jimeng image
+        env:
+          JIMENG_BUILD_STATE_DIR: ${{ runner.temp }}/jimeng-build
         run: node --import tsx scripts/run-ci-check.mjs --id jimeng-image --record-dir "$RUNNER_TEMP/ci-records" --expected-commit "$MERCHROUTE_CI_EXPECTED_COMMIT" -- npm run jimeng:build
       - name: Verify owned disposable Jimeng container health
+        env:
+          JIMENG_BUILD_STATE_DIR: ${{ runner.temp }}/jimeng-build
         run: node --import tsx scripts/run-ci-check.mjs --id jimeng-ping --record-dir "$RUNNER_TEMP/ci-records" --expected-commit "$MERCHROUTE_CI_EXPECTED_COMMIT" -- node scripts/ci-jimeng-ping.mjs
       - name: Upload sanitized check records only
         if: ${{ always() }}

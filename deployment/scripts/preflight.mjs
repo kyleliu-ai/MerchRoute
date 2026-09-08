@@ -32,6 +32,17 @@ function knownPostgresContainer() {
   } catch { return false; }
 }
 
+function knownJimengDeployment() {
+  // A healthy unrelated process must not be mistaken for the accepted proxy.
+  const record=process.env.JIMENG_DEPLOY_RECORD, container=process.env.JIMENG_CONTAINER_ID, volume=process.env.JIMENG_TASK_VOLUME;
+  if(!record || !container || !volume)return false;
+  try {
+    execFileSync(process.execPath,[path.join(projectRoot,'deployment/scripts/jimeng-deploy.mjs'),'verify',
+      `--record=${record}`,`--container=${container}`,`--volume=${volume}`,'--profile=production'],{stdio:'pipe',windowsHide:true});
+    return true;
+  } catch{return false;}
+}
+
 const supportedPlatform = process.platform === 'win32' || (process.platform === 'darwin' && process.arch === 'arm64');
 checks.push({ name: 'supported-platform', ok: supportedPlatform, value: `${process.platform}-${process.arch}` });
 
@@ -56,7 +67,7 @@ for (const service of [
   { name: 'jimeng', port: 8000, url: 'http://127.0.0.1:8000/ping', expected: 'pong' },
 ]) {
   const free = await canListen(service.port);
-  const recognized = !free && (service.url ? await knownService(service.url, service.expected) : knownPostgresContainer());
+  const recognized = !free && (service.name==='jimeng' ? knownJimengDeployment() : service.url ? await knownService(service.url, service.expected) : knownPostgresContainer());
   checks.push({ name: `${service.name}-port-${service.port}`, ok: free || recognized, state: free ? 'free' : recognized ? 'known-service' : 'occupied' });
   if (service.name === 'merchroute' && process.platform === 'win32') {
     try {

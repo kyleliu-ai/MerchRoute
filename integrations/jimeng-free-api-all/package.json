@@ -17,8 +17,8 @@
     "start": "node --enable-source-maps --no-node-snapshot dist/index.js",
     "build": "tsup src/index.ts --format cjs,esm --sourcemap --dts --clean --publicDir public",
     "test": "npm run test:ts && npm run test:cjs",
-    "test:ts": "tsx --test --test-reporter=dot tests/*.test.ts",
-    "test:cjs": "node --test --test-reporter=dot tests/*.test.cjs"
+    "test:ts": "tsx --test --test-concurrency=1 --test-reporter=tap tests/*.test.ts",
+    "test:cjs": "node --test --test-reporter=tap tests/*.test.cjs"
   },
   "author": "Vinlic",
   "license": "GPL-3.0-only",

@@ -5,7 +5,9 @@ import EX from "@/api/consts/exceptions.ts";
 import util from "@/lib/util.ts";
 import { getCredit, receiveCredit, request, parseRegionFromToken, getAssistantId } from "./core.ts";
 import logger from "@/lib/logger.ts";
-import { getModelConfig } from "@/lib/configs/model-config.ts";
+import { DEFAULT_IMAGE_MODEL, imageCompositionOutputCount, resolveImageModel, resolveResolution, validateImageRequest } from "../services/image-model.ts";
+import { buildImageCompositionRequest } from "../services/image-composition-request.ts";
+import { imageCompletionPolicy } from '../services/image-completion-policy.mjs';
 import { uploadImageBufferForVideo } from "./videos.ts";
 import {
   IMAGE_COMPOSITION_HISTORY_RETRY_DELAYS_MS,
@@ -19,128 +21,17 @@ import {
 } from "../services/image-input-upload-retry.ts";
 
 const DEFAULT_ASSISTANT_ID = 513695;
-export const DEFAULT_MODEL = "jimeng-4.5";
+export const DEFAULT_MODEL = DEFAULT_IMAGE_MODEL;
 const DRAFT_VERSION = "3.3.4";
 const DRAFT_MIN_VERSION = "3.0.2";
 function getImageAssistantId(refreshToken: string): number {
   return getAssistantId(parseRegionFromToken(refreshToken));
 }
 
-// 支持的图片比例和分辨率配置
-const RESOLUTION_OPTIONS: {
-  [resolution: string]: {
-    [ratio: string]: { width: number; height: number; ratio: number };
-  };
-} = {
-  "1k": {
-    "1:1": { width: 1024, height: 1024, ratio: 1 },
-    "4:3": { width: 768, height: 1024, ratio: 4 },
-    "3:4": { width: 1024, height: 768, ratio: 2 },
-    "16:9": { width: 1024, height: 576, ratio: 3 },
-    "9:16": { width: 576, height: 1024, ratio: 5 },
-    "3:2": { width: 1024, height: 682, ratio: 7 },
-    "2:3": { width: 682, height: 1024, ratio: 6 },
-    "21:9": { width: 1195, height: 512, ratio: 8 },
-  },
-  "2k": {
-    "1:1": { width: 2048, height: 2048, ratio: 1 },
-    "4:3": { width: 2304, height: 1728, ratio: 4 },
-    "3:4": { width: 1728, height: 2304, ratio: 2 },
-    "16:9": { width: 2560, height: 1440, ratio: 3 },
-    "9:16": { width: 1440, height: 2560, ratio: 5 },
-    "3:2": { width: 2496, height: 1664, ratio: 7 },
-    "2:3": { width: 1664, height: 2496, ratio: 6 },
-    "21:9": { width: 3024, height: 1296, ratio: 8 },
-  },
-  "4k": {
-    "1:1": { width: 4096, height: 4096, ratio: 101 },
-    "4:3": { width: 4608, height: 3456, ratio: 104 },
-    "3:4": { width: 3456, height: 4608, ratio: 102 },
-    "16:9": { width: 5120, height: 2880, ratio: 103 },
-    "9:16": { width: 2880, height: 5120, ratio: 105 },
-    "3:2": { width: 4992, height: 3328, ratio: 107 },
-    "2:3": { width: 3328, height: 4992, ratio: 106 },
-    "21:9": { width: 6048, height: 2592, ratio: 108 },
-  },
-};
-
-// 解析分辨率参数
-function resolveResolution(
-  resolution: string = "2k",
-  ratio: string = "1:1"
-): { width: number; height: number; imageRatio: number; resolutionType: string } {
-  const resolutionGroup = RESOLUTION_OPTIONS[resolution];
-  if (!resolutionGroup) {
-    const supportedResolutions = Object.keys(RESOLUTION_OPTIONS).join(", ");
-    throw new Error(`不支持的分辨率 "${resolution}"。支持的分辨率: ${supportedResolutions}`);
-  }
-
-  const ratioConfig = resolutionGroup[ratio];
-  if (!ratioConfig) {
-    const supportedRatios = Object.keys(resolutionGroup).join(", ");
-    throw new Error(`在 "${resolution}" 分辨率下，不支持的比例 "${ratio}"。支持的比例: ${supportedRatios}`);
-  }
-
-  return {
-    width: ratioConfig.width,
-    height: ratioConfig.height,
-    imageRatio: ratioConfig.ratio,
-    resolutionType: resolution,
-  };
-}
-
-// 模型特定的版本配置
-const MODEL_DRAFT_VERSIONS: { [key: string]: string } = {
-  "jimeng-5.0": "3.3.9",
-  "jimeng-4.6": "3.3.9",
-  "jimeng-4.5": "3.3.4",
-  "jimeng-4.1": "3.3.4",
-  "jimeng-4.0": "3.3.4",
-  "jimeng-3.1": "3.0.2",
-  "jimeng-3.0": "3.0.2",
-  "jimeng-2.1": "3.0.2",
-  "jimeng-2.0-pro": "3.0.2",
-  "jimeng-2.0": "3.0.2",
-  "jimeng-1.4": "3.0.2",
-  "jimeng-xl-pro": "3.0.2",
-};
-
-// 获取模型对应的draft版本
-function getDraftVersion(model: string): string {
-  try {
-    const config = getModelConfig(model);
-    return config.draftVersion;
-  } catch (e) {
-    // 如果配置中没有，使用旧的映射
-    return MODEL_DRAFT_VERSIONS[model] || DRAFT_VERSION;
-  }
-}
-const MODEL_MAP = {
-  "jimeng-5.0": "high_aes_general_v50",
-  "jimeng-4.6": "high_aes_general_v42",
-  "jimeng-4.5": "high_aes_general_v40l",
-  "jimeng-4.1": "high_aes_general_v41",
-  "jimeng-4.0": "high_aes_general_v40",
-  "jimeng-3.1": "high_aes_general_v30l_art_fangzhou:general_v3.0_18b",
-  "jimeng-3.0": "high_aes_general_v30l:general_v3.0_18b",
-  "jimeng-2.1": "high_aes_general_v21_L:general_v2.1_L",
-  "jimeng-2.0-pro": "high_aes_general_v20_L:general_v2.0_L",
-  "jimeng-2.0": "high_aes_general_v20:general_v2.0",
-  "jimeng-1.4": "high_aes_general_v14:general_v1.4",
-  "jimeng-xl-pro": "text2img_xl_sft",
-};
-
-// 向后兼容的函数
+// One authoritative model map; unknown names must never silently become 4.5.
 export function getModel(model: string) {
-  try {
-    const config = getModelConfig(model);
-    return config.internalModel;
-  } catch (e) {
-    // 如果配置中没有，使用旧的映射
-    return MODEL_MAP[model] || MODEL_MAP[DEFAULT_MODEL];
-  }
+  return resolveImageModel(model).config.internalModel;
 }
-
 
 export async function downloadImageInputToBuffer(
   image: string | Buffer,
@@ -259,133 +150,20 @@ export async function submitImageCompositionFromUploadedIds(
     throw new APIException(EX.API_IMAGE_GENERATION_FAILED, "至少需要一张参考图");
   }
 
-  const model = getModel(_model);
-  const imageCount = uploadedImageIds.length;
-  const { width, height, imageRatio, resolutionType } = resolveResolution(resolution, ratio);
-  const { totalCredit } = await getCredit(refreshToken);
-  if (totalCredit <= 0) await receiveCredit(refreshToken);
-  const assistantId = getImageAssistantId(refreshToken);
-  const componentId = util.uuid();
+  validateImageRequest({ model: _model, ratio, resolution, operation: 'composition', imageCount: uploadedImageIds.length });
   const requestedSubmitId = String(options.remoteSubmitId || "").trim();
   if (requestedSubmitId && !/^[A-Za-z0-9:_-]{8,128}$/.test(requestedSubmitId)) {
     throw new APIException(EX.API_REQUEST_PARAMS_INVALID, "remoteSubmitId 格式无效");
   }
-  const submitId = requestedSubmitId || util.uuid();
-  const sceneOption = {
-    type: "image",
-    scene: "ImageBasicGenerate",
-    modelReqKey: _model,
-    resolutionType,
-    abilityList: uploadedImageIds.map(() => ({
-      abilityName: "byte_edit",
-      strength: sampleStrength,
-      source: { imageUrl: `blob:https://jimeng.jianying.com/${util.uuid()}` },
-    })),
-    reportParams: {
-      enterSource: "generate",
-      vipSource: "generate",
-      extraVipFunctionKey: `${_model}-${resolutionType}`,
-      useVipFunctionDetailsReporterHoc: true,
-    },
-  };
-
-  const { aigc_data } = await request(
-    "post",
-    "/mweb/v1/aigc_draft/generate",
-    refreshToken,
-    {
-      onBeforeRemoteSubmit: options.onBeforeRemoteSubmit,
-      data: {
-        extend: { root_model: model },
-        submit_id: submitId,
-        metrics_extra: JSON.stringify({
-          promptSource: "custom",
-          generateCount: 1,
-          enterFrom: "click",
-          sceneOptions: JSON.stringify([sceneOption]),
-          generateId: submitId,
-          isRegenerate: false,
-        }),
-        draft_content: JSON.stringify({
-          type: "draft",
-          id: util.uuid(),
-          min_version: "3.2.9",
-          min_features: [],
-          is_from_tsn: true,
-          version: "3.2.9",
-          main_component_id: componentId,
-          component_list: [{
-            type: "image_base_component",
-            id: componentId,
-            min_version: "3.0.2",
-            min_features: [],
-            aigc_mode: "workbench",
-            metadata: {
-              type: "",
-              id: util.uuid(),
-              created_platform: 3,
-              created_platform_version: "",
-              created_time_in_ms: Date.now().toString(),
-              created_did: "",
-            },
-            generate_type: "blend",
-            abilities: {
-              type: "",
-              id: util.uuid(),
-              blend: {
-                type: "",
-                id: util.uuid(),
-                min_version: "3.2.9",
-                min_features: [],
-                core_param: {
-                  type: "",
-                  id: util.uuid(),
-                  model,
-                  prompt: `${"#".repeat(imageCount * 2)}${prompt}`,
-                  sample_strength: sampleStrength,
-                  image_ratio: imageRatio,
-                  large_image_info: {
-                    type: "",
-                    id: util.uuid(),
-                    height,
-                    width,
-                    resolution_type: resolutionType,
-                  },
-                  intelligent_ratio: intelligentRatio,
-                },
-                ability_list: uploadedImageIds.map((imageId) => ({
-                  type: "",
-                  id: util.uuid(),
-                  name: "byte_edit",
-                  image_uri_list: [imageId],
-                  image_list: [{
-                    type: "image",
-                    id: util.uuid(),
-                    source_from: "upload",
-                    platform_type: 1,
-                    name: "",
-                    image_uri: imageId,
-                    width: 0,
-                    height: 0,
-                    format: "",
-                    uri: imageId,
-                  }],
-                  strength: sampleStrength,
-                })),
-                prompt_placeholder_info_list: uploadedImageIds.map((_, index) => ({
-                  type: "",
-                  id: util.uuid(),
-                  ability_index: index,
-                })),
-                postedit_param: { type: "", id: util.uuid(), generate_type: 0 },
-              },
-            },
-          }],
-        }),
-        http_common_info: { aid: assistantId },
-      },
-    } as any
-  );
+  const { totalCredit } = await getCredit(refreshToken);
+  if (totalCredit <= 0) await receiveCredit(refreshToken);
+  const { aigc_data } = await request("post", "/mweb/v1/aigc_draft/generate", refreshToken, {
+    ...buildImageCompositionRequest({
+      model: _model, prompt, uploadedImageIds, ratio, resolution, sampleStrength, intelligentRatio,
+      assistantId: getImageAssistantId(refreshToken), profile: 'async', remoteSubmitId: requestedSubmitId,
+    }, { uuid: () => util.uuid(), now: () => Date.now() }),
+    onBeforeRemoteSubmit: options.onBeforeRemoteSubmit,
+  } as any);
 
   const historyId = aigc_data?.history_record_id;
   if (!historyId) {
@@ -397,7 +175,8 @@ export async function submitImageCompositionFromUploadedIds(
 
 export async function queryImageCompositionTask(
   historyId: string,
-  refreshToken: string
+  refreshToken: string,
+  context: Readonly<Record<string, unknown>> = {}
 ): Promise<{
   historyId: string;
   status: "processing" | "success" | "failed";
@@ -436,14 +215,26 @@ export async function queryImageCompositionTask(
   }
   const rawStatus = Number(record.status || 0);
   const failCode = String(record.fail_code || "");
-  const snapshot = classifyImageCompositionSnapshot(rawStatus, record.item_list || []);
+  let snapshot = classifyImageCompositionSnapshot(rawStatus, record.item_list || [], 4, {
+    failCode, referenceImages: Array.isArray(context.referenceImages) ? context.referenceImages as string[] : [],
+    retryAttempt: Number(context.retryAttempt || 0),
+  });
+  if (!context.policyVersion) {
+    // Frozen compatibility for pre-policy history, never rewrite old records
+    // merely because a new candidate is deployed.
+    const legacyUrls = extractImageCompositionUrls(record.item_list || []);
+    const single = (context.imageModel ?? context.model) === 'jimeng-4.7';
+    const legacySuccess = rawStatus !== 30 && (single ? rawStatus === 50 && legacyUrls.length >= 1 : legacyUrls.length >= 4)
+      || rawStatus === 10 && legacyUrls.length > 0;
+    snapshot = {...snapshot, state: rawStatus === 30 ? 'failed' : legacySuccess ? 'success' : 'processing', imageUrls:legacyUrls, count:legacyUrls.length};
+  }
   return {
     historyId,
     status: snapshot.state,
     rawStatus: snapshot.rawStatus,
     failCode,
     count: snapshot.count,
-    imageUrls: snapshot.imageUrls,
+    imageUrls: context.policyVersion ? extractImageCompositionUrls(record.item_list || []) : snapshot.imageUrls,
   };
 }
 
@@ -467,8 +258,8 @@ export async function generateImageComposition(
   },
   refreshToken: string
 ) {
+  validateImageRequest({ model: _model, ratio, resolution, operation: 'composition', imageCount: imageUrls.length });
   const model = getModel(_model);
-  const draftVersion = getDraftVersion(_model);
   const imageCount = imageUrls.length;
 
   // 解析分辨率
@@ -506,135 +297,11 @@ export async function generateImageComposition(
 
   logger.info(`所有图片上传完成，开始图生图: imageCount=${uploadedImageIds.length}`);
 
-  const componentId = util.uuid();
-  const submitId = util.uuid();
-
-  // 构建图生图的 sceneOptions（不包含 benefitCount 以避免扣积分）
-  // 注意：sceneOptions 需要是对象，在 metrics_extra 中会被 JSON.stringify
-  const sceneOption = {
-    type: "image",
-    scene: "ImageBasicGenerate",
-    modelReqKey: _model,
-    resolutionType,
-    abilityList: uploadedImageIds.map(() => ({
-      abilityName: "byte_edit",
-      strength: sampleStrength,
-      source: {
-        imageUrl: `blob:https://jimeng.jianying.com/${util.uuid()}`
-      }
-    })),
-    reportParams: {
-      enterSource: "generate",
-      vipSource: "generate",
-      extraVipFunctionKey: `${_model}-${resolutionType}`,
-      useVipFunctionDetailsReporterHoc: true,
-    },
-  };
-
-  const { aigc_data } = await request(
-    "post",
-    "/mweb/v1/aigc_draft/generate",
-    refreshToken,
-    {
-      data: {
-        extend: {
-          root_model: model,
-        },
-        submit_id: submitId,
-        metrics_extra: JSON.stringify({
-          promptSource: "custom",
-          generateCount: 1,
-          enterFrom: "click",
-          sceneOptions: JSON.stringify([sceneOption]),
-          generateId: submitId,
-          isRegenerate: false
-        }),
-        draft_content: JSON.stringify({
-          type: "draft",
-          id: util.uuid(),
-          min_version: "3.2.9",
-          min_features: [],
-          is_from_tsn: true,
-          version: "3.2.9",
-          main_component_id: componentId,
-          component_list: [
-            {
-              type: "image_base_component",
-              id: componentId,
-              min_version: "3.0.2",
-              aigc_mode: "workbench",
-              metadata: {
-                type: "",
-                id: util.uuid(),
-                created_platform: 3,
-                created_platform_version: "",
-                created_time_in_ms: Date.now().toString(),
-                created_did: "",
-              },
-              generate_type: "blend",
-              abilities: {
-                type: "",
-                id: util.uuid(),
-                blend: {
-                  type: "",
-                  id: util.uuid(),
-                  min_version: "3.2.9",
-                  min_features: [],
-                  core_param: {
-                    type: "",
-                    id: util.uuid(),
-                    model,
-                    prompt: `${'#'.repeat(imageCount * 2)}${prompt}`,
-                    sample_strength: sampleStrength,
-                    image_ratio: imageRatio,
-                    large_image_info: {
-                      type: "",
-                      id: util.uuid(),
-                      height,
-                      width,
-                      resolution_type: resolutionType
-                    },
-                    intelligent_ratio: intelligentRatio,
-                  },
-                  ability_list: uploadedImageIds.map((imageId) => ({
-                    type: "",
-                    id: util.uuid(),
-                    name: "byte_edit",
-                    image_uri_list: [imageId],
-                    image_list: [{
-                      type: "image",
-                      id: util.uuid(),
-                      source_from: "upload",
-                      platform_type: 1,
-                      name: "",
-                      image_uri: imageId,
-                      width: 0,
-                      height: 0,
-                      format: "",
-                      uri: imageId
-                    }],
-                    strength: 0.5
-                  })),
-                  prompt_placeholder_info_list: uploadedImageIds.map((_, index) => ({
-                    type: "",
-                    id: util.uuid(),
-                    ability_index: index
-                  })),
-                  postedit_param: {
-                    type: "",
-                    id: util.uuid(),
-                    generate_type: 0
-                  }
-                },
-              },
-            },
-          ],
-        }),
-        http_common_info: {
-          aid: assistantId,
-        },
-      },
-    }
+  const { aigc_data } = await request("post", "/mweb/v1/aigc_draft/generate", refreshToken,
+    buildImageCompositionRequest({
+      model: _model, prompt, uploadedImageIds, ratio, resolution, sampleStrength, intelligentRatio,
+      assistantId, profile: 'sync',
+    }, { uuid: () => util.uuid(), now: () => Date.now() })
   );
 
   const historyId = aigc_data?.history_record_id;
@@ -777,7 +444,9 @@ export async function generateImageComposition(
     status = Number(result[historyId].status || 0);
     failCode = String(result[historyId].fail_code || "");
     item_list = result[historyId].item_list || [];
-    const snapshot = classifyImageCompositionSnapshot(status, item_list);
+    const snapshot = classifyImageCompositionSnapshot(status, item_list, 4, {
+      failCode, referenceImages: imageUrls.filter((value): value is string => typeof value === 'string'),
+    });
     status = snapshot.rawStatus;
 
     if (snapshot.state === "failed") {
@@ -805,7 +474,9 @@ export async function generateImageComposition(
     logger.warn(`图生图超时: 轮询了 ${pollCount} 次，当前状态: ${status}，有效图片数: ${extractImageCompositionUrls(item_list).length}`);
   }
 
-  const uniqueUrls = extractImageCompositionUrls(item_list);
+  const uniqueUrls = imageCompletionPolicy.evaluate({rawStatus: status, failCode,
+    imageUrls: extractImageCompositionUrls(item_list),
+    referenceImages: imageUrls.filter((value): value is string => typeof value === 'string'), deadlineReached: true}).imageUrls;
   logger.info(
     `图生图终态: historyId=${historyId}, rawStatus=${status}, ` +
     `有效图片数=${uniqueUrls.length}, reason=${terminalReason}, ` +
@@ -813,7 +484,7 @@ export async function generateImageComposition(
     `elapsedMs=${Date.now() - pollingStartedAt}`
   );
 
-  if (status === 30) {
+  if (status === 30 && uniqueUrls.length === 0) {
     if (failCode === '2038')
       throw new APIException(EX.API_CONTENT_FILTERED);
     else
@@ -843,6 +514,7 @@ async function generateMultiImages(
   },
   refreshToken: string
 ) {
+  validateImageRequest({ model: _model, ratio, resolution, operation: 'generation' });
   const model = getModel(_model);
   const assistantId = getImageAssistantId(refreshToken);
 
@@ -1065,8 +737,8 @@ async function generateMultiImages(
     failCode = result[historyId].fail_code;
     item_list = result[historyId].item_list || [];
 
-    // 检查是否已生成足够的图片
-    if (item_list.length >= targetImageCount) {
+    // All image models use the same valid-output/terminal-state policy.
+    if (classifyImageCompositionSnapshot(status, item_list, 4, {failCode: String(failCode || '')}).terminal) {
       logger.info(`多图生成完成: 状态=${status}, 已生成 ${item_list.length} 张图片`);
       break;
     }
@@ -1086,19 +758,15 @@ async function generateMultiImages(
     logger.warn(`多图生成超时: 轮询了 ${pollCount} 次，当前状态: ${status}，已生成图片数: ${item_list.length}`);
   }
 
-  if (status === 30) {
+  if (status === 30 && classifyImageCompositionSnapshot(status, item_list, 4, {failCode: String(failCode || '')}).state !== 'success') {
     if (failCode === '2038')
       throw new APIException(EX.API_CONTENT_FILTERED);
     else
       throw new APIException(EX.API_IMAGE_GENERATION_FAILED, `生成失败，错误代码: ${failCode}`);
   }
 
-  const imageUrls = item_list.map((item) => {
-    const largeImages = item?.image?.large_images || [];
-    if (largeImages.length === 0)
-      return [item?.common_attr?.cover_url || null];
-    return largeImages.map((img) => img.image_url);
-  }).filter(url => url !== null);
+  const imageUrls = imageCompletionPolicy.evaluate({rawStatus: Number(status), failCode,
+    imageUrls: extractImageCompositionUrls(item_list), deadlineReached: true}).imageUrls;
 
   logger.info(`多图生成结果: 成功生成 ${imageUrls.length} 张图片`);
   return imageUrls;
@@ -1122,6 +790,7 @@ export async function generateImages(
   },
   refreshToken: string
 ) {
+  validateImageRequest({ model: _model, ratio, resolution, operation: 'generation' });
   const model = getModel(_model);
   const assistantId = getImageAssistantId(refreshToken);
 
@@ -1373,8 +1042,8 @@ export async function generateImages(
     failCode = result[historyId].fail_code;
     item_list = result[historyId].item_list || [];
 
-    // 检查是否已生成图片
-    if (item_list.length > 0) {
+    // Do not mistake a placeholder item for a generated image.
+    if (classifyImageCompositionSnapshot(status, item_list, 4, {failCode: String(failCode || '')}).terminal) {
       logger.info(`文生图完成: 状态=${status}, 已生成 ${item_list.length} 张图片`);
       break;
     }
@@ -1394,19 +1063,15 @@ export async function generateImages(
     logger.warn(`文生图超时: 轮询了 ${pollCount} 次，当前状态: ${status}，已生成图片数: ${item_list.length}`);
   }
 
-  if (status === 30) {
+  if (status === 30 && classifyImageCompositionSnapshot(status, item_list, 4, {failCode: String(failCode || '')}).state !== 'success') {
     if (failCode === '2038')
       throw new APIException(EX.API_CONTENT_FILTERED);
     else
       throw new APIException(EX.API_IMAGE_GENERATION_FAILED);
   }
 
-  const imageUrls = item_list.map((item) => {
-    const largeImages = item?.image?.large_images || [];
-    if (largeImages.length === 0)
-      return [item?.common_attr?.cover_url || null];
-    return largeImages.map((img) => img.image_url);
-  }).filter(url => url !== null);
+  const imageUrls = imageCompletionPolicy.evaluate({rawStatus: Number(status), failCode,
+    imageUrls: extractImageCompositionUrls(item_list), deadlineReached: true}).imageUrls;
 
   logger.info(`文生图结果: 成功生成 ${imageUrls.length} 张图片`);
   return imageUrls;

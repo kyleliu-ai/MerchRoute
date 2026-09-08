@@ -1,0 +1,119 @@
+{
+  "evidence": {
+    "date": "2026-09-08",
+    "region": "CN",
+    "source": "https://jimeng.jianying.com/",
+    "method": "Chrome UIA website image-to-image",
+    "model": "4.7",
+    "referenceCount": 1,
+    "ratio": "1:1",
+    "resolution": "2k",
+    "submissionHttpStatus": 200,
+    "submissionRet": 0,
+    "queryRet": 0,
+    "pageResultObserved": true,
+    "observedCreditDecrease": 0,
+    "completeResponseJsonCaptured": false,
+    "workspaceIdOmittedFromFixture": true,
+    "candidateProxyLiveTestPassed": false
+  },
+  "params": {
+    "da_version": "3.3.26",
+    "web_version": "7.5.0"
+  },
+  "draft": {
+    "type": "draft",
+    "id": "fixture-id-0",
+    "min_version": "3.0.2",
+    "min_features": [],
+    "is_from_tsn": true,
+    "version": "3.3.26",
+    "main_component_id": "fixture-id-1",
+    "component_list": [
+      {
+        "type": "image_base_component",
+        "id": "fixture-id-1",
+        "min_version": "3.0.2",
+        "aigc_mode": "workbench",
+        "metadata": {
+          "type": "",
+          "id": "fixture-id-2",
+          "created_platform": 3,
+          "created_platform_version": "",
+          "created_time_in_ms": "0",
+          "created_did": ""
+        },
+        "generate_type": "blend",
+        "abilities": {
+          "type": "",
+          "id": "fixture-id-3",
+          "blend": {
+            "type": "",
+            "id": "fixture-id-4",
+            "min_features": [],
+            "core_param": {
+              "type": "",
+              "id": "fixture-id-5",
+              "model": "high_aes_general_v43",
+              "prompt": "##fixture prompt",
+              "sample_strength": 0.5,
+              "image_ratio": 1,
+              "large_image_info": {
+                "type": "",
+                "id": "fixture-id-6",
+                "height": 2048,
+                "width": 2048,
+                "resolution_type": "2k"
+              },
+              "intelligent_ratio": false,
+              "generate_type": 0
+            },
+            "ability_list": [
+              {
+                "type": "",
+                "id": "fixture-id-7",
+                "name": "byte_edit",
+                "image_uri_list": [
+                  "fixture-upload"
+                ],
+                "image_list": [
+                  {
+                    "type": "image",
+                    "id": "fixture-id-8",
+                    "source_from": "upload",
+                    "platform_type": 1,
+                    "name": "",
+                    "image_uri": "fixture-upload",
+                    "width": 0,
+                    "height": 0,
+                    "format": "",
+                    "uri": "fixture-upload"
+                  }
+                ],
+                "strength": 0.5
+              }
+            ],
+            "prompt_placeholder_info_list": [
+              {
+                "type": "",
+                "id": "fixture-id-9",
+                "ability_index": 0
+              }
+            ],
+            "postedit_param": {
+              "type": "",
+              "id": "fixture-id-10",
+              "generate_type": 0
+            }
+          },
+          "gen_option": {
+            "type": "",
+            "id": "fixture-id-11",
+            "gen_count": 1,
+            "generate_all": false
+          }
+        }
+      }
+    ]
+  }
+}

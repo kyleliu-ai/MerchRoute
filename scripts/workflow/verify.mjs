@@ -19,7 +19,10 @@ export function commandTranscript(argv,result) {
 }
 
 export function testEnvironment(inherited, databaseUrl, cleanupUrl) {
-  const allowed=new Set(['PATH','PATHEXT','SYSTEMROOT','WINDIR','COMSPEC','TEMP','TMP','HOME','USERPROFILE','LOCALAPPDATA','APPDATA','LANG','LC_ALL']);
+  const allowed=new Set(['PATH','PATHEXT','SYSTEMROOT','WINDIR','COMSPEC','TEMP','TMP','HOME','USERPROFILE','LOCALAPPDATA','APPDATA','LANG','LC_ALL',
+    'PROGRAMFILES','PROGRAMFILES(X86)','PROGRAMW6432','PROGRAMDATA','ALLUSERSPROFILE']);
+  // Docker Desktop discovers Buildx under the OS program directories. Preserve
+  // those locations, not Docker authorization, contexts or business variables.
   const env=Object.fromEntries(Object.entries(inherited).filter(([key])=>allowed.has(key.toUpperCase())));
   // Bound fixture concurrency without relaxing any assertion or test timeout.
   return {...env,DATABASE_URL:databaseUrl,WB_SOURCE_MEDIA_CLEANUP_TEST_DATABASE_URL:cleanupUrl,CI:'true',NODE_ENV:'test',MEDIA_INDEX_PERF_100K:'0',

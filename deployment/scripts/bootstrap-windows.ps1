@@ -101,8 +101,13 @@ Require-Success 'Docker Desktop readiness'
 
 & docker compose --env-file $DeploymentEnv -f deployment/postgres/compose.yaml up -d
 Require-Success 'PostgreSQL start'
-& docker compose -f integrations/jimeng-free-api-all/compose.yaml up -d --build
-Require-Success 'Jimeng build and start'
+$JimengState = Join-Path $AppHome 'recovery/jimeng'
+& $Node deployment/scripts/jimeng-deploy.mjs build "--state-dir=$JimengState" --rc=3
+Require-Success 'Jimeng immutable candidate build'
+$JimengRecords = @(Get-ChildItem -LiteralPath $JimengState -Filter 'build-rc.3-*.json')
+if ($JimengRecords.Count -ne 1) { throw 'Expected exactly one new Jimeng build record; existing installations require the guarded upgrade procedure.' }
+& $Node deployment/scripts/jimeng-deploy.mjs install "--state-dir=$JimengState" "--record=$($JimengRecords[0].FullName)" --profile=production --volume=jimeng-image-task-store --execute
+Require-Success 'Jimeng guarded fresh install'
 & $Npm ci
 Require-Success 'MerchRoute npm ci'
 & $Npm run build

@@ -502,6 +502,11 @@ async function buildAppWithWriter(options: BuildAppOptions) {
     const query = request.query as { path?: string };
     return localImports.listDirectories(query.path || '');
   });
+  app.post('/api/v1/local-import/directories/open-folder', async (request, reply) => {
+    const directory = await localImports.resolveDirectoryToOpen(request.body as { relativePath?: unknown; configHash?: unknown } | undefined);
+    await localDirectoryOpener.openValidatedDirectory(directory, '变体目录');
+    return reply.code(202).send({ accepted: true });
+  });
   app.post('/api/v1/local-import/preview', async (request) => localImports.preview(request.body as any));
   app.get('/api/v1/local-import/imports', async (request) => {
     const query = request.query as { page?: string; pageSize?: string; query?: string; platform?: string; status?: string; createdFrom?: string; createdTo?: string };
@@ -1557,7 +1562,7 @@ export function isLegacyRootSensitiveRequest(method: string, url: string): boole
     if (/^\/api\/v1\/ozon\/runtime\/jobs\/[^/]+\/(?:transition|lease\/(?:renew|release))$/.test(pathname)) return false;
     return true;
   }
-  return /^\/api\/v1\/local-import\/(?:preview|imports(?:\/[^/]+\/retry)?)$/.test(pathname)
+  return /^\/api\/v1\/local-import\/(?:directories\/open-folder|preview|imports(?:\/[^/]+\/retry)?)$/.test(pathname)
     || /^\/api\/v1\/submissions\/(?:batch|[^/]+\/retry)$/.test(pathname)
     || /^\/api\/v1\/review-operations\/[^/]+\/retry$/.test(pathname)
     || pathname === '/api/v1/purchase-download-jobs/batch'

@@ -103,10 +103,11 @@ test('runtime page probes request the browser HTML contract and reject non-page 
 });
 
 test('full local regression bounds workers without relaxing timeouts or inheriting credentials',()=>{
-  const env=testEnvironment({VITEST_MAX_THREADS:'100',VITEST_MAX_FORKS:'100',MERCHROUTE_ENV_FILE:'production',DATABASE_URL:'production'},'synthetic','cleanup');
+  const env=testEnvironment({VITEST_MAX_THREADS:'100',VITEST_MAX_FORKS:'100',MERCHROUTE_ENV_FILE:'production',DATABASE_URL:'production',ProgramFiles:'C:/Program Files',DOCKER_AUTH_CONFIG:'private'},'synthetic','cleanup');
   assert.equal(env.VITEST_MAX_THREADS,'2');assert.equal(env.VITEST_MAX_FORKS,'2');
   assert.equal(env.VITEST_MIN_THREADS,'1');assert.equal(env.VITEST_MIN_FORKS,'1');
   assert.equal(env.MERCHROUTE_ENV_FILE,undefined);assert.equal(env.DATABASE_URL,'synthetic');
+  assert.equal(env.ProgramFiles,'C:/Program Files');assert.equal(env.DOCKER_AUTH_CONFIG,undefined);
 });
 
 test('docs preserve local authority, serial ownership, phase boundary and production isolation',async()=>{

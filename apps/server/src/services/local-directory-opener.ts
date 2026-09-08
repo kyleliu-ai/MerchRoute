@@ -60,11 +60,16 @@ export class LocalDirectoryOpener {
       throw new AppError('PATH_TRAVERSAL_BLOCKED', '产品目录不属于当前流程候选根目录', { sourceFolder });
     }
 
+    await this.openValidatedDirectory(resolvedSource, '产品文件夹');
+  }
+
+  /** Callers must resolve and validate the directory against their configured root first. */
+  async openValidatedDirectory(directory: string, label: string): Promise<void> {
     const command = directoryOpenCommand(this.platform);
     try {
-      await this.launch(command, [resolvedSource], { windowsHide: false });
+      await this.launch(command, [directory], { windowsHide: false });
     } catch (error) {
-      throw new AppError('DIRECTORY_OPEN_FAILED', '无法打开产品文件夹', {
+      throw new AppError('DIRECTORY_OPEN_FAILED', `无法打开${label}`, {
         platform: this.platform,
         reason: error instanceof Error ? error.message : String(error)
       }, 500);
@@ -75,7 +80,7 @@ export class LocalDirectoryOpener {
 export function directoryOpenCommand(platform: NodeJS.Platform): string {
   if (platform === 'win32') return 'explorer.exe';
   if (platform === 'darwin') return '/usr/bin/open';
-  throw new AppError('UNSUPPORTED_PLATFORM', '当前操作系统不支持打开本地产品文件夹', { platform }, 501);
+  throw new AppError('UNSUPPORTED_PLATFORM', '当前操作系统不支持打开本地文件夹', { platform }, 501);
 }
 
 async function launchDetached(command: string, args: string[], options: DirectoryLaunchOptions): Promise<void> {

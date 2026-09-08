@@ -51,7 +51,11 @@ docker info >/dev/null
 
 DEPLOYMENT_ENV="$APP_HOME/secrets/deployment.env"
 docker compose --env-file "$DEPLOYMENT_ENV" -f deployment/postgres/compose.yaml up -d
-docker compose -f integrations/jimeng-free-api-all/compose.yaml up -d --build
+JIMENG_STATE="$APP_HOME/recovery/jimeng"
+node deployment/scripts/jimeng-deploy.mjs build "--state-dir=$JIMENG_STATE" --rc=3
+JIMENG_RECORDS=("$JIMENG_STATE"/build-rc.3-*.json)
+[[ ${#JIMENG_RECORDS[@]} == 1 && -f "${JIMENG_RECORDS[0]}" ]] || { echo 'Expected exactly one new Jimeng record; existing installations require guarded upgrade.' >&2; exit 1; }
+node deployment/scripts/jimeng-deploy.mjs install "--state-dir=$JIMENG_STATE" "--record=${JIMENG_RECORDS[0]}" --profile=production --volume=jimeng-image-task-store --execute
 npm ci
 npm run build
 

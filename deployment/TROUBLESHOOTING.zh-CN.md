@@ -20,8 +20,7 @@ node deployment/scripts/preflight.mjs
 
 ```bash
 docker compose -f deployment/postgres/compose.yaml ps
-docker compose -f integrations/jimeng-free-api-all/compose.yaml ps
-docker compose -f integrations/jimeng-free-api-all/compose.yaml logs --tail=100
+node deployment/scripts/jimeng-deploy.mjs inspect --container=<exact-container-id> --volume=<existing-volume>
 ```
 
 分享日志前先检查授权头、session 和签名 URL；如有敏感值，只描述错误，不发送原文。
@@ -137,12 +136,12 @@ node deployment/scripts/bootstrap.mjs verify
 ## Jimeng `/ping` 失败
 
 ```bash
-docker compose -f integrations/jimeng-free-api-all/compose.yaml build --no-cache
-docker compose -f integrations/jimeng-free-api-all/compose.yaml up -d
+node deployment/scripts/jimeng-deploy.mjs inspect --container=<exact-container-id> --volume=<existing-volume>
+node deployment/scripts/jimeng-deploy.mjs verify --record=<build-record.json> --profile=production --container=<exact-container-id> --volume=<existing-volume>
 curl --fail http://127.0.0.1:8000/ping
 ```
 
-期望正文为 `pong`。`/app/data` 必须由外部 Docker 卷持久化，浏览器缓存和任务台账不得复制进仓库。
+期望正文为 `pong`。不要因健康失败直接重建或重启；按[部署固化流程](JIMENG_DEPLOYMENT.zh-CN.md)核对身份、维护门禁和恢复资料，再另行批准升级。`/app/data` 必须由显式外部 Docker 卷持久化，浏览器缓存和任务台账不得复制进仓库。
 
 ## macOS 升级准备改写已有浏览器 Profile 路径
 

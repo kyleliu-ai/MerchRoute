@@ -27,6 +27,19 @@ const constants = {
   Authorization: { jimengAuthorValue: 'Bearer fixture-value' },
 };
 
+test('the unified E001 export retains strict dynamic submit and query configuration', async () => {
+  const workflow = JSON.parse(await readFile(path.join(workflowRoot, 'Wxng7hVbjMNhVOaO.json'), 'utf8'));
+  assert.equal(assertJimengGlobalConfigWorkflow(workflow), true);
+  for (const name of ['MR Submit Tasks', 'MR Query Tasks']) {
+    const broken = structuredClone(workflow);
+    broken.nodes.find((node) => node.name === name).parameters.url = 'http://localhost:8000/v1/images/tasks/batch';
+    assert.throws(() => assertJimengGlobalConfigWorkflow(broken));
+  }
+  const missing = structuredClone(workflow);
+  missing.nodes = missing.nodes.filter((node) => node.name !== 'MR Query Tasks');
+  assert.throws(() => assertJimengGlobalConfigWorkflow(missing), /缺少节点/);
+});
+
 test('Global Constants contract preserves model, URL root, and exact Authorization value', () => {
   assert.deepEqual(validateJimengConstants(constants), {
     jimengModel: 'jimeng-4.7',

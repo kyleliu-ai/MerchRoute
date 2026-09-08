@@ -9,8 +9,6 @@ data-test
 sessions
 backup
 playwright-cache
-tests
-patches
 .env
 .env.*
 *.bak

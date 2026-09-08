@@ -843,6 +843,8 @@ button, input { font: inherit; }
 .local-directory-action .ant-btn { padding-inline: 0; font-weight: 650; }
 .directory-name, .path-crumb { padding: 0; color: #203047; border: 0; background: transparent; font: inherit; text-align: left; cursor: pointer; }
 .directory-name:hover, .path-crumb:hover { color: #087f8c; }
+.directory-name:disabled { color: #87939c; cursor: progress; }
+.directory-name:focus-visible { outline: 2px solid #087f8c; outline-offset: 3px; }
 .local-import-selection { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, .6fr) auto; align-items: end; gap: 18px; margin-top: 18px; }
 .selection-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .primary-directory { display: grid; gap: 6px; }

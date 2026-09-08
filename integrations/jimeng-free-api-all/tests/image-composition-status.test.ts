@@ -17,6 +17,15 @@ function generatedItem(...urls: unknown[]) {
   };
 }
 
+test('all models accept terminal single-image partial results under one policy',()=>{
+  const images=[generatedItem('https://fixture.invalid/generated.png')];
+  assert.equal(classifyImageCompositionSnapshot(50,images,1).state,'success');
+  assert.equal(classifyImageCompositionSnapshot(50,images).state,'success');
+  assert.equal(classifyImageCompositionSnapshot(20,images,1).state,'processing');
+  assert.equal(classifyImageCompositionSnapshot(30,images,1,{failCode:'2038'}).state,'failed');
+  assert.equal(classifyImageCompositionSnapshot(50,[],1).state,'processing');
+});
+
 test("status=50 且已有4个有效URL时立即成功", () => {
   const snapshot = classifyImageCompositionSnapshot(50, [
     generatedItem(
@@ -33,18 +42,18 @@ test("status=50 且已有4个有效URL时立即成功", () => {
   assert.equal(snapshot.count, 4);
 });
 
-test("status=30 立即按明确失败结束，即使响应里残留图片URL", () => {
+test("审核拒绝立即失败，即使响应里残留图片URL", () => {
   const snapshot = classifyImageCompositionSnapshot(30, [
     generatedItem("https://example.invalid/partial.png"),
-  ]);
+  ], 4, {failCode:'2038'});
 
   assert.equal(snapshot.state, "failed");
   assert.equal(snapshot.terminal, true);
   assert.equal(snapshot.reason, "explicit_failure_status_30");
 });
 
-test("status=45或50但图片不足4张时保持处理中", () => {
-  for (const rawStatus of [45, 50]) {
+test("status=45但图片不足4张时保持处理中", () => {
+  for (const rawStatus of [45]) {
     const snapshot = classifyImageCompositionSnapshot(rawStatus, [
       generatedItem(
         "https://example.invalid/1.png",
@@ -94,7 +103,7 @@ test("字符串状态可归一化，重复URL去重后不足4张仍保持处理�
       "https://example.invalid/same.png"
     ),
   ]);
-  assert.equal(duplicate.state, "processing");
+  assert.equal(duplicate.state, "success");
   assert.equal(duplicate.count, 1);
 });
 

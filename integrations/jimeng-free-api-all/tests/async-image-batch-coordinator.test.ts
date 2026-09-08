@@ -63,6 +63,12 @@ async function prepare(input: {
   const batchKey = `E002:v1:${input.submissionId}:attempt-${attempt}`;
   const uploadKey = expectedE002UploadKey(input.submissionId);
   const taskList = tasks(input.submissionId, attempt, input.views);
+  // Cache-reuse fixtures model a confirmed zero-image failure, not a blind retry.
+  if (attempt === 1) for (const task of taskList) {
+    const key = task.idempotencyKey.replace(/:attempt-1$/, ':attempt-0');
+    const parent = input.ledger.get(key)!;
+    await input.ledger.updateFromPoll(key, {historyId: parent.historyId, status:'failed', rawStatus:30, failCode:'generation_failed', imageUrls:[]});
+  }
   const reserved = await reserveIdempotentBatchForAsync({
     ledger: input.ledger,
     batchKey,
