@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { build, deploy, inspect, json, profile, rollback, verify } from './jimeng-deploy-lib.mjs';
+import { archiveHistoricalTasks, build, deploy, inspect, json, profile, rollback, verify } from './jimeng-deploy-lib.mjs';
 
 const [command,...args] = process.argv.slice(2);
 const options = {};
@@ -8,7 +8,7 @@ for (const arg of args) {
   if (!match || Object.hasOwn(options,match[1])) throw new Error('Use unique --name=value options');
   options[match[1]] = match[2] ?? true;
 }
-const allowed = ['state-dir','record','rc','dry-run','profile','container','volume','execute','expected-image','handoff','maintenance-file','allow-permission-migration','journal'];
+const allowed = ['state-dir','record','rc','dry-run','profile','container','volume','execute','expected-image','handoff','maintenance-file','allow-permission-migration','journal','approval-file','archive-approval-file'];
 for (const name of Object.keys(options)) if (!allowed.includes(name)) throw new Error(`Unknown option: ${name}`);
 for (const name of ['dry-run','execute','handoff','allow-permission-migration']) {
   if (options[name] !== undefined && options[name] !== true) throw new Error(`Use --${name} without a value`);
@@ -29,9 +29,14 @@ if (command === 'build') {
   result = await deploy({action:command,record:await json(options.record),container:options.container,
     volume:options.volume,selected,stateDir:options['state-dir'],expectedImage:options['expected-image'],
     handoff:options.handoff === true,dryRun:options['dry-run'] === true || options.execute !== true,
-    execute:options.execute === true,maintenanceFile:options['maintenance-file'],allowPermissionMigration:options['allow-permission-migration'] === true});
+    execute:options.execute === true,maintenanceFile:options['maintenance-file'],allowPermissionMigration:options['allow-permission-migration'] === true,
+    archiveApprovalFile:options['archive-approval-file']});
 } else if(command==='rollback') {
   result=await rollback({journalFile:options.journal,record:await json(options.record),stateDir:options['state-dir'],
     execute:options.execute===true,dryRun:options['dry-run']===true || options.execute!==true,maintenanceFile:options['maintenance-file']});
-} else throw new Error('Supported commands: build, inspect, install, upgrade, verify, rollback');
+} else if(command==='archive') {
+  result=await archiveHistoricalTasks({record:await json(options.record),container:options.container,
+    volume:options.volume,stateDir:options['state-dir'],approvalFile:options['approval-file'],maintenanceFile:options['maintenance-file'],
+    execute:options.execute===true && options['dry-run']!==true});
+} else throw new Error('Supported commands: build, inspect, install, upgrade, verify, rollback, archive');
 console.log(JSON.stringify(result,null,2));

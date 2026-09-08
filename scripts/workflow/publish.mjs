@@ -40,6 +40,17 @@ export function publicationDescriptor(batch,productVersion,now=new Date()){
     message:`chore(release): prepare MerchRoute v${productVersion} candidate`
   };
 }
+export function validateV100Rollover(previous,{main,baseTree,oldPr,oldRelease,oldPublishedTree},productVersion) {
+  if(productVersion!=='1.0.1'||previous?.number!==36||previous.sourceCommit!=='d845fbfe89e2bf858bd87e53e4248a9f12d99a82') {
+    throw new Error('Outside the approved v1.0.0 to v1.0.1 publication rollover');
+  }
+  if(oldPr?.merged!==true||oldPr?.state!=='closed'||oldPr?.base?.ref!=='main'||oldPr?.head?.sha!==previous.publicCommit
+    ||oldPr?.merge_commit_sha!==main||oldRelease?.draft!==false||oldRelease?.prerelease!==false||oldRelease?.tag_name!=='v1.0.0'
+    ||baseTree!==previous.tree||oldPublishedTree!==previous.tree) {
+    throw new Error('PR #36, immutable v1.0.0 and GitHub main are not aligned');
+  }
+  return {publication:previous,main,tree:baseTree,releaseTag:'v1.0.0',status:'PUBLISHED_NOT_ACTIVATED',reason:'PERMANENT_TASK_ARCHIVE_REQUIRED'};
+}
 export function publicationBody({batch,descriptor,identity}){
   return `## 本机权威候选\n\nMerchRoute v${descriptor.productVersion} 候选来自本机权威批次 \`${batch.name}\`，包含该批次起点已经吸收的公开 main 功能及本批次适配。\n\n本机提交：${identity.commit}；源码树：${identity.tree}。\n\n本次只发布已完成完整验收的本机文件树，不从 GitHub 反向覆盖本机代码，不直接推送或合并 main，也不在 Draft PR 阶段创建正式 Release 或切换正式运行服务。\n\n完整检查、PostgreSQL、E2E、Jimeng、Gitleaks、禁入规则与候选运行包验收通过后才可进入合并和正式发布阶段。\n`;
 }
@@ -97,15 +108,16 @@ export async function publishBatch(root,home,config,batch,options){
   let intent=null;try{intent=await readJson(path.join(home,'publication-intent.json'));}catch(error){if(error.code!=='ENOENT')throw error;}
   let rollover=null;
   if(main!==config.github.baselineCommit||base.tree.sha!==config.github.baselineTree){
-    if(!previous||![26,27].includes(previous.number))throw new Error('GitHub main moved outside the approved release rollover; inspect without overwriting local code');
-    const oldPr=githubJson(config,prefix+'/pulls/'+previous.number);
-    const priorVersion=previous.number===27?'0.1.3':'0.1.2';
+    const prior=previous?.rollover?.publication || previous;
+    if(!prior||![26,27,36].includes(prior.number))throw new Error('GitHub main moved outside the approved release rollover; inspect without overwriting local code');
+    const oldPr=githubJson(config,prefix+'/pulls/'+prior.number);
+    const priorVersion=prior.number===36?'1.0.0':prior.number===27?'0.1.3':'0.1.2';
     const oldRelease=githubJson(config,prefix+'/releases/tags/v'+priorVersion);
     const oldPublished=githubJson(config,prefix+'/commits/v'+priorVersion);
     const input={main,baseTree:base.tree.sha,oldPr,oldRelease,oldPublishedTree:oldPublished.commit.tree.sha};
-    rollover=previous.number===27?validateV013Rollover(previous,input):validateV012Rollover(previous,input);
-    previous=null;
-    if(intent?.sourceCommit!==identity.commit)intent=null;
+    rollover=prior.number===36?validateV100Rollover(prior,input,descriptor.productVersion):prior.number===27?validateV013Rollover(prior,input):validateV012Rollover(prior,input);
+    if(prior===previous){previous=null;if(intent?.sourceCommit!==identity.commit)intent=null;}
+    else if(previous.base!==main||previous.rollover.main!==main||previous.rollover.tree!==base.tree.sha)throw new Error('Publication rollover base changed');
   }else if([26,27].includes(previous?.number)){
     throw new Error('Merged release PR requires the explicit publication rollover contract before another publication');
   }
@@ -146,7 +158,7 @@ export async function publishBatch(root,home,config,batch,options){
   const pr=JSON.parse(github(config,['pr','view',String(number),'--repo',repository,'--json','isDraft,state,baseRefName,headRefOid,files,url']));
   if(!pr.isDraft||pr.state!=='OPEN'||pr.baseRefName!=='main'||pr.headRefOid!==publicCommit
     || JSON.stringify(pr.files.map(x=>x.path).sort())!==JSON.stringify(changed))throw new Error('PR readback failed; stop without modifying local source');
-  const publication={number,url:pr.url,branch:publicBranch,localBatchBranch:batch.branch,productVersion:descriptor.productVersion,publicCommit,sourceCommit:identity.commit,tree:identity.tree,base:main,draft:true,files:changed,ci:'PENDING'};
+  const publication={number,url:pr.url,branch:publicBranch,localBatchBranch:batch.branch,productVersion:descriptor.productVersion,publicCommit,sourceCommit:identity.commit,tree:identity.tree,base:main,draft:true,files:changed,ci:'PENDING',...(rollover?{rollover}:{})};
   await atomicJson(path.join(home,'publication.json'),publication);
   return publication;
 }

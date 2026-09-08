@@ -131,7 +131,7 @@ README、智能体安装提示词和智能体升级提示词必须与同一个�
 
 | 契约 | 权威文件 | 当前发布快照 |
 | --- | --- | --- |
-| 工具链和 Jimeng | [deployment/runtime-versions.json](deployment/runtime-versions.json) | Node.js `22.23.1`、npm `10.9.8`、n8n `2.32.6`、PostgreSQL `18.4`、Playwright `1.61.1`、Jimeng `1.0.0` |
+| 工具链和 Jimeng | [deployment/runtime-versions.json](deployment/runtime-versions.json) | Node.js `22.23.1`、npm `10.9.8`、n8n `2.32.6`、PostgreSQL `18.4`、Playwright `1.61.1`、Jimeng `1.0.1` |
 | n8n 工作流 | [deployment/n8n/manifest.json](deployment/n8n/manifest.json) | 36 个唯一工作流、3 个部署包；新安装全部停用 |
 | PostgreSQL | [deployment/postgres/init/01-databases.sh](deployment/postgres/init/01-databases.sh) | `merchroute` → `merchroute_app`；`merchroute_n8n` → `merchroute_n8n` |
 | npm 依赖 | [package-lock.json](package-lock.json) | 锁文件安装，禁止用浮动 `latest` 替代固定版本 |

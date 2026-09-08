@@ -6,6 +6,14 @@ The project follows [Semantic Versioning](https://semver.org/). Dates use the `Y
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-09-09
+
+### Fixed
+
+- Permanently archive explicitly approved unresolved Jimeng tasks without changing their original remote status or losing idempotency protection. Reject repeat submissions and associated retries; stop polling archived tasks and keep active tasks in mixed batches working.
+- Persist verified archive snapshots alongside the task ledger, with exact approval hashes, atomic binding, consistent backup and restore checks. Exclude only verified archived tasks from maintenance gates and refuse rollback to images that cannot enforce archives.
+- Keep v1.0.0 artifacts immutable and synchronize MerchRoute and Jimeng at 1.0.1. Retain direct review delivery, ten-row local-import pagination and hidden task progress panels.
+
 ## [1.0.0] - 2026-09-09
 
 ### Changed

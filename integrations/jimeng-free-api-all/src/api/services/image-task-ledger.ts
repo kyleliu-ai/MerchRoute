@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { imageCompletionPolicy } from './image-completion-policy.mjs';
+import taskArchive from './image-task-archive.mjs';
 
 import {
   ImageInputUploadError,
@@ -44,6 +45,9 @@ export type ImageTaskRecord = {
   createdAt: string;
   updatedAt: string;
   context: Record<string, unknown>;
+  // Response-only local disposition; never replaces the original remote status.
+  localDisposition?: { state: 'archived_no_replay'; archivedAt: string; forbidReplay: true;
+    reason: string; remoteResultConfirmed: false };
 };
 
 export type PublicImageTaskRecord = Omit<ImageTaskRecord, "tokenFingerprint"> & {
@@ -67,6 +71,7 @@ export type AsyncBatchReservation = {
 type StoreEnvelope = {
   schemaVersion: number;
   records: ImageTaskRecord[];
+  archiveSha256?: string;
 };
 
 type ReservationInput = {
@@ -440,6 +445,8 @@ export class ImageTaskLedger {
   private readonly records = new Map<string, ImageTaskRecord>();
   private readonly locks = new Map<string, Promise<void>>();
   private readonly now: () => Date;
+  private archived = new Map<string, any>();
+  private archiveSha256?: string;
 
   constructor(options: { storeDir: string; now?: () => Date }) {
     this.storeDir = options.storeDir;
@@ -460,7 +467,12 @@ export class ImageTaskLedger {
   }
 
   private load(): void {
-    if (!fs.existsSync(this.storePath)) return;
+    if (!fs.existsSync(this.storePath)) {
+      if (fs.existsSync(path.join(this.storeDir, taskArchive.ARCHIVE_FILE))) {
+        throw new ImageTaskLedgerError('store_corrupt', '归档存在但任务台账缺失，禁止以空台账启动');
+      }
+      return;
+    }
     let parsed: unknown;
     try {
       const contents = fs.readFileSync(this.storePath, "utf8");
@@ -473,6 +485,8 @@ export class ImageTaskLedger {
           ? (parsed as StoreEnvelope).records
           : null;
       if (!rawRecords) throw new Error("unsupported store schema");
+      this.archived = taskArchive.readArchive(this.storeDir, parsed).entries;
+      this.archiveSha256 = (parsed as StoreEnvelope).archiveSha256;
       for (const rawRecord of rawRecords) {
         const record = validateLoadedRecord(rawRecord);
         if (this.records.has(record.idempotencyKey)) {
@@ -508,11 +522,17 @@ export class ImageTaskLedger {
 
   private persist(): void {
     fs.mkdirSync(this.storeDir, { recursive: true });
+    if (fs.existsSync(this.storePath)) {
+      const disk = JSON.parse(fs.readFileSync(this.storePath, 'utf8'));
+      if (disk.archiveSha256 !== this.archiveSha256) throw new ImageTaskLedgerError('store_corrupt', '归档绑定发生变化');
+      taskArchive.readArchive(this.storeDir, disk);
+    }
     const envelope: StoreEnvelope = {
       schemaVersion: IMAGE_TASK_STORE_SCHEMA_VERSION,
       records: [...this.records.values()].sort((left, right) =>
         left.idempotencyKey.localeCompare(right.idempotencyKey)
-      ),
+      ).map(record => this.archived.get(taskArchive.keyDigest(record.idempotencyKey))?.originalRecord || record),
+      ...(this.archiveSha256 ? { archiveSha256: this.archiveSha256 } : {}),
     };
     const tempPath = path.join(
       this.storeDir,
@@ -558,6 +578,9 @@ export class ImageTaskLedger {
 
   async reserve(input: ReservationInput): Promise<ReservationResult> {
     return this.withKeyLock(input.idempotencyKey, () => {
+      this.assertNotArchived(input.idempotencyKey);
+      this.assertNotArchived(input.idempotencyKey.replace(/:attempt-1$/, ':attempt-0'));
+      if (input.context.parentIdempotencyKey) this.assertNotArchived(String(input.context.parentIdempotencyKey));
       const existing = this.records.get(input.idempotencyKey);
       if (existing) {
         if (existing.tokenFingerprint !== input.tokenFingerprint) throw new ImageTaskLedgerError('token_fingerprint_unavailable', '幂等键属于不同账号');
@@ -665,6 +688,7 @@ export class ImageTaskLedger {
     submit: (onBeforeRemoteSubmit: () => Promise<void>) => Promise<{ historyId: string }>
   ): Promise<{ reused: boolean; record: ImageTaskRecord }> {
     return this.withKeyLock(idempotencyKey, async () => {
+      this.assertNotArchived(idempotencyKey);
       const record = this.records.get(idempotencyKey);
       if (!record) {
         throw new ImageTaskLedgerError("missing_reservation", `幂等键 ${idempotencyKey} 没有提交占位`);
@@ -735,7 +759,16 @@ export class ImageTaskLedger {
 
   get(idempotencyKey: string): ImageTaskRecord | undefined {
     const record = this.records.get(idempotencyKey);
-    return record ? cloneRecord(record) : undefined;
+    if (!record) return undefined;
+    const archived = this.archived.get(taskArchive.keyDigest(idempotencyKey));
+    return { ...cloneRecord(record), ...(archived ? { localDisposition: taskArchive.publicDisposition(archived) } : {}) };
+  }
+
+  assertNotArchived(idempotencyKey: string): void {
+    if (this.archived.has(taskArchive.keyDigest(idempotencyKey))) {
+      throw new ImageTaskLedgerError('task_archived_no_replay', '任务已永久归档，远端结果未确认，禁止重新提交',
+        { forbidReplay: true, localTerminal: true });
+    }
   }
 
   findByUploadKey(uploadKey: string): ImageTaskRecord[] {
@@ -743,7 +776,7 @@ export class ImageTaskLedger {
     if (!normalized) return [];
     return [...this.records.values()]
       .filter((record) => firstNonEmptyString(record.context?.uploadKey) === normalized)
-      .map(cloneRecord);
+      .map(record => this.get(record.idempotencyKey)!);
   }
 
   async setReservedAsyncPhase(
@@ -752,6 +785,7 @@ export class ImageTaskLedger {
     phase: "receiving" | "queued" | "uploading" | "ready"
   ): Promise<ImageTaskRecord> {
     return this.withKeyLock(idempotencyKey, () => {
+      this.assertNotArchived(idempotencyKey);
       const record = this.records.get(idempotencyKey);
       if (!record) throw new ImageTaskLedgerError("missing_reservation", `幂等键 ${idempotencyKey} 没有提交占位`);
       if (record.requestHash !== requestHash) {
@@ -771,6 +805,7 @@ export class ImageTaskLedger {
     metrics: { cacheHit: boolean; uploadDurationMs: number }
   ): Promise<ImageTaskRecord> {
     return this.withKeyLock(idempotencyKey, () => {
+      this.assertNotArchived(idempotencyKey);
       const record = this.records.get(idempotencyKey);
       if (!record) throw new ImageTaskLedgerError("missing_reservation", `幂等键 ${idempotencyKey} 没有任务记录`);
       if (record.requestHash !== requestHash) {
@@ -799,6 +834,7 @@ export class ImageTaskLedger {
     }
   ): Promise<ImageTaskRecord> {
     return this.withKeyLock(idempotencyKey, () => {
+      if (this.archived.has(taskArchive.keyDigest(idempotencyKey))) return this.get(idempotencyKey)!;
       const record = this.records.get(idempotencyKey);
       if (!record) throw new ImageTaskLedgerError("missing_task_record", `找不到幂等键 ${idempotencyKey}`);
       if (!record.historyId || record.historyId !== String(result.historyId)) {
@@ -849,6 +885,7 @@ export class ImageTaskLedger {
 
 export function publicRecord(record: ImageTaskRecord, reused: boolean): PublicImageTaskRecord {
   const { tokenFingerprint: _tokenFingerprint, ...safe } = cloneRecord(record);
+  if (record.localDisposition) return { ...safe, reused, canRetry: false, completionReason: 'archived_no_replay' };
   if (record.context.policyVersion === imageCompletionPolicy.version) {
     const result = imageCompletionPolicy.evaluate({...safe, referenceImages: safe.context.referenceImages || [], retryAttempt: Number(safe.context.retryAttempt || 0)});
     return {...safe, reused, policyVersion: result.policyVersion, completionReason: result.completionReason,
@@ -1253,6 +1290,7 @@ export async function queryIdempotentBatch(input: QueryBatchInput): Promise<{
   failedCount: number;
   unknownCount: number;
   pendingCount: number;
+  archivedCount: number;
   terminalCount: number;
   allTerminal: boolean;
   tasks: PublicImageTaskRecord[];
@@ -1273,7 +1311,7 @@ export async function queryIdempotentBatch(input: QueryBatchInput): Promise<{
     if (requestedHistoryId && stored.historyId && requestedHistoryId !== stored.historyId) {
       throw new ImageTaskLedgerError("history_id_conflict", `幂等键 ${idempotencyKey} 的 historyId 不一致`);
     }
-    if (stored.status !== "processing") return publicRecord(stored, true);
+    if (stored.localDisposition || stored.status !== "processing") return publicRecord(stored, true);
     const token = input.ledger.resolveToken(stored, input.tokens);
     const result = await input.queryTask(stored.historyId, token, { ...stored.context });
     const updated = await input.ledger.updateFromPoll(idempotencyKey, result);
@@ -1282,11 +1320,12 @@ export async function queryIdempotentBatch(input: QueryBatchInput): Promise<{
 
   const successCount = tasks.filter((task) => task.status === "success").length;
   const failedCount = tasks.filter((task) => task.status === "failed").length;
-  const unknownCount = tasks.filter((task) => task.status === "submission_unknown").length;
+  const unknownCount = tasks.filter((task) => !task.localDisposition && task.status === "submission_unknown").length;
+  const archivedCount = tasks.filter((task) => Boolean(task.localDisposition)).length;
   const pendingCount = tasks.filter((task) =>
-    task.status === "processing" || task.status === "reserved"
+    !task.localDisposition && (task.status === "processing" || task.status === "reserved")
   ).length;
-  const terminalCount = successCount + failedCount + unknownCount;
+  const terminalCount = successCount + failedCount + unknownCount + archivedCount;
   return {
     // ok only describes whether this status request was handled successfully.
     // Task progress and terminal state are represented separately below.
@@ -1299,6 +1338,7 @@ export async function queryIdempotentBatch(input: QueryBatchInput): Promise<{
     successCount,
     failedCount,
     unknownCount,
+    archivedCount,
     pendingCount,
     terminalCount,
     allTerminal: pendingCount === 0,

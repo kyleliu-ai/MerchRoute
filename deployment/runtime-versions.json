@@ -15,7 +15,7 @@
     "sharp": "0.34.5"
   },
   "jimeng": {
-    "version": "1.0.0",
+    "version": "1.0.1",
     "node": "20.20.2",
     "npm": "10.8.2",
     "playwrightCore": "1.58.2",
