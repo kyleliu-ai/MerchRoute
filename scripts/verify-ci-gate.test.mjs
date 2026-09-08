@@ -76,7 +76,7 @@ test('workflow preserves read-only permissions, explicit PR HEAD and non-skippab
   const yaml = await readFile(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
   assert.match(yaml, /permissions:\s+contents: read/);
   assert.doesNotMatch(yaml, /pull_request_target|contents: write|secrets: inherit|if:.*draft/);
-  assert.match(yaml, /branches: \[main, 'work\/merchroute-github-publish-\*'\]/);
+  assert.match(yaml, /branches: \[main, 'work\/\*\*'\]/);
   assert.equal((yaml.match(/ref: \$\{\{ github.event.pull_request.head.sha \|\| github.sha \}\}/g) || []).length, 9);
   assert.match(yaml, /name: MerchRoute release gate\s+if: \$\{\{ always\(\) \}\}/);
   assert.match(yaml, /POSTGRES_INITDB_ARGS: --encoding=UTF8 --locale-provider=icu --icu-locale=und/);
