@@ -4,6 +4,14 @@
  */
 
 export interface ModelConfig {
+  imagePolicy?: {
+    operations: Array<'generation' | 'composition'>;
+    resolutions: string[];
+    ratios: string[];
+    compositionProtocol: 'seedream-20260908';
+    nativeOutputCount: 1 | 4;
+    requestParams: { da_version: string; web_version: string };
+  };
   // 模型内部名称
   internalModel: string;
   // draft版本
@@ -39,6 +47,31 @@ export interface ModelConfig {
 
 // 模型配置映射
 export const MODEL_CONFIGS: Record<string, ModelConfig> = {
+  // Website 4.7 image-to-image evidence: 2026-09-08, CN, 2K.
+  // Candidate support only; this does not change the production rc.2 image.
+  "jimeng-4.7": {
+    internalModel: "high_aes_general_v43",
+    draftVersion: "3.3.26",
+    features: { multiImage: true, imageToImage: true, videoGeneration: false },
+    defaultParams: {
+      width: 2048, height: 2048,
+      resolutions: [
+        { width: 2048, height: 2048 }, { width: 1728, height: 2304 },
+        { width: 2560, height: 1440 }, { width: 2304, height: 1728 },
+        { width: 1440, height: 2560 }, { width: 1664, height: 2496 },
+        { width: 2496, height: 1664 }, { width: 3024, height: 1296 },
+      ],
+      sampleStrengthRange: [0.1, 1.0],
+    },
+    imagePolicy: {
+      operations: ['composition'], resolutions: ['2k'],
+      ratios: ['1:1', '3:4', '16:9', '4:3', '9:16', '2:3', '3:2', '21:9'],
+      compositionProtocol: 'seedream-20260908',
+      // Candidate protocol change; requires isolated real acceptance before deployment.
+      nativeOutputCount: 4,
+      requestParams: { da_version: '3.3.26', web_version: '7.5.0' },
+    },
+  },
   "jimeng-5.0": {
     internalModel: "high_aes_general_v50",
     draftVersion: "3.3.9",
@@ -353,7 +386,7 @@ export const MODEL_CONFIGS: Record<string, ModelConfig> = {
 
 // 获取模型配置
 export function getModelConfig(modelName: string): ModelConfig {
-  const config = MODEL_CONFIGS[modelName];
+  const config = Object.hasOwn(MODEL_CONFIGS, modelName) ? MODEL_CONFIGS[modelName] : undefined;
   if (!config) {
     throw new Error(`Unsupported model: ${modelName}`);
   }
@@ -362,7 +395,7 @@ export function getModelConfig(modelName: string): ModelConfig {
 
 // 获取所有支持的图像生成模型
 export function getSupportedImageModels(): string[] {
-  return Object.keys(MODEL_CONFIGS);
+  return Object.keys(MODEL_CONFIGS).filter((name) => !MODEL_CONFIGS[name].features.videoGeneration);
 }
 
 // 检查模型是否支持特定功能

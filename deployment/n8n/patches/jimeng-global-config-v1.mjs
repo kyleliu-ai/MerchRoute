@@ -533,7 +533,15 @@ export function assertJimengGlobalConfigWorkflow(workflow) {
   assert.equal(serialized.includes('HLj0jZorJzbM5kel'), false, `${workflow.id} 仍包含旧即梦凭证`);
   assert.equal(serialized.includes('new URL(jimengUrl)'), false, `${workflow.id} 仍依赖 Code Runner 不可用的 URL 构造器`);
   assert.equal(serialized.includes('const jimengUrlMatch ='), true, `${workflow.id} 缺少 Code Runner 兼容的 URL 校验`);
-  for (const [name, endpoint] of Object.entries(definition.httpEndpoints)) {
+  const unifiedCutout = workflow.id === 'Wxng7hVbjMNhVOaO' && workflow.nodes.some((node) => node.name === 'MR Build Batches');
+  const httpEndpoints = unifiedCutout ? { 'MR Submit Tasks': '/v1/images/tasks/batch', 'MR Query Tasks': '/v1/images/tasks/status' } : definition.httpEndpoints;
+  if (unifiedCutout) {
+    const batches = requireNode(workflow, 'MR Build Batches').parameters.jsCode;
+    assert.match(batches, /merchroute-image-v1/);
+    assert.match(batches, /model:source\.constants\.model\.jimengModel/);
+    assert.equal(workflow.nodes.some((node) => node.name === 'Generate Cutout Image'), false);
+  }
+  for (const [name, endpoint] of Object.entries(httpEndpoints)) {
     const node = requireNode(workflow, name);
     assert.equal(node.parameters.authentication, 'none');
     assert.equal(node.parameters.url, `={{ String($json.constants.BaseUrl.JimengUrl).trim().replace(/\\/+$/, '') + '${endpoint}' }}`);

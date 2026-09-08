@@ -20,6 +20,6 @@
     "npm": "10.8.2",
     "playwrightCore": "1.58.2",
     "chromiumRevision": "1208",
-    "image": "merchroute/jimeng-free-api-all:0.9.1-e002-20260813"
+    "imageRepository": "merchroute/jimeng-free-api-all"
   }
 }

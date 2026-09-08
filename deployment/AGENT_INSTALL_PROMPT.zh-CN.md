@@ -224,10 +224,12 @@ npm run deployment:test
 npm run n8n-runtime:test
 npm run check
 npm run jimeng:test
-npm run jimeng:build
+node deployment/scripts/jimeng-deploy.mjs build --state-dir="<runtimeHome>/recovery/jimeng" --rc=<next-rc>
 ```
 
 运行 Jimeng 双架构构建检查；产物和缓存不得写入 Git 候选：
+
+即梦新安装/升级及回滚使用 `deployment/JIMENG_DEPLOYMENT.zh-CN.md` 的统一入口。生产 Compose 不执行 `up --build`，必须显式绑定已核验镜像和外部卷。双架构 cache-only 构建不生成可部署记录，也不代表对应平台实测通过。
 
 ```bash
 docker buildx build --platform linux/amd64,linux/arm64 --output=type=cacheonly integrations/jimeng-free-api-all

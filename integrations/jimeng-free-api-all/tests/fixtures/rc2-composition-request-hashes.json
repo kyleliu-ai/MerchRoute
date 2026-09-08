@@ -1,0 +1,198 @@
+{
+  "baselineCommit": "0dbfb17b9397e84c3a9d66c2af7c8a4242984dc0",
+  "sourceFile": "src/api/controllers/images.ts",
+  "cases": [
+    {
+      "profile": "sync",
+      "model": "jimeng-4.5",
+      "omittedModel": false,
+      "count": 1,
+      "strength": 0.5,
+      "sha256": "164c9e0f034674543c82edb43cb94b16074d67e3912d3057ef653e0dac178f21"
+    },
+    {
+      "profile": "sync",
+      "model": "jimeng-4.5",
+      "omittedModel": false,
+      "count": 1,
+      "strength": 0.7,
+      "sha256": "037ec776721ff63b00c4032c2cd1396510b2f6865987729ce11848d8d26a0bf6"
+    },
+    {
+      "profile": "sync",
+      "model": "jimeng-4.5",
+      "omittedModel": false,
+      "count": 3,
+      "strength": 0.5,
+      "sha256": "06b4c44c559bc544e67ec59924686a03726dbd8592f0b0a7ef8fa525e4221333"
+    },
+    {
+      "profile": "sync",
+      "model": "jimeng-4.5",
+      "omittedModel": false,
+      "count": 3,
+      "strength": 0.7,
+      "sha256": "ff38d9df63a4934cfbf50a9c0da6a3b46356f4ef52f7dcb0a96a4f3c3afac301"
+    },
+    {
+      "profile": "sync",
+      "model": "jimeng",
+      "omittedModel": false,
+      "count": 1,
+      "strength": 0.5,
+      "sha256": "febb2edaa2576e79029b5f6a2132481404bad7260f41cbc0f301eaaca55506f6"
+    },
+    {
+      "profile": "sync",
+      "model": "jimeng",
+      "omittedModel": false,
+      "count": 1,
+      "strength": 0.7,
+      "sha256": "07119009d23f746c9c47f1b785458cb1fffe9f9f3317cc8f33b3e910ad4f67e8"
+    },
+    {
+      "profile": "sync",
+      "model": "jimeng",
+      "omittedModel": false,
+      "count": 3,
+      "strength": 0.5,
+      "sha256": "2b826f1ef4ce0d148448ac2a381b13ae20497a674c7b60139ebc985a20a986e1"
+    },
+    {
+      "profile": "sync",
+      "model": "jimeng",
+      "omittedModel": false,
+      "count": 3,
+      "strength": 0.7,
+      "sha256": "693d1ed0b19a5a221f9a47f82cac173dcde67a29cc0991bd517049b5054a6b90"
+    },
+    {
+      "profile": "sync",
+      "model": null,
+      "omittedModel": true,
+      "count": 1,
+      "strength": 0.5,
+      "sha256": "11b6ebf2d9b8a5dc890ebcdc86a74fb2e02c78bd4e4afc6d3246e3db5b1be10d"
+    },
+    {
+      "profile": "sync",
+      "model": null,
+      "omittedModel": true,
+      "count": 1,
+      "strength": 0.7,
+      "sha256": "f2aed9a24554120e3a0131b5f8743fc8e79cf787a407657cb214438168314e77"
+    },
+    {
+      "profile": "sync",
+      "model": null,
+      "omittedModel": true,
+      "count": 3,
+      "strength": 0.5,
+      "sha256": "f324c2afb5c730c7c00329bcd20ba5ae689200296a66c5d354fd0c37c09eb5d0"
+    },
+    {
+      "profile": "sync",
+      "model": null,
+      "omittedModel": true,
+      "count": 3,
+      "strength": 0.7,
+      "sha256": "e29915b361585e05d4779c8351a4209256a1c02baf51457b4f7e3b69f7faf150"
+    },
+    {
+      "profile": "async",
+      "model": "jimeng-4.5",
+      "omittedModel": false,
+      "count": 1,
+      "strength": 0.5,
+      "sha256": "e735bc8e1218992f119f50f3b4caebb67585c5d48e53c763702553ff962c9088"
+    },
+    {
+      "profile": "async",
+      "model": "jimeng-4.5",
+      "omittedModel": false,
+      "count": 1,
+      "strength": 0.7,
+      "sha256": "e295ef55c0c667b99c0ab47702427eead1d34bd7a8a78ef6c41dbfe21f2c374b"
+    },
+    {
+      "profile": "async",
+      "model": "jimeng-4.5",
+      "omittedModel": false,
+      "count": 3,
+      "strength": 0.5,
+      "sha256": "48c34583ff3bd47c3cfbbde9b889382a4010ba1d16c8865dff0d53f4ee6910c7"
+    },
+    {
+      "profile": "async",
+      "model": "jimeng-4.5",
+      "omittedModel": false,
+      "count": 3,
+      "strength": 0.7,
+      "sha256": "b8776b78535b8647f32aba26eaea91ef6da7e76d22fda51601224d9dedfd3b7f"
+    },
+    {
+      "profile": "async",
+      "model": "jimeng",
+      "omittedModel": false,
+      "count": 1,
+      "strength": 0.5,
+      "sha256": "06dba3ca3077353450ff92f568ef2d2fa7ea570ab784d82ca6e5f6eff3580315"
+    },
+    {
+      "profile": "async",
+      "model": "jimeng",
+      "omittedModel": false,
+      "count": 1,
+      "strength": 0.7,
+      "sha256": "85ac1295f5133d67e0352cff1cae1d51c3c4074461cddbe627693ae249574afc"
+    },
+    {
+      "profile": "async",
+      "model": "jimeng",
+      "omittedModel": false,
+      "count": 3,
+      "strength": 0.5,
+      "sha256": "43c24f397d039568a193653d76784625151375e5a0e64b52594243e4ae18429b"
+    },
+    {
+      "profile": "async",
+      "model": "jimeng",
+      "omittedModel": false,
+      "count": 3,
+      "strength": 0.7,
+      "sha256": "0529bb3066fce37bb2dcf64a0daa5a85c38ce3fbd8cef13f4c029835607a85a8"
+    },
+    {
+      "profile": "async",
+      "model": null,
+      "omittedModel": true,
+      "count": 1,
+      "strength": 0.5,
+      "sha256": "ccb0cd387d09789c0198878181be48f4e679ed05b038a4bb39e1b4a06bfd4085"
+    },
+    {
+      "profile": "async",
+      "model": null,
+      "omittedModel": true,
+      "count": 1,
+      "strength": 0.7,
+      "sha256": "d54abc4e9757b0c9f5a95c10d3ba7b96a8ad2ca7972b4943ae52e19c805ce5de"
+    },
+    {
+      "profile": "async",
+      "model": null,
+      "omittedModel": true,
+      "count": 3,
+      "strength": 0.5,
+      "sha256": "66679cd30372ef20c452f13471aa01a2d8da303d2241e890e10e7b69f73c2f72"
+    },
+    {
+      "profile": "async",
+      "model": null,
+      "omittedModel": true,
+      "count": 3,
+      "strength": 0.7,
+      "sha256": "ffa3e738511365197692421e876c3c9035bb5a0886d03597faa4839157b9b7e8"
+    }
+  ]
+}

@@ -1974,6 +1974,23 @@ function LocalImportCreateView({ onViewImported }: { onViewImported: (sku: strin
   const [result, setResult] = useState<LocalImportRecord>();
   const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
   const directories = useQuery({ queryKey: ['local-import-directories', currentPath], queryFn: () => api.localImportDirectories(currentPath), retry: false });
+  const openingDirectories = useRef(new Set<string>());
+  const [pendingDirectories, setPendingDirectories] = useState<Set<string>>(new Set());
+  const openDirectory = async (relativePath: string) => {
+    const configHash = directories.data?.configHash;
+    if (!configHash || openingDirectories.current.has(relativePath)) return;
+    openingDirectories.current.add(relativePath);
+    setPendingDirectories(new Set(openingDirectories.current));
+    try {
+      await api.openLocalImportFolder({ relativePath, configHash });
+      message.success('正在打开变体目录');
+    } catch (error) {
+      message.error(error instanceof ApiError ? error.userMessage : error instanceof Error ? error.message : '无法打开变体目录');
+    } finally {
+      openingDirectories.current.delete(relativePath);
+      setPendingDirectories(new Set(openingDirectories.current));
+    }
+  };
   const previewMutation = useMutation({
     mutationFn: () => api.previewLocalImport(selected, primary),
     onSuccess: (value) => { setPreview(value); setFields(value.fields); setResult(undefined); },
@@ -2026,7 +2043,7 @@ function LocalImportCreateView({ onViewImported }: { onViewImported: (sku: strin
               </div>}
               {directories.isLoading ? <Skeleton active paragraph={{ rows: 3 }} /> : directories.data?.directories.length ? directories.data.directories.map((directory) => <div className={`local-directory-row${isSourceRoot ? ' is-platform-root-row' : ''}${isPlatformDirectory ? ' is-product-media-row' : ''}`} key={directory.relativePath}>
                 {!isSourceRoot && <Checkbox checked={selected.includes(directory.relativePath)} onChange={(event) => toggleDirectory(directory.relativePath, event.target.checked)} aria-label={`选择 ${directory.relativePath}`} />}
-                <div className="local-directory-identity"><FolderOpenOutlined /><button className="directory-name" onClick={() => directory.hasChildren ? setCurrentPath(directory.relativePath) : undefined}>{directory.name}</button></div>
+                <div className="local-directory-identity"><FolderOpenOutlined /><button type="button" className="directory-name" disabled={isPlatformDirectory && pendingDirectories.has(directory.relativePath)} aria-busy={isPlatformDirectory && pendingDirectories.has(directory.relativePath)} title={isPlatformDirectory ? `打开变体目录 ${directory.name}` : directory.name} onClick={() => isPlatformDirectory ? void openDirectory(directory.relativePath) : directory.hasChildren ? setCurrentPath(directory.relativePath) : undefined}>{directory.name}</button></div>
                 {isSourceRoot && <span className="local-directory-child-count" data-label="子目录数">{directory.childDirectoryCount}</span>}
                 {isSourceRoot && <time className="local-directory-modified-at" dateTime={directory.modifiedAt} data-label="最后修改时间">{formatLocalImportDirectoryDate(directory.modifiedAt)}</time>}
                 {isPlatformDirectory && <time className="local-directory-created-at" dateTime={directory.createdAt} data-label="创建日期">{formatLocalImportDirectoryDate(directory.createdAt)}</time>}

@@ -1,10 +1,9 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { registerHooks } from "node:module";
+import { register } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { pathToFileURL } from "node:url";
 
 import { AsyncImageBatchCoordinator } from "../src/api/services/async-image-batch-coordinator.ts";
 import {
@@ -75,6 +74,11 @@ async function prepare(input: {
   const batchKey = `E002:v1:${input.submissionId}:attempt-${attempt}`;
   const tasks = (input.views || ["front"]).map((view) => taskFor(input.submissionId, view, attempt));
   const metadata = sourceImages(input.imageCount || 1);
+  if (attempt === 1) for (const task of tasks) {
+    const key = task.idempotencyKey.replace(/:attempt-1$/, ':attempt-0');
+    const parent = input.ledger.get(key)!;
+    await input.ledger.updateFromPoll(key, {historyId:parent.historyId,status:'failed',rawStatus:30,failCode:'generation_failed',imageUrls:[]});
+  }
   const reserved = await reserveIdempotentBatchForAsync({
     ledger: input.ledger,
     batchKey,
@@ -405,7 +409,7 @@ test("慢 preflight 保持 ready，生成边界后完成且同键重入不会再
 });
 
 // Route helpers close over module-level stores. Seed their persistent state
-// before importing the route, then use sync loader hooks only to replace base
+// before importing the route, then use loader hooks only to replace base
 // image-service dependencies that are not part of this offline patch tree.
 const routeStoreDir = fs.mkdtempSync(path.join(os.tmpdir(), "jimeng-route-helper-"));
 let routeNowMs = Date.parse("2026-08-12T00:00:00.000Z");
@@ -452,6 +456,18 @@ await routeUploadSeed.failBeforeSubmit(failedUploadKey, {
   message: "offline deadline",
 });
 
+// The route ledger loads durable records once at construction, like a restart.
+// Seed recovery state before importing it, not through a second live writer.
+const modelRecoverySubmissionId = 'SUB-model-recovery-gate';
+const modelRecoveryTask = taskFor(modelRecoverySubmissionId);
+await reserveIdempotentBatchForAsync({
+  ledger: routeLedgerSeed,
+  batchKey: `E002:v1:${modelRecoverySubmissionId}:attempt-0`,
+  tasks: [modelRecoveryTask], common: COMMON, sourceImages: sourceImages(),
+  tokenFingerprint: fingerprintToken('token-route'),
+  uploadKey: expectedE002UploadKey(modelRecoverySubmissionId),
+});
+
 type RouteHarness = {
   download: (input: string | Buffer, signal?: AbortSignal) => Promise<Buffer>;
   upload: (bytes: Buffer, token: string, options: Record<string, unknown>) => Promise<string>;
@@ -467,8 +483,12 @@ const routeHarness: RouteHarness = {
 };
 (globalThis as any).__JIMENG_ASYNC_ROUTE_TEST_HARNESS__ = routeHarness;
 
-const patchRoot = path.resolve(import.meta.dirname, "..");
 const stubs: Record<string, string> = {
+  "lodash": `export default {
+    isArray: Array.isArray,
+    isString: (value) => typeof value === "string",
+    sample: (values) => values[0],
+  };`,
   "@/lib/request/Request.ts": "export default class Request {}",
   "@/api/controllers/images.ts": `
     const harness = () => globalThis.__JIMENG_ASYNC_ROUTE_TEST_HARNESS__;
@@ -492,41 +512,8 @@ const stubs: Record<string, string> = {
   "@/lib/util.ts": "export default {};",
 };
 
-registerHooks({
-  resolve(specifier, context, nextResolve) {
-    if (Object.hasOwn(stubs, specifier)) {
-      return { shortCircuit: true, url: `jimeng-test-stub:${encodeURIComponent(specifier)}` };
-    }
-    if (specifier === "lodash") return { shortCircuit: true, url: "jimeng-test-stub:lodash" };
-    if (specifier.startsWith("@/api/services/")) {
-      return {
-        shortCircuit: true,
-        url: pathToFileURL(path.join(patchRoot, "src", specifier.slice(2))).href,
-      };
-    }
-    return nextResolve(specifier, context);
-  },
-  load(url, context, nextLoad) {
-    if (url === "jimeng-test-stub:lodash") {
-      return {
-        shortCircuit: true,
-        format: "module",
-        source: `export default {
-          isArray: Array.isArray,
-          isString: (value) => typeof value === "string",
-          sample: (values) => values[0],
-        };`,
-      };
-    }
-    if (url.startsWith("jimeng-test-stub:")) {
-      return {
-        shortCircuit: true,
-        format: "module",
-        source: stubs[decodeURIComponent(url.slice("jimeng-test-stub:".length))],
-      };
-    }
-    return nextLoad(url, context);
-  },
+register(new URL("./helpers/stub-loader.mjs", import.meta.url), {
+  data: { stubs, sourceRoot: new URL("../src/", import.meta.url).href },
 });
 
 process.env.IMAGE_TASK_STORE_DIR = routeStoreDir;
@@ -685,7 +672,7 @@ test("同键 POST 复查复用原 history，submittedCount 为本次新增 0", a
   assert.deepEqual(new ImageUploadStore({ storeDir: routeStoreDir }).get(uploadKey), beforeUpload);
 });
 
-test("upload_idempotency_conflict 只回滚本次 attempt，不污染既有 ready 上传集", async () => {
+test("参数变更且原任务未失败的 attempt-1 在上传前拒绝，不污染既有 ready 上传集", async () => {
   const submissionId = "SUB-route-upload-conflict";
   const uploadKey = expectedE002UploadKey(submissionId);
   const initialTask = taskFor(submissionId, "front", 0);
@@ -725,10 +712,7 @@ test("upload_idempotency_conflict 只回滚本次 attempt，不污染既有 read
     tasks: [retryTask],
   }, "token-route-conflict") as any);
   assert.equal(conflict.ok, false);
-  assert.equal(conflict.code, "upload_idempotency_conflict");
-  assert.equal(conflict.failureCode, "upload_idempotency_conflict");
-  assert.equal(conflict.batchStatus, "rejected");
-  assert.equal(conflict.automaticRetriesExhausted, false);
+  assert.equal(conflict.code, "retry_not_allowed");
 
   const afterUpload = new ImageUploadStore({ storeDir: routeStoreDir }).get(uploadKey);
   const afterLedger = new ImageTaskLedger({ storeDir: routeStoreDir });
@@ -795,6 +779,57 @@ test("后台 failed_pre_submit 释放 tasks 后，status 仍返回结构化失�
   assert.deepEqual(status.tasks, []);
   assert.equal(new ImageTaskLedger({ storeDir: routeStoreDir }).get(failingTask.idempotencyKey), undefined);
   assert.equal(submitCount, 0);
+});
+
+test('invalid model/capability requests fail before source IO, reservations or retry side effects', async () => {
+  let sideEffects = 0;
+  const forbidden = async () => { sideEffects++; throw new Error('model gate was bypassed'); };
+  routeHarness.download = forbidden;
+  routeHarness.upload = forbidden;
+  routeHarness.submit = forbidden;
+  const negatives = [
+    ...['', ' ', null, 47, 'unknown', '__proto__'].map((model) => ({ model, resolution:'2k', code:'unsupported_image_model' })),
+    ...['1k','4k'].map((resolution) => ({ model:'jimeng-4.7', resolution, code:'unsupported_model_resolution' })),
+  ];
+  let serial = 0;
+  for (const value of negatives) {
+    for (const route of ['/generations','/compositions'] as const) {
+      const result = await routeModule.default.post[route](mockRouteRequest({
+        model:value.model, resolution:value.resolution, prompt:'fixture', images:['https://fixture.invalid/image.png'],
+      }) as any);
+      assert.equal(result.code, value.code);
+      assert.equal(result.submittedCount, 0);
+    }
+    for (const withUploadKey of [false,true]) for (const attempt of [0,1]) {
+      const submissionId = `SUB-model-gate-${++serial}`;
+      const task = { ...taskFor(submissionId,'front',attempt), model:value.model, resolution:value.resolution };
+      const uploadKey = expectedE002UploadKey(submissionId);
+      const result = await routeModule.default.post['/tasks/batch'](mockRouteRequest({
+        batchKey:`E002:v1:${submissionId}:attempt-${attempt}`,
+        ...(withUploadKey ? { uploadKey } : {}), sourceSubmissionId:submissionId,
+        common:COMMON, tasks:[task], sourceImages:sourceImages(), images:['https://fixture.invalid/image.png'],
+      }) as any);
+      assert.equal(result.code, value.code);
+      assert.equal(result.accepted, false);
+      assert.equal(result.submittedCount, 0);
+      assert.equal(new ImageTaskLedger({storeDir:routeStoreDir}).get(task.idempotencyKey), undefined);
+      assert.equal(new ImageUploadStore({storeDir:routeStoreDir}).get(uploadKey), undefined);
+    }
+  }
+  const textOnly = await routeModule.default.post['/generations'](mockRouteRequest({model:'jimeng-4.7',prompt:'fixture'}) as any);
+  assert.equal(textOnly.code, 'unsupported_model_operation');
+  const submissionId=modelRecoverySubmissionId;
+  const task=modelRecoveryTask;
+  const uploadKey=expectedE002UploadKey(submissionId);
+  const batchKey=`E002:v1:${submissionId}:attempt-0`;
+  const recovered = await routeModule.default.post['/tasks/status'](mockRouteRequest({
+    batchKey, uploadKey, tasks:[{idempotencyKey:task.idempotencyKey,model:null}],
+    recovery:{common:COMMON,sourceSubmissionId:submissionId,sourceImages:sourceImages(),images:['https://fixture.invalid/image.png']},
+  }) as any);
+  assert.equal(recovered.code, 'unsupported_image_model');
+  assert.equal(new ImageTaskLedger({storeDir:routeStoreDir}).get(task.idempotencyKey)?.status,'reserved');
+  assert.equal(new ImageUploadStore({storeDir:routeStoreDir}).get(uploadKey),undefined);
+  assert.equal(sideEffects, 0);
 });
 
 test.after(async () => {

@@ -382,6 +382,16 @@
         },
         {
           "path": "apps/server/src/app.ts"
+        },
+        {
+          "path": "integrations/jimeng-free-api-all/src/api/services/image-completion-policy.mjs",
+          "includes": ["merchroute-image-v1", "targetImageCount = 4", "maxRegenerations: 1"]
+        },
+        {
+          "path": "integrations/jimeng-free-api-all/tests/image-retry-policy.test.ts"
+        },
+        {
+          "path": "deployment/scripts/jimeng-deploy.test.mjs"
         }
       ],
       "checkIds": [
@@ -520,14 +530,15 @@
     },
     {
       "id": "local-import-directory-status",
-      "title": "目录状态和字面六列表头",
+      "title": "目录状态、字面六列表头与打开本地变体目录",
       "action": "INTEGRATE",
       "sourceChecks": [
         {
           "path": "apps/server/src/services/local-import/index.ts",
           "includes": [
             "importStatus",
-            "canonicalizePath"
+            "canonicalizePath",
+            "resolveDirectoryToOpen"
           ]
         },
         {
@@ -542,6 +553,12 @@
             "<span>选择</span>",
             "<span>导入状态</span>"
           ]
+        },
+        {
+          "path": "tests/e2e/local-import-open-folder.spec.ts"
+        },
+        {
+          "path": "apps/server/src/services/local-import/open-folder.test.ts"
         }
       ],
       "checkIds": [
@@ -553,7 +570,8 @@
       "acceptance": [
         "已登记 COPYING/IMPORTED/COPY_FAILED_RETRYABLE 的多目录分别显示已导入；重复跳过不登记来源",
         "规范化旧 Junction 历史根与当前配置，Windows/POSIX 语义正确",
-        "精确六列表头、已导入仍可选择打开、320px 无横向溢出"
+        "精确六列表头、已导入仍可选择打开、320px 无横向溢出",
+        "点击变体名称打开来源目录，保持选择和预览；校验来源配置指纹与安全路径，Windows/macOS 原生命令可见启动"
       ]
     },
     {

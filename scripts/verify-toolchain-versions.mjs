@@ -61,6 +61,17 @@ expectEqual(
 );
 expectEqual('package-lock.json engines.node', packageLock.packages?.['']?.engines?.node, expected.node);
 expectEqual('package-lock.json engines.npm', packageLock.packages?.['']?.engines?.npm, expected.npm);
+expectEqual('package-lock.json product version', packageLock.version, packageJson.version);
+expectEqual('package-lock.json root product version', packageLock.packages?.['']?.version, packageJson.version);
+for (const workspace of ['apps/server', 'apps/web', 'packages/shared']) {
+  const manifest = readJson(`${workspace}/package.json`);
+  expectEqual(`${workspace} product version`, manifest.version, packageJson.version);
+  expectEqual(`${workspace} locked product version`, packageLock.packages?.[workspace]?.version, packageJson.version);
+  if (workspace.startsWith('apps/')) {
+    expectEqual(`${workspace} shared dependency`, manifest.dependencies?.['@n8n-media-review/shared'], packageJson.version);
+    expectEqual(`${workspace} locked shared dependency`, packageLock.packages?.[workspace]?.dependencies?.['@n8n-media-review/shared'], packageJson.version);
+  }
+}
 expectEqual('Jimeng package version', jimengPackage.version, expected.jimeng.version);
 expectEqual('Jimeng engines.node', jimengPackage.engines?.node, expected.jimeng.node);
 expectEqual('Jimeng engines.npm', jimengPackage.engines?.npm, expected.jimeng.npm);

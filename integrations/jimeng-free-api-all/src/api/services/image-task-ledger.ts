@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { imageCompletionPolicy } from './image-completion-policy.mjs';
 
 import {
   ImageInputUploadError,
@@ -47,6 +48,11 @@ export type ImageTaskRecord = {
 
 export type PublicImageTaskRecord = Omit<ImageTaskRecord, "tokenFingerprint"> & {
   reused: boolean;
+  policyVersion?: string;
+  completionReason?: string;
+  partial?: boolean;
+  canRetry?: boolean;
+  observedCount?: number;
 };
 
 export type AsyncBatchReservation = {
@@ -107,7 +113,7 @@ type QueryBatchInput = {
   tasks: Record<string, any>[];
   tokens: string[];
   concurrency?: number;
-  queryTask: (historyId: string, token: string) => Promise<{
+  queryTask: (historyId: string, token: string, context: Readonly<Record<string, unknown>>) => Promise<{
     historyId: string;
     status: "processing" | "success" | "failed";
     rawStatus?: number;
@@ -295,6 +301,8 @@ export function buildImageTaskRequestHash(input: {
     taskId: firstNonEmptyString(taskContextValue(task, "taskId")),
     view: firstNonEmptyString(taskContextValue(task, "view")),
     retryAttempt: normalizeInteger(taskContextValue(task, "retryAttempt"), 0),
+    ...(task.policyVersion ? {policyVersion: task.policyVersion, workflowProfile: task.workflowProfile,
+      negativePrompt: firstNonEmptyString(task.negativePrompt, task.negative_prompt, common.negativePrompt, common.negative_prompt)} : {}),
     prompt: firstNonEmptyString(task.prompt),
     generation: {
       model: firstNonEmptyString(task.model, common.model, "jimeng-4.5"),
@@ -360,7 +368,7 @@ export async function mapWithConcurrency<T, R>(
 }
 
 function sanitizeContextValue(value: unknown, key = ""): unknown {
-  if (/^(authorization|refreshToken|token|images|imageUrls|sourceUrls|url)$/i.test(key)) {
+  if (/^(authorization|refreshToken|token|images|images_base64|imageUrls|sourceUrls|referenceImages|url)$/i.test(key)) {
     return undefined;
   }
   if (Array.isArray(value)) {
@@ -552,6 +560,7 @@ export class ImageTaskLedger {
     return this.withKeyLock(input.idempotencyKey, () => {
       const existing = this.records.get(input.idempotencyKey);
       if (existing) {
+        if (existing.tokenFingerprint !== input.tokenFingerprint) throw new ImageTaskLedgerError('token_fingerprint_unavailable', '幂等键属于不同账号');
         if (!existing.requestHash) {
           throw new ImageTaskLedgerError(
             "legacy_record_unverifiable",
@@ -565,7 +574,25 @@ export class ImageTaskLedger {
             { idempotencyKey: input.idempotencyKey }
           );
         }
+        if (existing.context.policyVersion && Array.isArray(existing.context.referenceImageHashes) &&
+            JSON.stringify(existing.context.referenceImageHashes) !== JSON.stringify(input.context.referenceImageHashes || [])) {
+          throw new ImageTaskLedgerError('idempotency_conflict', '幂等键对应的参考图片发生变化');
+        }
         return { created: false, record: cloneRecord(existing) };
+      }
+
+      const attempt = Number(input.context.retryAttempt ?? 0);
+      if (![0, 1].includes(attempt)) throw new ImageTaskLedgerError('retry_limit_exceeded', '最多允许首次生成和一次明确失败重试');
+      if (attempt === 1) {
+        const parentKey = String(input.context.parentIdempotencyKey || input.idempotencyKey.replace(/:attempt-1$/, ':attempt-0'));
+        const parent = this.records.get(parentKey);
+        if (!parent || parentKey === input.idempotencyKey || input.idempotencyKey !== parentKey.replace(/:attempt-0$/, ':attempt-1') ||
+            parent.tokenFingerprint !== input.tokenFingerprint || !parent.context.regenerationHash ||
+            parent.context.regenerationHash !== input.context.regenerationHash ||
+            JSON.stringify(parent.context.referenceImageHashes || []) !== JSON.stringify(input.context.referenceImageHashes || []) ||
+            !imageCompletionPolicy.evaluate({...parent, retryAttempt: Number(parent.context.retryAttempt || 0)}).canRetry) {
+          throw new ImageTaskLedgerError('retry_not_allowed', '重试必须关联同账号同参数且明确失败无图片的首次任务');
+        }
       }
 
       const now = this.now().toISOString();
@@ -580,7 +607,8 @@ export class ImageTaskLedger {
         imageUrls: [],
         createdAt: now,
         updatedAt: now,
-        context: sanitizeContextValue(input.context) as Record<string, unknown>,
+        context: sanitizeContextValue({...input.context, policyVersion: imageCompletionPolicy.version,
+          attemptStartedAtMs: this.now().getTime()}) as Record<string, unknown>,
       };
       this.records.set(input.idempotencyKey, record);
       try {
@@ -776,11 +804,25 @@ export class ImageTaskLedger {
       if (!record.historyId || record.historyId !== String(result.historyId)) {
         throw new ImageTaskLedgerError("history_id_conflict", `幂等键 ${idempotencyKey} 的 historyId 不一致`);
       }
+      if (record.status !== 'processing') return cloneRecord(record);
       record.status = result.status;
       record.rawStatus = result.rawStatus;
       record.failCode = result.failCode;
       record.count = Math.max(0, normalizeInteger(result.count, 0));
       record.imageUrls = Array.isArray(result.imageUrls) ? result.imageUrls.map(String) : [];
+      if (record.context.policyVersion === imageCompletionPolicy.version) {
+        const previousUrls = Array.isArray(record.context.observedImageUrls) ? record.context.observedImageUrls : [];
+        const excluded = new Set(Array.isArray(record.context.referenceImageHashes) ? record.context.referenceImageHashes : []);
+        const cleanUrls = imageCompletionPolicy.urls([...previousUrls, ...record.imageUrls]).filter((url: string) => !excluded.has(imageReferenceHash(url)));
+        const evaluated = imageCompletionPolicy.evaluate({...record,
+          imageUrls: cleanUrls,
+          retryAttempt: Number(record.context.retryAttempt || 0)});
+        record.status = evaluated.state;
+        record.count = evaluated.count;
+        record.imageUrls = evaluated.imageUrls;
+        record.context.observedImageUrls = evaluated.state === 'failed' ? [] : cleanUrls;
+        record.context.observedCount = evaluated.observedCount;
+      }
       record.updatedAt = this.now().toISOString();
       this.persist();
       return cloneRecord(record);
@@ -805,9 +847,31 @@ export class ImageTaskLedger {
   }
 }
 
-function publicRecord(record: ImageTaskRecord, reused: boolean): PublicImageTaskRecord {
+export function publicRecord(record: ImageTaskRecord, reused: boolean): PublicImageTaskRecord {
   const { tokenFingerprint: _tokenFingerprint, ...safe } = cloneRecord(record);
+  if (record.context.policyVersion === imageCompletionPolicy.version) {
+    const result = imageCompletionPolicy.evaluate({...safe, referenceImages: safe.context.referenceImages || [], retryAttempt: Number(safe.context.retryAttempt || 0)});
+    return {...safe, reused, policyVersion: result.policyVersion, completionReason: result.completionReason,
+      partial: result.partial, canRetry: result.canRetry, observedCount: Number(record.context.observedCount ?? result.observedCount)};
+  }
   return { ...safe, reused };
+}
+
+function policyContext(task: Record<string, any>, common: Record<string, any>, sourceImages: SourceImageMetadata[]) {
+  if (task.policyVersion && task.policyVersion !== imageCompletionPolicy.version) throw new ImageTaskLedgerError('invalid_policy_version', '不支持该图片策略版本');
+  if (task.workflowProfile && !Object.hasOwn(imageCompletionPolicy.profiles, task.workflowProfile)) throw new ImageTaskLedgerError('invalid_policy_profile', '不支持该工作流等待配置');
+  return {
+    ...task,
+    policyVersion: imageCompletionPolicy.version,
+    imageModel: firstNonEmptyString(task.model, common.model, 'jimeng-4.5'),
+    policySnapshot: {targetImageCount: 4, minimumSuccessImageCount: 1, maxRegenerations: 1,
+      ...(task.workflowProfile ? imageCompletionPolicy.profiles[task.workflowProfile] : {})},
+    regenerationHash: buildImageTaskRequestHash({task: {...task, taskId: 'logical-task', retryAttempt: 0}, common, sourceImages}),
+  };
+}
+
+export function imageReferenceHash(value: string): string {
+  return crypto.createHash('sha256').update(imageCompletionPolicy.urlKey(value)).digest('hex');
 }
 
 function validateBatchTasks(tasks: Record<string, any>[]): void {
@@ -941,6 +1005,7 @@ export async function reserveIdempotentBatchForAsync(input: {
   sourceImages: SourceImageMetadata[];
   tokenFingerprint: string;
   uploadKey: string;
+  referenceImages?: string[];
 }): Promise<{
   batchKey: string;
   reservations: AsyncBatchReservation[];
@@ -969,7 +1034,9 @@ export async function reserveIdempotentBatchForAsync(input: {
         requestHash,
         tokenFingerprint,
         context: {
-          ...task,
+          ...policyContext(task, common, normalizedSourceImages),
+          referenceImageHashes: (input.referenceImages || []).map(imageReferenceHash),
+          imageModel: firstNonEmptyString(task.model, common.model, "jimeng-4.5"),
           sourceImages: normalizedSourceImages,
           uploadKey,
           asyncPhase: "receiving",
@@ -1103,7 +1170,9 @@ export async function submitIdempotentBatch(input: SubmitBatchInput): Promise<{
     for (const task of input.tasks) {
       const requestHash = buildImageTaskRequestHash({ task, common, sourceImages: normalizedSourceImages });
       const context = {
-        ...task,
+        ...policyContext(task, common, normalizedSourceImages),
+        imageModel: firstNonEmptyString(task.model, common.model, "jimeng-4.5"),
+        referenceImageHashes: input.images.filter((value): value is string => typeof value === 'string').map(imageReferenceHash),
         sourceImages: normalizedSourceImages,
       };
       const reservation = await input.ledger.reserve({
@@ -1206,7 +1275,7 @@ export async function queryIdempotentBatch(input: QueryBatchInput): Promise<{
     }
     if (stored.status !== "processing") return publicRecord(stored, true);
     const token = input.ledger.resolveToken(stored, input.tokens);
-    const result = await input.queryTask(stored.historyId, token);
+    const result = await input.queryTask(stored.historyId, token, { ...stored.context });
     const updated = await input.ledger.updateFromPoll(idempotencyKey, result);
     return publicRecord(updated, true);
   });

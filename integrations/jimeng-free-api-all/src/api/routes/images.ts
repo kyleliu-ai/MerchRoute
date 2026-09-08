@@ -1,4 +1,5 @@
 import fs from "fs";
+import { imageCompletionPolicy } from '../services/image-completion-policy.mjs';
 import _ from "lodash";
 
 import Request from "@/lib/request/Request.ts";
@@ -20,6 +21,7 @@ import {
   fingerprintToken,
   imageTaskLedgerErrorResponse,
   queryIdempotentBatch,
+  publicRecord,
   releaseAsyncReservationsAndConfirm,
   reserveIdempotentBatchForAsync,
   stableIndex,
@@ -31,6 +33,8 @@ import {
   ImageUploadStoreError,
 } from "@/api/services/image-upload-store.ts";
 import { sanitizeImageUploadError } from "@/api/services/image-input-upload-retry.ts";
+import { imageModelErrorResponse, inheritedImageField, validateImageBatch, validateImageRequest } from "../services/image-model.ts";
+import { multipartImageFiles } from "../services/image-request-inputs.ts";
 
 const IMAGE_TASK_STORE_DIR = process.env.IMAGE_TASK_STORE_DIR || "/app/data";
 const imageTaskLedger = new ImageTaskLedger({ storeDir: IMAGE_TASK_STORE_DIR });
@@ -41,6 +45,8 @@ const asyncBatchCoordinator = new AsyncImageBatchCoordinator({
 });
 
 function ledgerErrorResponse(error: unknown) {
+  const modelResponse = imageModelErrorResponse(error);
+  if (modelResponse) return modelResponse;
   const response = imageTaskLedgerErrorResponse(error);
   if (response) return response;
   if (error instanceof ImageUploadStoreError) {
@@ -57,6 +63,22 @@ function ledgerErrorResponse(error: unknown) {
   throw error;
 }
 
+function validateSynchronousImageRequest(request: Request, compositionOnly = false) {
+  const multipart = String(request.headers['content-type'] || '').startsWith('multipart/form-data');
+  const sources = multipart ? multipartImageFiles(request) : request.body.images;
+  const imageCount = Array.isArray(sources) ? sources.length : multipart && sources ? 1 : 0;
+  try {
+    validateImageRequest({
+      model: request.body.model, ratio: request.body.ratio, resolution: request.body.resolution,
+      operation: compositionOnly || imageCount > 0 ? 'composition' : 'generation', imageCount,
+    });
+  } catch (error) {
+    const response = imageModelErrorResponse(error);
+    if (response) return response;
+    throw error;
+  }
+}
+
 function firstString(...values: unknown[]): string {
   for (const value of values) {
     const text = String(value ?? "").trim();
@@ -69,8 +91,7 @@ function publicStoredTasks(taskKeys: string[]) {
   return taskKeys.flatMap((key) => {
     const record = imageTaskLedger.get(key);
     if (!record) return [];
-    const { tokenFingerprint: _tokenFingerprint, ...safe } = record;
-    return [{ ...safe, reused: true }];
+    return [publicRecord(record, true)];
   });
 }
 
@@ -252,7 +273,7 @@ function submitAsyncTask(
   onBeforeRemoteSubmit?: () => Promise<void>
 ) {
   return submitImageCompositionFromUploadedIds(
-    String(task.model || common.model || "jimeng-4.5"),
+    inheritedImageField(task, common, 'model'),
     String(task.prompt),
     uploadedImageIds,
     {
@@ -282,6 +303,7 @@ export default {
       const tokens = tokenSplit(request.headers.authorization);
       const common = request.body.common || {};
       try {
+        validateImageBatch(tasks, common, images.length);
         const uploadKey = firstString(request.body.uploadKey);
         // Calls without uploadKey retain the original synchronous contract.
         if (uploadKey) {
@@ -299,6 +321,7 @@ export default {
             tasks,
             common,
             sourceImages: request.body.sourceImages,
+            referenceImages: images.filter((value): value is string => typeof value === 'string'),
             tokenFingerprint: affinity.tokenFingerprint,
             uploadKey,
           });
@@ -392,7 +415,7 @@ export default {
           uploadImages: uploadImageInputs,
           submitTask: async ({ task, common: taskCommon, uploadedImageIds, token }) =>
             submitImageCompositionFromUploadedIds(
-              String(task.model || taskCommon.model || "jimeng-4.5"),
+              inheritedImageField(task, taskCommon, 'model'),
               String(task.prompt),
               uploadedImageIds,
               {
@@ -475,6 +498,7 @@ export default {
               const stored = imageTaskLedger.get(String(requestedTask.idempotencyKey || ""));
               return { ...(stored?.context || {}), ...requestedTask };
             });
+            validateImageBatch(recoveryTasks, common, Array.isArray(sourceImages) ? sourceImages.length : 0);
             const affinity = resolveAffinityToken(uploadKey, tokens, taskKeys);
             const reReserved = await reserveIdempotentBatchForAsync({
               ledger: imageTaskLedger,
@@ -482,6 +506,7 @@ export default {
               tasks: recoveryTasks,
               common,
               sourceImages,
+              referenceImages: images.filter((value): value is string => typeof value === 'string'),
               tokenFingerprint: affinity.tokenFingerprint,
               uploadKey,
             });
@@ -572,6 +597,8 @@ export default {
     },
 
     "/generations": async (request: Request) => {
+      const modelError = validateSynchronousImageRequest(request);
+      if (modelError) return modelError;
       // 检查是否使用了不支持的参数
       const unsupportedParams = ['size', 'width', 'height'];
       const bodyKeys = Object.keys(request.body);
@@ -613,7 +640,7 @@ export default {
       // 处理图片数据（如果提供）
       let images: (string | Buffer)[] | null = null;
       if (isMultiPart) {
-        const files = (request.files as any)?.images;
+        const files = multipartImageFiles(request);
         if (files) {
           const imageFiles = Array.isArray(files) ? files : [files];
           if (imageFiles.length > 0) {
@@ -708,11 +735,16 @@ export default {
       }
 
       resultData.data = data;
+      const completion = imageCompletionPolicy.evaluate({imageUrls, deadlineReached: true});
+      resultData.completion = {policyVersion: completion.policyVersion, count: completion.count,
+        partial: completion.partial, canRetry: false, reason: completion.completionReason};
       return resultData;
     },
 
     // 图片合成路由（图生图）
     "/compositions": async (request: Request) => {
+      const modelError = validateSynchronousImageRequest(request, true);
+      if (modelError) return modelError;
       // 检查是否使用了不支持的参数
       const unsupportedParams = ['size', 'width', 'height'];
       const bodyKeys = Object.keys(request.body);
@@ -752,7 +784,7 @@ export default {
 
       let images: (string | Buffer)[] = [];
       if (isMultiPart) {
-        const files = (request.files as any)?.images;
+        const files = multipartImageFiles(request);
         if (!files) {
           throw new Error("在form-data中缺少 'images' 字段");
         }
@@ -833,6 +865,11 @@ export default {
         data,
         input_images: images.length,
         composition_type: "multi_image_synthesis",
+        completion: (() => {
+          const result = imageCompletionPolicy.evaluate({imageUrls: resultUrls, deadlineReached: true});
+          return {policyVersion: result.policyVersion, count: result.count, partial: result.partial,
+            canRetry: false, reason: result.completionReason};
+        })(),
       };
     },
   },

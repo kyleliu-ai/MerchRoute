@@ -1,3 +1,4 @@
+import { imageCompletionPolicy } from './image-completion-policy.mjs';
 export type ImageCompositionState = "processing" | "success" | "failed";
 
 export type ImageCompositionSnapshot = {
@@ -66,18 +67,21 @@ export function extractImageCompositionUrls(itemList: unknown): string[] {
     add(row?.common_attr?.cover_url);
   }
 
-  return [...new Set(urls)];
+  return imageCompletionPolicy.urls(urls);
 }
 
 export function classifyImageCompositionSnapshot(
   rawStatusValue: unknown,
-  itemList: unknown
+  itemList: unknown,
+  _expectedCount = 4,
+  options: { failCode?: string; referenceImages?: string[]; deadlineReached?: boolean; retryAttempt?: number } = {}
 ): ImageCompositionSnapshot {
   const parsedStatus = Number(rawStatusValue);
   const rawStatus = Number.isFinite(parsedStatus) ? parsedStatus : 0;
-  const imageUrls = extractImageCompositionUrls(itemList);
+  const result = imageCompletionPolicy.evaluate({ rawStatus, imageUrls: extractImageCompositionUrls(itemList), ...options });
+  const imageUrls = result.imageUrls;
 
-  if (rawStatus === 30) {
+  if (result.state === 'failed') {
     return {
       state: "failed",
       terminal: true,
@@ -88,7 +92,7 @@ export function classifyImageCompositionSnapshot(
     };
   }
 
-  if (imageUrls.length >= 4) {
+  if (result.state === 'success' && imageUrls.length >= 4) {
     return {
       state: "success",
       terminal: true,
@@ -99,7 +103,7 @@ export function classifyImageCompositionSnapshot(
     };
   }
 
-  if (rawStatus === 10 && imageUrls.length > 0) {
+  if (result.state === 'success') {
     return {
       state: "success",
       terminal: true,

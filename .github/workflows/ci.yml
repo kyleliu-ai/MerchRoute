@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, 'work/merchroute-github-publish-*']
+    branches: [main, 'work/**']
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened, ready_for_review]
@@ -80,6 +80,8 @@ jobs:
     name: Jimeng source, image, and ping
     runs-on: ubuntu-latest
     timeout-minutes: 35
+    env:
+      JIMENG_BUILD_STATE_DIR: ${{ runner.temp }}/jimeng-build
     steps:
       - uses: actions/checkout@v7
         with:

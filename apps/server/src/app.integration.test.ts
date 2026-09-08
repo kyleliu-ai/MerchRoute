@@ -126,6 +126,34 @@ describe.sequential('review and submission integration', () => {
     expect(launchDirectory).toHaveBeenCalledWith('explorer.exe', [await realpath(task.sourceFolder)], { windowsHide: false });
   });
 
+  it('opens local import variants without importing and propagates validation or launch errors', async () => {
+    launchDirectory.mockClear();
+    const sourceRoot = path.join(root, 'local-import-source');
+    const currentConfig = app.services.config.get();
+    const configuration = vi.spyOn(app.services.config, 'get').mockReturnValue({ ...currentConfig, stages: [...currentConfig.stages, { ...currentConfig.stages[0]!, id: 'E000', enabled: true, inputQueueRoot: sourceRoot }] });
+    const relativePath = 'PDD/变体 938669001556-R1';
+    await mkdir(path.join(sourceRoot, relativePath), { recursive: true });
+    const list = await app.inject({ method: 'GET', url: '/api/v1/local-import/directories' });
+    expect(list.statusCode).toBe(200);
+    const configHash = list.json().configHash;
+    const request = (payload: Record<string, string>) => app.inject({ method: 'POST', url: '/api/v1/local-import/directories/open-folder', payload });
+    const opened = await request({ relativePath, configHash });
+    expect(opened.statusCode).toBe(202);
+    expect(opened.json()).toEqual({ accepted: true });
+    expect(launchDirectory).toHaveBeenCalledExactlyOnceWith('explorer.exe', [path.join(sourceRoot, relativePath)], { windowsHide: false });
+    launchDirectory.mockClear();
+    for (const payload of [{ relativePath: '../outside', configHash }, { relativePath, configHash: 'old' }, { relativePath: 'PDD/missing', configHash }]) {
+      expect((await request(payload)).statusCode).toBeGreaterThanOrEqual(400);
+    }
+    expect(launchDirectory).not.toHaveBeenCalled();
+    launchDirectory.mockRejectedValueOnce(new Error('native launcher unavailable'));
+    const failed = await request({ relativePath, configHash });
+    expect(failed.statusCode).toBe(500);
+    expect(failed.json().error).toMatchObject({ code: 'DIRECTORY_OPEN_FAILED', message: '无法打开变体目录' });
+    expect(isLegacyRootSensitiveRequest('POST', '/api/v1/local-import/directories/open-folder')).toBe(true);
+    configuration.mockRestore();
+  });
+
   it('does not launch a moved product folder', async () => {
     const candidateRoot = config.stages.find((stage) => stage.id === 'E006')!.candidateRoot!;
     const folderName = '打开目录后被移动';

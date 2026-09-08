@@ -1,4 +1,5 @@
-import _ from 'lodash';
+import { getModelConfig, getSupportedImageModels } from '../../lib/configs/model-config.ts';
+import { imageCompletionPolicy } from '../services/image-completion-policy.mjs';
 
 export default {
 
@@ -8,6 +9,11 @@ export default {
         '/models': async () => {
             return {
                 "data": [
+                    ...getSupportedImageModels().filter((id) => id === 'jimeng-4.7').map((id) => ({
+                        id, object: 'model', owned_by: 'jimeng-free-api',
+                        description: '即梦AI 4.7：2K 图生图；不支持 1K、4K 或无参考图生成',
+                        capabilities: getModelConfig(id).imagePolicy,
+                    })),
                     {
                         "id": "jimeng",
                         "object": "model",
@@ -157,7 +163,10 @@ export default {
                         "owned_by": "jimeng-free-api",
                         "description": "Seedance 2.0 VIP Vision 主模态能力视频模型（jimeng-video-seedance-2.0-vip 的别名，向后兼容）"
                     }
-                ]
+                ].map((entry) => getSupportedImageModels().includes(entry.id) || entry.id === 'jimeng'
+                  ? {...entry, completionPolicy: {version: imageCompletionPolicy.version, targetImageCount: 4,
+                      minimumSuccessImageCount: 1, maxRegenerations: 1, retryOwner: 'workflow', partialResults: true}}
+                  : entry)
             };
         }
 

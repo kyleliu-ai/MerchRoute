@@ -72,6 +72,12 @@ test.describe.serial('E000 local import and E001 delivery', () => {
     await expect(page.locator('.local-import-workflow-label')).toContainText('不创建下载任务');
     await expect(page.getByLabel('产品名称')).toHaveValue('E2E本地导入包');
     await expect(page.getByLabel('商品 URL')).toHaveValue('https://example.com/e2e-local-import');
+    await page.route('**/api/v1/local-import/directories/open-folder', (route) => route.fulfill({ status: 202, json: { accepted: true } }));
+    await page.getByRole('button', { name: 'E2E红色', exact: true }).click();
+    await expect(page.getByText('正在打开变体目录')).toBeVisible();
+    await expect(page.getByText('预览采购与媒体信息')).toBeVisible();
+    await expect(page.getByLabel('商品 URL')).toHaveValue('https://example.com/e2e-local-import');
+    await expect(page.getByText('已选 2 个目录')).toBeVisible();
     await expect(page.getByLabel('零售价格(RUB)')).toHaveValue('');
     await expect(page.getByLabel('零售价格(RUB)')).toHaveAttribute('readonly', '');
     await expect(page.getByLabel('汇率')).toHaveValue('不适用或未提供');

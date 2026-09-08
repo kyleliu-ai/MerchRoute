@@ -80,7 +80,12 @@ for (const count of [1, 5, 6, 7]) {
 for (const attempt of [0, 1]) {
   test(`seven async reservations support attempt ${attempt} and idempotent replay`, async (t) => {
     const { input } = fixture(t, 7, attempt);
-    const request = { ...input, uploadKey: "fixture-upload-key", tokenFingerprint: fingerprintToken(input.tokens[0]) };
+    const request = { ...input, referenceImages: input.images, uploadKey: "fixture-upload-key", tokenFingerprint: fingerprintToken(input.tokens[0]) };
+    if (attempt === 1) {
+      const firstTasks=input.tasks.map(task=>({...task,retryAttempt:0,idempotencyKey:task.idempotencyKey.replace(/:attempt-1$/,':attempt-0')}));
+      const first=await submitIdempotentBatch({...input,tasks:firstTasks});
+      for(const task of first.tasks)await input.ledger.updateFromPoll(task.idempotencyKey,{historyId:task.historyId,status:'failed',rawStatus:30,failCode:'generation_failed',imageUrls:[]});
+    }
     const result = await reserveIdempotentBatchForAsync(request);
     assert.equal(result.createdCount, 7);
     assert.equal(result.tasks.length, 7);

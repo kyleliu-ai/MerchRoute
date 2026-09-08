@@ -9,6 +9,14 @@ COPY tsconfig.json libs.d.ts ./
 COPY configs ./configs
 COPY public ./public
 COPY src ./src
+
+FROM build AS test
+COPY tests ./tests
+COPY patches/scripts ./patches/scripts
+RUN node -e "const p=require('./package.json');const npm=require('node:child_process').execFileSync('npm',['--version'],{encoding:'utf8'}).trim();if(process.versions.node!==p.engines.node||npm!==p.engines.npm)throw new Error('Node/npm version mismatch')"
+RUN --network=none npm test
+
+FROM test AS compiled
 RUN npm run build
 
 FROM ${NODE_IMAGE} AS runtime
@@ -22,9 +30,10 @@ RUN npm ci --omit=dev \
     && npm cache clean --force \
     && mkdir -p /app/data \
     && chown -R node:node /app /ms-playwright
-COPY --from=build --chown=node:node /app/dist ./dist
-COPY --from=build --chown=node:node /app/configs ./configs
-COPY --from=build --chown=node:node /app/public ./public
+COPY --from=compiled --chown=node:node /app/dist ./dist
+COPY --from=compiled --chown=node:node /app/configs ./configs
+COPY --from=compiled --chown=node:node /app/public ./public
+COPY --from=test --chown=node:node /app/patches/scripts/jimeng-volume.cjs ./deployment/jimeng-volume.cjs
 USER node
 EXPOSE 8000
 HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=5 \

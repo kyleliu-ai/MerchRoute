@@ -6,6 +6,14 @@ The project follows [Semantic Versioning](https://semver.org/). Dates use the `Y
 
 ## [Unreleased]
 
+### Current batch: 0.1.10 candidate
+
+- Open local-import variant directory names in Windows Explorer or macOS Finder while preserving selection, preview and in-page browsing controls.
+- Retain the Jimeng rc.13 unified image-count and partial-success policy, bounded retries, durable idempotency ledger, welcome page and deployment rollback support.
+- Package sanitized E001/E002/S003 workflow exports from the accepted local n8n versions; preserve the E003 calling contract.
+- Model identifier research for 5.0 Pro does not constitute a new integration. Previously documented upstream failures for the 2.0, 2.0 Pro and 2.1 text-to-image paths remain disclosed.
+- This batch is a candidate until complete verification and formal publication; publishing does not activate local production services.
+
 ### Added
 
 - GitHub CI, contribution guidance, security policy, and repository metadata.

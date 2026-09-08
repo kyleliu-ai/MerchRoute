@@ -1,5 +1,4 @@
 import { spawn } from 'node:child_process';
-import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { resolveCommand } from './run-ci-check.mjs';
 
@@ -14,20 +13,9 @@ async function run(argv) {
   });
 }
 
-// Keep the public npm regression command, including its pinned installation.
-// Its dot reporter cannot prove counts, so rerun the same real tests with TAP.
+// Jimeng emits raw TAP from pinned Node 20; never rerun on the app's Node 22.
 await run(['npm', 'run', suite === 'jimeng' ? 'jimeng:test' : 'n8n-runtime:test']);
-if (suite === 'jimeng') {
-  const base = 'integrations/jimeng-free-api-all';
-  const names = await readdir(path.join(base, 'tests'));
-  const ts = names.filter((name) => name.endsWith('.test.ts')).sort().map((name) => path.join(base, 'tests', name));
-  const cjs = names.filter((name) => name.endsWith('.test.cjs')).sort().map((name) => path.join(base, 'tests', name));
-  if (!ts.length || !cjs.length) throw new Error('Jimeng test inventory unexpectedly empty');
-  // Keep each test file isolated, but serialize files to avoid the pinned Node
-  // reporter IPC failure reproduced under parallel multilingual route logging.
-  await run(['node', path.join(base, 'node_modules/tsx/dist/cli.mjs'), '--test', '--test-concurrency=1', '--test-reporter=tap', ...ts]);
-  await run(['node', '--test', '--test-reporter=tap', ...cjs]);
-} else {
+if (suite === 'n8n-runtime') {
   const files = ['1688-detail-image-stitcher.test.cjs', '1688-downloader.test.cjs', '1688-output-dir-version.test.cjs', 'download-idempotency-v1.test.cjs', 'pdd-detail-image-stitcher-result-file.test.cjs', 'pdd-output-dir-version.test.cjs', 'pdd-product-media-downloader.test.cjs', 'playwright-navigation-retry.test.cjs'];
   await run(['node', '--test', '--test-reporter=tap', ...files.map((name) => path.join('deployment/n8n/runtime-scripts/tests', name))]);
 }

@@ -29,14 +29,27 @@ test('silent successful commands keep actual capture metadata and failing output
   assert.match(failed.toString(),/"exitCode":1/);assert.ok(failed.toString().endsWith('actual failure'));
 });
 
+test('CI validates the existing work branch without requiring a separate publication branch',async()=>{
+  const ci=await readFile(new URL('../../.github/workflows/ci.yml',import.meta.url),'utf8');
+  assert.match(ci,/push:\s*branches: \[main, 'work\/\*\*'\]/);
+  assert.match(ci,/MERCHROUTE_CI_EXPECTED_COMMIT: \$\{\{ github.event.pull_request.head.sha \|\| github.sha \}\}/);
+});
+
 test('both Jimeng regression entrypoints retain isolated tests with bounded file concurrency',async()=>{
   const publicRunner=await readFile(new URL('../../deployment/scripts/run-jimeng-tests.mjs',import.meta.url),'utf8');
   const evidenceRunner=await readFile(new URL('../ci-regression-tests.mjs',import.meta.url),'utf8');
-  for(const source of [publicRunner,evidenceRunner]){
-    assert.match(source,/'--test', '--test-concurrency=1', '--test-reporter=(?:dot|tap)'/);
+  const pkg=JSON.parse(await readFile(new URL('../../integrations/jimeng-free-api-all/package.json',import.meta.url),'utf8'));
+  const dockerfile=await readFile(new URL('../../integrations/jimeng-free-api-all/Dockerfile',import.meta.url),'utf8');
+  for(const source of [publicRunner,evidenceRunner,JSON.stringify(pkg.scripts)]){
     assert.doesNotMatch(source,/--experimental-test-isolation=none|--test-name-pattern/);
-    assert.match(source,/\.endsWith\('\.test\.ts'\)/);
   }
+  assert.match(pkg.scripts['test:ts'],/--test --test-concurrency=1 --test-reporter=tap tests\/\*\.test\.ts/);
+  assert.match(pkg.scripts['test:cjs'],/--test --test-reporter=tap tests\/\*\.test\.cjs/);
+  assert.match(publicRunner,/'--target', 'test'/);
+  assert.match(publicRunner,/'run', '--rm', '--network', 'none'/);
+  assert.doesNotMatch(publicRunner,/npm_execpath|npm_node_execpath/);
+  assert.doesNotMatch(evidenceRunner,/tsx\/dist\/cli|integrationRoot/);
+  assert.match(dockerfile,/FROM build AS test[\s\S]*RUN --network=none npm test[\s\S]*FROM test AS compiled/);
 });
 
 async function temporary(t){const dir=await realpath(await mkdtemp(path.join(os.tmpdir(),'merchroute-workflow-test-')));t.after(()=>rm(dir,{recursive:true,force:true}));return dir;}

@@ -83,6 +83,29 @@ export class LocalImportService {
     private readonly canonicalizePath: (value: string) => string = (value) => value
   ) {}
 
+  async resolveDirectoryToOpen(input: { relativePath?: unknown; configHash?: unknown } | undefined): Promise<string> {
+    const relativePath = input?.relativePath;
+    if (typeof relativePath !== 'string' || path.win32.isAbsolute(relativePath) || path.posix.isAbsolute(relativePath)
+      || relativePath.includes('\\') || relativePath.includes(':') || relativePath.split('/').length !== 2
+      || relativePath !== relativePath.trim() || relativePath.split('/').some(isHiddenName)) {
+      throw new AppError('LOCAL_IMPORT_PATH_INVALID', '请选择来源根目录下的平台/变体目录');
+    }
+    const normalized = normalizeRelativePath(relativePath);
+    if (normalized !== relativePath) throw new AppError('LOCAL_IMPORT_PATH_INVALID', '变体目录路径格式无效');
+    const source = await this.sourceConfiguration();
+    if (typeof input?.configHash !== 'string' || input.configHash !== source.configHash) {
+      throw new AppError('LOCAL_IMPORT_CONFIG_CHANGED', '来源目录配置已变化，请刷新目录列表后重试', undefined, 409);
+    }
+    const directory = await resolveSafeDirectory(source.root, normalized);
+    await access(directory.absolutePath, constants.R_OK).catch(() => {
+      throw new AppError('LOCAL_IMPORT_PATH_UNREADABLE', '变体目录不可读', { relativePath }, 409);
+    });
+    if ((await this.sourceConfiguration()).configHash !== source.configHash) {
+      throw new AppError('LOCAL_IMPORT_CONFIG_CHANGED', '来源目录配置已变化，请刷新目录列表后重试', undefined, 409);
+    }
+    return directory.absolutePath;
+  }
+
   async listDirectories(relativePath = '') {
     const { root, configHash } = await this.sourceConfiguration();
     const normalized = normalizeRelativePath(relativePath, true);

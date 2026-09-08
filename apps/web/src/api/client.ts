@@ -1067,6 +1067,7 @@ export const api = {
   thumbnailUrl: (taskId: string, path: string) => `/api/v1/tasks/${taskId}/images/thumbnail?path=${encodeURIComponent(path)}`,
   originalUrl: (taskId: string, path: string) => `/api/v1/tasks/${taskId}/images/original?path=${encodeURIComponent(path)}`,
   localImportDirectories: (relativePath = '') => request<{ path: string; configHash: string; directories: LocalImportDirectory[] }>(`/api/v1/local-import/directories?path=${encodeURIComponent(relativePath)}`),
+  openLocalImportFolder: (input: { relativePath: string; configHash: string }) => request<{ accepted: true }>('/api/v1/local-import/directories/open-folder', { method: 'POST', body: JSON.stringify(input) }),
   previewLocalImport: (directories: string[], primaryDirectory: string) => request<LocalImportPreview>('/api/v1/local-import/preview', { method: 'POST', body: JSON.stringify({ directories, primaryDirectory }) }),
   localImports: (params: URLSearchParams) => request<{ items: LocalImportListItem[]; total: number; page: number; pageSize: number; facets: { platforms: Array<{ value: string; count: number }> } }>(`/api/v1/local-import/imports?${params}`),
   createLocalImport: (previewToken: string, idempotencyKey: string, fields: LocalImportPreview['fields']) => request<{ import: LocalImportRecord }>('/api/v1/local-import/imports', { method: 'POST', body: JSON.stringify({ previewToken, idempotencyKey, fields }) }),
