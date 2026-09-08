@@ -84,3 +84,12 @@ test('workflow preserves read-only permissions, explicit PR HEAD and non-skippab
   assert.doesNotMatch(yaml, /path: playwright-report|path:.*raw-|gh release|git push|npm publish/);
   for (const id of Object.keys(CI_CHECKS).filter((id) => !id.startsWith('deployment-'))) assert.ok(yaml.includes('--id ' + id + ' '), id);
 });
+
+test('runner paths are evaluated at step scope and all Jimeng steps share isolated build state', async () => {
+  const yaml = await readFile(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
+  for (const block of yaml.matchAll(/^(?:env:\n(?: {2}[^\n]*\n)*| {4}env:\n(?: {6}[^\n]*\n)*)/gm)) assert.doesNotMatch(block[0], /runner\./);
+  const job = yaml.slice(yaml.indexOf('  jimeng-source:\n'), yaml.indexOf('\n  verify:'));
+  const steps = job.split('\n      - ').filter((step) => /--id jimeng-(tests|image|ping) /.test(step));
+  assert.equal(steps.length, 3);
+  for (const step of steps) assert.ok(step.includes('\n        env:\n          JIMENG_BUILD_STATE_DIR: ${{ runner.temp }}/jimeng-build\n'));
+});
