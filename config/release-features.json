@@ -60,6 +60,11 @@
       "name": "work/jimeng-global-config-20260906-0331",
       "head": "61a5d54bc5876a740df0ed8a1234a5c581c46757",
       "featureId": "project-release-guardrails"
+    },
+    {
+      "name": "work/jimeng-welcome-page-fix-20260907-0136",
+      "head": "e8ad78ced1e3bb0fd16a77726dda61596fac4b2c",
+      "featureId": "project-release-guardrails"
     }
   ],
   "branches": [
@@ -686,6 +691,20 @@
       "title": "图片审核与投递持久化操作、恢复及性能优化",
       "action": "INTEGRATE",
       "sourceChecks": [
+        {
+          "path": "apps/server/src/services/submissions/index.ts",
+          "includes": ["runDirect", "directDeliveryItems"]
+        },
+        {
+          "path": "packages/shared/src/index.ts",
+          "includes": ["DIRECT_DIRECTORY_REVIEW_STAGE_IDS", "reviewOperationId"]
+        },
+        {
+          "path": "apps/server/src/services/submissions/recovery.test.ts"
+        },
+        {
+          "path": "docs/REVIEW_DIRECT_DELIVERY.zh-CN.md"
+        },
         {
           "path": "apps/server/src/services/review-operations.ts"
         },

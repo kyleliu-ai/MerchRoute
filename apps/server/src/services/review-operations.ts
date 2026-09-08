@@ -81,19 +81,19 @@ export class ReviewOperationService {
     this.subscribers.clear();
     await this.store.flush();
   }
-  view(id: string): Omit<ReviewOperation, 'input' | 'requestHash' | 'requestKey'> & { progress?: ReviewOperationProgress } {
+  view(id: string): Omit<ReviewOperation, 'input' | 'requestHash' | 'requestKey'> & { progress?: ReviewOperationProgress; deliveryMode?: 'DIRECT_DIRECTORY' } {
     const operation = this.store.getOperation(id);
     if (!operation) throw new AppError('OPERATION_NOT_FOUND', '提交任务不存在', { operationId: id }, 404);
     return this.publicView(operation);
   }
-  private publicView(operation: ReviewOperation): Omit<ReviewOperation, 'input' | 'requestHash' | 'requestKey'> & { progress?: ReviewOperationProgress } {
+  private publicView(operation: ReviewOperation): Omit<ReviewOperation, 'input' | 'requestHash' | 'requestKey'> & { progress?: ReviewOperationProgress; deliveryMode?: 'DIRECT_DIRECTORY' } {
     const { input: _input, requestHash: _hash, requestKey: _key, requestAliases: _aliases, ...publicOperation } = operation;
     void [_input, _hash, _key, _aliases];
     let error = publicOperation.error;
     try { this.store.assertWritable(); } catch {
       error = { code: 'STATE_STORE_UNAVAILABLE', message: '状态文件暂时无法保存；磁盘恢复后点击恢复处理，原投递编号保持不变', statusCode: 503 };
     }
-    return { ...publicOperation, error, progress: this.progress.get(operation.operationId) };
+    return { ...publicOperation, error, progress: this.progress.get(operation.operationId), ...(operation.input.deliveryMode === 'DIRECT_DIRECTORY' ? { deliveryMode: 'DIRECT_DIRECTORY' as const } : {}) };
   }
   list(activeOnly: boolean, includeRecent = false) {
     const selected = this.store.select('reviewOperations', (rows) => {

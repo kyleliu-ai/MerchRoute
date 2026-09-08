@@ -521,7 +521,7 @@ test.describe.serial('v002 review and delivery', () => {
     await expect(page.locator('.ant-table-tbody > tr.ant-table-row').filter({ hasText: batchResults[0]!.submissionId })).toContainText('投递成功');
   });
 
-  test('creates multiple E001 variant selection groups and freezes one pending task per variant', async ({ page }) => {
+  test('directly delivers multiple E001 variant groups and records each result', async ({ page }) => {
     test.setTimeout(60_000);
     await page.goto('/review/E001');
     await openReviewTaskFromTable(page, 'E2E-E001变体分组');
@@ -581,30 +581,19 @@ test.describe.serial('v002 review and delivery', () => {
     await expect(page.locator('.ant-modal').getByText('白色', { exact: true })).toBeVisible();
     await expect(page.locator('.variant-approval-row').filter({ hasText: '红色' })).toContainText('黑蓝宝石 / черный сапфир');
     await expect(page.locator('.variant-approval-row').filter({ hasText: '白色' })).toContainText('OZON未设置选填');
-    await page.getByRole('button', { name: '加入待投递清单' }).click();
-    const rows = page.locator('.ant-table-tbody tr').filter({ hasText: 'E2E-E001变体分组' });
-    await expect(rows).toHaveCount(2);
-    await expect(rows.filter({ hasText: '红色' })).toHaveCount(1);
-    await expect(rows.filter({ hasText: '白色' })).toHaveCount(1);
-    await rows.filter({ hasText: '红色' }).getByRole('button', { name: 'n8n任务配置' }).click();
-    const modal = page.locator('.task-parameter-modal');
-    await expect(modal.locator('.pending-parameter-row.is-system').filter({ hasText: 'variants' }).locator('textarea')).toHaveValue('红色');
-    await expect(modal.locator('.pending-parameter-row.is-system').filter({ hasText: 'variants' }).locator('textarea')).toBeDisabled();
-    await modal.locator('.ant-modal-close').click();
-    await rows.locator('label.ant-checkbox-wrapper').first().click();
-    await rows.locator('label.ant-checkbox-wrapper').nth(1).click();
-    const batchResponsePromise = page.waitForResponse((response) => response.url().endsWith('/api/v1/submissions/batch') && response.request().method() === 'POST');
-    await page.getByRole('button', { name: '批量投递' }).click();
-    await expect(page.locator('.ant-drawer').filter({ hasText: '投递进度' })).toHaveCount(0);
-    const accepted = await batchResponsePromise;
+    const acceptedPromise = page.waitForResponse((response) => response.url().endsWith('/approve') && response.request().method() === 'POST');
+    await page.getByRole('button', { name: '审核并投递' }).click();
+    await expect(page).toHaveURL(/\/history$/);
+    const accepted = await acceptedPromise;
     expect(accepted.status()).toBe(202);
-    const batchBody = await completedOperation(page, await accepted.json());
-    expect(batchBody.results.map((item: { status: string; errorCode?: string }) => ({ status: item.status, errorCode: item.errorCode }))).toEqual([
-      { status: 'SUCCESS' },
-      { status: 'SUCCESS' }
-    ]);
-    await expect(page.getByText('批量投递完成')).toHaveCount(0);
-    await expect(page.locator('.ant-drawer').filter({ hasText: '投递进度' })).toHaveCount(0);
+    const result = await completedOperation(page, await accepted.json());
+    expect(result.submissions.map((item: { status: string }) => item.status)).toEqual(['SUCCESS', 'SUCCESS']);
+    const history = (await (await page.request.get('/api/v1/submissions/history')).json()).items.filter((row: any) => result.submissions.some((item: any) => item.submissionId === row.submissionId));
+    expect(history.map((row: any) => row.variantName).sort()).toEqual(['白色', '红色'].sort());
+    for (const row of history) expect(row.n8nTaskParameters.variants).toBe(row.variantName);
+    const pending = (await (await page.request.get('/api/v1/pending-submissions')).json()).items;
+    expect(pending.filter((row: any) => history.some((item: any) => item.taskId === row.taskId))).toEqual([]);
+
   });
 
   test('navigates the image preview by mouse and keyboard without changing selection', async ({ page }) => {
@@ -738,20 +727,35 @@ test.describe.serial('v002 review and delivery', () => {
     await expect(page.getByText('1 / 2 已选择')).toBeVisible();
     await page.getByRole('button', { name: '审核通过' }).click();
     await expect(page.locator('.ant-modal').getByRole('checkbox')).toBeChecked();
-    await page.getByRole('button', { name: '加入待投递清单' }).click();
-    await expect(page.getByText('审核请求已接收，请查看待投递清单', { exact: true })).toBeVisible();
-    await expect(page.getByRole('heading', { name: '待投递清单' })).toBeVisible();
-    await expect(page.getByText('E2E-测试产品A', { exact: true }).first()).toBeVisible();
-    await page.locator('.ant-table-tbody tr').filter({ hasText: 'E2E-测试产品A' }).locator('label.ant-checkbox-wrapper').click();
-    const batchResponsePromise = page.waitForResponse((response) => response.url().endsWith('/api/v1/submissions/batch') && response.request().method() === 'POST');
-    await page.getByRole('button', { name: '批量投递' }).click();
-    await expect(page.locator('.ant-drawer').filter({ hasText: '投递进度' })).toHaveCount(0);
-    const accepted = await batchResponsePromise;
+    const acceptedPromise = page.waitForResponse((response) => response.url().endsWith('/approve') && response.request().method() === 'POST');
+    await page.getByRole('button', { name: '审核并投递' }).click();
+    await expect(page).toHaveURL(/\/history$/);
+    const accepted = await acceptedPromise;
     expect(accepted.status()).toBe(202);
-    const batchBody = await completedOperation(page, await accepted.json());
-    expect(batchBody.results.map((item: { status: string }) => item.status)).toEqual(['SUCCESS']);
-    await expect(page.getByText('批量投递完成')).toHaveCount(0);
-    await expect(page.locator('.ant-drawer').filter({ hasText: '投递进度' })).toHaveCount(0);
+    const result = await completedOperation(page, await accepted.json());
+    expect(result.submissions.map((item: { status: string }) => item.status)).toEqual(['SUCCESS']);
+    await expect(page.getByTestId('review-operation')).toHaveCount(0);
+    await expect(page.locator('.ant-table-row').filter({ hasText: result.submissions[0].submissionId })).toContainText('投递成功');
+    const pending = (await (await page.request.get('/api/v1/pending-submissions')).json()).items;
+    expect(pending.filter((item: any) => item.sourceFolderName === 'E2E-测试产品A')).toEqual([]);
+
+  });
+
+  test('directly delivers the 1688 download review with the configured target defaults', async ({ page }) => {
+    await page.goto('/review/E007');
+    await openReviewTaskFromTable(page, 'E2E-预览切换');
+    await page.getByRole('button', { name: '当前目录全选' }).click();
+    await page.getByRole('button', { name: '审核通过' }).click();
+    await expect(page.locator('.ant-modal')).toContainText('系统默认参数');
+    await expect(page.getByRole('button', { name: '加入待投递清单' })).toHaveCount(0);
+    const acceptedPromise = page.waitForResponse((response) => response.url().endsWith('/approve') && response.request().method() === 'POST');
+    await page.getByRole('button', { name: '审核并投递' }).click();
+    await expect(page).toHaveURL(/\/history$/);
+    const result = await completedOperation(page, await (await acceptedPromise).json());
+    expect(result.submissions).toHaveLength(1);
+    expect(result.submissions[0].status).toBe('SUCCESS');
+    const rows = (await (await page.request.get('/api/v1/submissions/history')).json()).items;
+    expect(rows.find((row: any) => row.submissionId === result.submissions[0].submissionId)).toMatchObject({ sourceStageId: 'E007', targetStageId: 'E001' });
   });
 
   test('keeps the E003 selected-media order through controls, preview, draft save and refresh', async ({ page }) => {
@@ -839,51 +843,51 @@ test.describe.serial('v002 review and delivery', () => {
 
   test('hides a disabled stage and locks its review and pending delivery entry until re-enabled', async ({ page }) => {
     await page.goto('/settings');
-    await page.locator('.workflow-settings-item').filter({ hasText: 'E001' }).click();
-    const initialSwitch = page.locator('.settings-stage:visible').getByRole('switch', { name: 'E001 启用流程' });
+    await page.locator('.workflow-settings-item').filter({ hasText: 'E003' }).click();
+    const initialSwitch = page.locator('.settings-stage:visible').getByRole('switch', { name: 'E003 启用流程' });
     if (!(await initialSwitch.isChecked())) {
       await initialSwitch.click();
       await page.getByRole('button', { name: '保存工作流' }).click();
-      await expect(page.getByText('抠图-E001 已保存')).toBeVisible();
+      await expect(page.getByText(/E003 已保存/)).toBeVisible();
     }
-    await page.goto('/review/E006');
-    await openReviewTaskFromTable(page, 'E2E-预览切换');
+    await page.goto('/review/E002');
+    await openReviewTaskFromTable(page, 'E2E-五视图产品');
     await page.getByRole('button', { name: '当前目录全选' }).click();
     await page.getByRole('button', { name: '审核通过' }).click();
     await page.getByRole('button', { name: '加入待投递清单' }).click();
-    const pendingRow = page.locator('.ant-table-tbody tr').filter({ hasText: 'E2E-预览切换' });
+    const pendingRow = page.locator('.ant-table-tbody tr').filter({ hasText: 'E2E-五视图产品' });
     await expect(pendingRow).toBeVisible();
 
     await page.goto('/settings');
-    await page.locator('.workflow-settings-item').filter({ hasText: 'E001' }).click();
+    await page.locator('.workflow-settings-item').filter({ hasText: 'E003' }).click();
     const settingsCard = page.locator('.settings-stage:visible');
-    await settingsCard.getByRole('switch', { name: 'E001 启用流程' }).click();
+    await settingsCard.getByRole('switch', { name: 'E003 启用流程' }).click();
     await page.getByRole('button', { name: '保存工作流' }).click();
-    await expect(page.getByText('抠图-E001 已保存')).toBeVisible();
+    await expect(page.getByText(/E003 已保存/)).toBeVisible();
     await expect(page.locator('.workflow-settings-item.is-active').getByText('已停用', { exact: true })).toBeVisible();
 
     await page.goto('/');
-    await expect(page.locator('.stage-card').filter({ hasText: 'E001' })).toHaveCount(0);
-    await expect(page.locator('.rail-stop').filter({ hasText: 'E001' })).toHaveCount(0);
-    await page.goto('/review/E001');
-    await expect(page.getByText('流程 E001 已停用', { exact: true })).toBeVisible();
+    await expect(page.locator('.stage-card').filter({ hasText: 'E003' })).toHaveCount(0);
+    await expect(page.locator('.rail-stop').filter({ hasText: 'E003' })).toHaveCount(0);
+    await page.goto('/review/E003');
+    await expect(page.getByText('流程 E003 已停用', { exact: true })).toBeVisible();
 
     await page.goto('/pending');
-    const lockedRow = page.locator('.ant-table-tbody tr').filter({ hasText: 'E2E-预览切换' });
+    const lockedRow = page.locator('.ant-table-tbody tr').filter({ hasText: 'E2E-五视图产品' });
     await expect(lockedRow.getByText('不可投递')).toBeVisible();
     await expect(lockedRow.locator('input[type="checkbox"]')).toBeDisabled();
     await lockedRow.getByText('返回修改').click();
     await expect(page.getByRole('button', { name: '审核通过' })).toBeDisabled();
 
     await page.goto('/settings');
-    await page.locator('.workflow-settings-item').filter({ hasText: 'E001' }).click();
+    await page.locator('.workflow-settings-item').filter({ hasText: 'E003' }).click();
     const restoredCard = page.locator('.settings-stage:visible');
-    await restoredCard.getByRole('switch', { name: 'E001 启用流程' }).click();
+    await restoredCard.getByRole('switch', { name: 'E003 启用流程' }).click();
     await page.getByRole('button', { name: '保存工作流' }).click();
-    await expect(page.getByText('抠图-E001 已保存')).toBeVisible();
+    await expect(page.getByText(/E003 已保存/)).toBeVisible();
     await expect(page.locator('.workflow-settings-item.is-active').getByText('运行中', { exact: true })).toBeVisible();
     await page.goto('/pending');
-    const restoredRow = page.locator('.ant-table-tbody tr').filter({ hasText: 'E2E-预览切换' });
+    const restoredRow = page.locator('.ant-table-tbody tr').filter({ hasText: 'E2E-五视图产品' });
     await expect(restoredRow.locator('input[type="checkbox"]')).toBeEnabled();
     await restoredRow.getByRole('button', { name: '移出' }).click();
     await expect(restoredRow).toHaveCount(0);

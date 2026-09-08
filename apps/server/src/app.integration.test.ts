@@ -34,6 +34,18 @@ describe.sequential('review and submission integration', () => {
   let app: Awaited<ReturnType<typeof buildApp>>;
   const launchDirectory = vi.fn(async () => undefined);
   const localDirectoryOpener = new LocalDirectoryOpener({ platform: 'win32', launch: launchDirectory });
+
+  // Admit an approval with the pre-upgrade persisted shape to keep exercising
+  // existing pending items and their editing/batch behavior after this release.
+  async function legacyApproval(options: Parameters<typeof app.inject>[0]) {
+    const accept = app.services.reviewOperations.accept.bind(app.services.reviewOperations);
+    const admission = vi.spyOn(app.services.reviewOperations, 'accept').mockImplementationOnce((input) => {
+      const legacy = structuredClone(input.input);
+      delete legacy.deliveryMode;
+      return accept({ ...input, input: legacy });
+    });
+    try { return await app.inject(options); } finally { admission.mockRestore(); }
+  }
   const aboutVersion = {
     invalidate: vi.fn(),
     check: vi.fn(async (_options?: { refresh?: boolean }) => ({
@@ -519,7 +531,7 @@ describe.sequential('review and submission integration', () => {
     const task = (await app.inject({ method: 'GET', url: '/api/v1/stages/E006/tasks' })).json().items[0];
     const detail = await app.inject({ method: 'GET', url: `/api/v1/tasks/${task.taskId}` });
     expect(detail.json().productIdentity.status).toBe('DATABASE_UNAVAILABLE');
-    const blocked = await app.inject({ method: 'POST', url: `/api/v1/tasks/${task.taskId}/approve`, payload: { selectedRelativePaths: ['main/image_01.png'], targetStageIds: ['E001'] } });
+    const blocked = await legacyApproval({ method: 'POST', url: `/api/v1/tasks/${task.taskId}/approve`, payload: { selectedRelativePaths: ['main/image_01.png'], targetStageIds: ['E001'] } });
     expect(blocked.statusCode).toBe(503);
     expect(blocked.json().error.code).toBe('DATABASE_UNAVAILABLE');
 
@@ -587,11 +599,102 @@ describe.sequential('review and submission integration', () => {
     expect(response.json().error.code).toBe('PATH_TRAVERSAL_BLOCKED');
   });
 
+  it.each(['E000', 'E006', 'E007', 'E001'])('directly delivers %s approvals with frozen defaults and no pending entry', async (stageId) => {
+    const original = structuredClone(app.services.config.get());
+    const adjusted = structuredClone(original);
+    if (!adjusted.stages.some((stage) => stage.id === stageId)) {
+      const template = structuredClone(adjusted.stages.find((stage) => stage.id === 'E006')!);
+      await mkdir(path.join(root, stageId, 'candidate'), { recursive: true });
+      await mkdir(path.join(root, stageId, 'archive'), { recursive: true });
+      adjusted.stages.push({ ...template, id: stageId, alias: '本地导入', download: undefined, candidateRoot: path.join(root, stageId, 'candidate'), approvedArchiveRoot: path.join(root, stageId, 'archive') });
+    }
+    await app.services.config.save(adjusted);
+    await app.services.mediaIndex.syncConfig();
+    const sourceStage = app.services.config.get().stages.find((stage) => stage.id === stageId)!;
+    const targetId = sourceStage.targets[0]!.targetStageId;
+    const defaults = await app.services.config.getWorkflowParameterTemplate(targetId);
+    await app.services.config.saveWorkflowParameterTemplate(targetId, { frozenDefault: '接收时的默认值', count: 2 });
+    try {
+      await createProduct(sourceStage.candidateRoot!, `直接投递-${stageId}`, ['main/image_01.png']);
+      await app.services.mediaIndex.refreshStage(stageId);
+      const task = (await app.inject({ method: 'GET', url: `/api/v1/stages/${stageId}/tasks` })).json().items.find((row: any) => row.sourceFolderName === `直接投递-${stageId}`);
+      const payload = { ...(stageId === 'E001' ? e001Approval(['main/image_01.png']) : { selectedRelativePaths: ['main/image_01.png'] }), targetStageIds: [targetId] };
+      const request = { method: 'POST' as const, url: `/api/v1/tasks/${task.taskId}/approve`, headers: { 'idempotency-key': `direct-${stageId}` }, payload };
+      const response = await app.inject(request);
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json().submissions).toHaveLength(1);
+      expect(response.json().submissions[0].status, response.body).toBe('SUCCESS');
+      expect(app.services.store.section('pendingSubmissions').filter((row) => row.taskId === task.taskId)).toEqual([]);
+      const record = app.services.store.getSubmission(response.json().submissions[0].submissionId)!;
+      expect(record.n8nTaskParameters).toMatchObject({ frozenDefault: '接收时的默认值', count: 2, SKU: '0000011', productName: '网面跑步鞋' });
+      expect(record.reviewOperationId).toBeTruthy();
+      expect(await stat(path.join(record.targetFolder!, '_READY.json'))).toBeTruthy();
+      expect(await readFile(path.join(record.targetFolder!, 'main/image_01.png'))).toEqual(await readFile(path.join(sourceStage.candidateRoot!, `直接投递-${stageId}`, 'main/image_01.png')));
+      await app.services.config.saveWorkflowParameterTemplate(targetId, { frozenDefault: '后续默认值' });
+      expect((await app.inject(request)).json()).toEqual(response.json());
+      expect(app.services.store.getSubmission(record.submissionId)!.n8nTaskParameters).toEqual(record.n8nTaskParameters);
+      expect(app.services.store.getReview(task.taskId)!.status).toBe('SUBMITTED');
+    } finally {
+      await app.services.config.saveWorkflowParameterTemplate(targetId, defaults.parameters, defaults.parameterOptions);
+      await rm(path.join(sourceStage.candidateRoot!, `直接投递-${stageId}`), { recursive: true, force: true });
+      await app.services.mediaIndex.refreshStage(stageId);
+      await app.services.config.save(original);
+      await app.services.mediaIndex.syncConfig();
+    }
+  });
+
+  it('recovers E001 multi-target variant delivery from history without recreating successful targets', async () => {
+    const original = structuredClone(app.services.config.get());
+    const adjusted = structuredClone(original);
+    const stage = adjusted.stages.find((row) => row.id === 'E001')!;
+    const blockedRoot = path.join(root, 'direct-target-blocked');
+    await writeFile(blockedRoot, 'blocks directory creation');
+    stage.targets.push({ ...stage.targets[0]!, targetStageId: 'E003', targetQueueRoot: blockedRoot });
+    await app.services.config.save(adjusted);
+    const defaults = await app.services.config.getWorkflowParameterTemplate('E003');
+    await app.services.config.saveWorkflowParameters('E003', { frozen: 'original' });
+    try {
+      await createProduct(stage.candidateRoot!, '直投多变体多目标', ['red.png', 'white.png']);
+      await app.services.mediaIndex.refreshStage('E001');
+      const task = (await app.inject({ method: 'GET', url: '/api/v1/stages/E001/tasks' })).json().items.find((row: any) => row.sourceFolderName === '直投多变体多目标');
+      const response = await app.inject({ method: 'POST', url: `/api/v1/tasks/${task.taskId}/approve`, payload: {
+        targetStageIds: ['E002', 'E003'], variantSelectionGroups: [
+          { groupId: 'direct-red', variantName: '', wbColor: TEST_COLORS.red, selectedRelativePaths: ['red.png'] },
+          { groupId: 'direct-white', variantName: '', wbColor: TEST_COLORS.white, selectedRelativePaths: ['white.png'] }
+        ]
+      } });
+      expect(response.statusCode, response.body).toBe(200);
+      const first = response.json().submissions;
+      expect(first.map((row: any) => row.status)).toEqual(['SUCCESS', 'FAILED', 'SUCCESS', 'FAILED']);
+      expect(app.services.store.getReview(task.taskId)!.status).toBe('PARTIALLY_SUBMITTED');
+      expect(app.services.store.section('pendingSubmissions').filter((row) => row.taskId === task.taskId)).toEqual([]);
+      const successFolders = await readdir(stage.targets[0]!.targetQueueRoot);
+      const failed = app.services.store.getSubmission(first[1].submissionId)!;
+      await rm(blockedRoot);
+      await mkdir(blockedRoot);
+      await app.services.config.saveWorkflowParameters('E003', { frozen: 'changed-after-approval' });
+      const retry = await app.inject({ method: 'POST', url: `/api/v1/submissions/${failed.submissionId}/retry` });
+      expect(retry.statusCode, retry.body).toBe(200);
+      expect(retry.json().submissions.map((row: any) => row.submissionId)).toEqual(first.map((row: any) => row.submissionId));
+      expect(retry.json().submissions.map((row: any) => row.status), retry.body).toEqual(['SUCCESS', 'SUCCESS', 'SUCCESS', 'SUCCESS']);
+      expect(await readdir(stage.targets[0]!.targetQueueRoot)).toEqual(successFolders);
+      const history = app.services.store.section('submissionHistory').filter((row) => row.taskId === task.taskId);
+      expect(history).toHaveLength(4);
+      expect(history.filter((row) => row.targetStageId === 'E003').every((row) => row.n8nTaskParameters!.frozen === 'original')).toBe(true);
+      expect(app.services.store.getReview(task.taskId)!.status).toBe('SUBMITTED');
+    } finally {
+      await app.services.config.saveWorkflowParameterTemplate('E003', defaults.parameters, defaults.parameterOptions);
+      await app.services.config.save(original);
+      await rm(path.join(stage.candidateRoot!, '直投多变体多目标'), { recursive: true, force: true });
+      await app.services.mediaIndex.refreshStage('E001');
+    }
+  });
+
   it('hides disabled stages from scanning and blocks reviews and deliveries until re-enabled', async () => {
     await createProduct(config.stages[0]!.candidateRoot!, '停用控制测试', ['main/image_01.png']);
     await app.services.mediaIndex.refreshStage(config.stages[0]!.id);
     const task = (await app.inject({ method: 'GET', url: '/api/v1/stages/E006/tasks' })).json().items.find((item: any) => item.sourceFolderName === '停用控制测试');
-    const approved = await app.inject({ method: 'POST', url: `/api/v1/tasks/${task.taskId}/approve`, payload: { selectedRelativePaths: ['main/image_01.png'], targetStageIds: ['E001'] } });
+    const approved = await legacyApproval({ method: 'POST', url: `/api/v1/tasks/${task.taskId}/approve`, payload: { selectedRelativePaths: ['main/image_01.png'], targetStageIds: ['E001'] } });
     expect(approved.statusCode).toBe(200);
     const pendingId = approved.json().pendingSubmissions[0].id;
     const originalConfig = structuredClone(app.services.config.get());
@@ -615,7 +718,7 @@ describe.sequential('review and submission integration', () => {
       await app.inject({ method: 'GET', url: `/api/v1/tasks/${task.taskId}` }),
       await app.inject({ method: 'GET', url: `/api/v1/tasks/${task.taskId}/images/thumbnail?path=${encodeURIComponent('main/image_01.png')}` }),
       await app.inject({ method: 'PUT', url: `/api/v1/tasks/${task.taskId}/draft`, payload: { selectedRelativePaths: ['main/image_01.png'] } }),
-      await app.inject({ method: 'POST', url: `/api/v1/tasks/${task.taskId}/approve`, payload: { selectedRelativePaths: ['main/image_01.png'], targetStageIds: ['E001'] } })
+      await legacyApproval({ method: 'POST', url: `/api/v1/tasks/${task.taskId}/approve`, payload: { selectedRelativePaths: ['main/image_01.png'], targetStageIds: ['E001'] } })
     ]) {
       expect(response.statusCode).toBe(409);
       expect(response.json().error.code).toBe('STAGE_DISABLED');
@@ -630,7 +733,7 @@ describe.sequential('review and submission integration', () => {
     disabledTarget.stages.find((stage) => stage.id === 'E001')!.enabled = false;
     expect((await app.inject({ method: 'PUT', url: '/api/v1/config', payload: disabledTarget })).statusCode).toBe(200);
     await app.services.mediaIndex.refreshStage('E006');
-    const targetBlockedApproval = await app.inject({ method: 'POST', url: `/api/v1/tasks/${task.taskId}/approve`, payload: { selectedRelativePaths: ['main/image_01.png'], targetStageIds: ['E001'] } });
+    const targetBlockedApproval = await legacyApproval({ method: 'POST', url: `/api/v1/tasks/${task.taskId}/approve`, payload: { selectedRelativePaths: ['main/image_01.png'], targetStageIds: ['E001'] } });
     expect(targetBlockedApproval.statusCode).toBe(409);
     expect(targetBlockedApproval.json().error).toMatchObject({ code: 'STAGE_DISABLED', message: '目标流程 E001 已停用' });
     const pendingWhileTargetDisabled = (await app.inject({ method: 'GET', url: '/api/v1/pending-submissions' })).json().items.find((item: any) => item.id === pendingId);
@@ -650,7 +753,7 @@ describe.sequential('review and submission integration', () => {
     await createProduct(config.stages[0]!.candidateRoot!, '打包中停用测试', ['main/image_01.png']);
     await app.services.mediaIndex.refreshStage(config.stages[0]!.id);
     const task = (await app.inject({ method: 'GET', url: '/api/v1/stages/E006/tasks' })).json().items.find((item: any) => item.sourceFolderName === '打包中停用测试');
-    const approved = await app.inject({ method: 'POST', url: `/api/v1/tasks/${task.taskId}/approve`, payload: { selectedRelativePaths: ['main/image_01.png'], targetStageIds: ['E001'] } });
+    const approved = await legacyApproval({ method: 'POST', url: `/api/v1/tasks/${task.taskId}/approve`, payload: { selectedRelativePaths: ['main/image_01.png'], targetStageIds: ['E001'] } });
     const pendingId = approved.json().pendingSubmissions[0].id;
     const submissionService = app.services.submissions as any;
     const originalPackageAndSubmit = submissionService.packageAndSubmit;
@@ -778,7 +881,7 @@ describe.sequential('review and submission integration', () => {
     const templateUpdate = await app.inject({ method: 'PUT', url: '/api/v1/workflow-parameters/E001', payload: { parameters: defaultParameters, parameterOptions: frozenOptions } });
     expect(templateUpdate.statusCode).toBe(200);
     const task = (await app.inject({ method: 'GET', url: '/api/v1/stages/E006/tasks' })).json().items[0];
-    const approve = await app.inject({ method: 'POST', url: `/api/v1/tasks/${task.taskId}/approve`, payload: { selectedRelativePaths: ['main/image_01.png', 'detail/image_02.png'], targetStageIds: ['E001'] } });
+    const approve = await legacyApproval({ method: 'POST', url: `/api/v1/tasks/${task.taskId}/approve`, payload: { selectedRelativePaths: ['main/image_01.png', 'detail/image_02.png'], targetStageIds: ['E001'] } });
     expect(approve.statusCode).toBe(200);
     const pendingId = approve.json().pendingSubmissions[0].id;
     expect(approve.json().pendingSubmissions[0].n8nTaskParameters).toEqual({ SKU: '0000011', productName: '网面跑步鞋', ...defaultParameters });
@@ -828,7 +931,7 @@ describe.sequential('review and submission integration', () => {
 
   it('creates R02 rather than overwriting an existing package', async () => {
     const task = (await app.inject({ method: 'GET', url: '/api/v1/stages/E006/tasks' })).json().items[0];
-    const approve = await app.inject({ method: 'POST', url: `/api/v1/tasks/${task.taskId}/approve`, payload: { selectedRelativePaths: ['main/image_01.png'], targetStageIds: ['E001'] } });
+    const approve = await legacyApproval({ method: 'POST', url: `/api/v1/tasks/${task.taskId}/approve`, payload: { selectedRelativePaths: ['main/image_01.png'], targetStageIds: ['E001'] } });
     const pendingId = approve.json().pendingSubmissions[0].id;
     expect(approve.json().pendingSubmissions[0].conflictPolicy).toBe('new-revision');
     const batch = await app.inject({ method: 'POST', url: '/api/v1/submissions/batch', payload: { batchId: 'BATCH-TEST-R02', pendingSubmissionIds: [pendingId] } });
@@ -839,7 +942,7 @@ describe.sequential('review and submission integration', () => {
 
   it('skips an existing target without overwriting it and records the failure', async () => {
     const task = (await app.inject({ method: 'GET', url: '/api/v1/stages/E006/tasks' })).json().items[0];
-    const approve = await app.inject({ method: 'POST', url: `/api/v1/tasks/${task.taskId}/approve`, payload: { selectedRelativePaths: ['main/image_01.png'], targetStageIds: ['E001'] } });
+    const approve = await legacyApproval({ method: 'POST', url: `/api/v1/tasks/${task.taskId}/approve`, payload: { selectedRelativePaths: ['main/image_01.png'], targetStageIds: ['E001'] } });
     const pendingId = approve.json().pendingSubmissions[0].id;
     const batch = await app.inject({ method: 'POST', url: '/api/v1/submissions/batch', payload: { batchId: 'BATCH-TEST-SKIP', pendingSubmissionIds: [pendingId], conflictPolicy: 'skip' } });
     expect(batch.json().results[0]).toMatchObject({ status: 'SKIPPED_CONFLICT', errorCode: 'TARGET_FOLDER_EXISTS' });
@@ -867,7 +970,7 @@ describe.sequential('review and submission integration', () => {
       expect(draft.statusCode).toBe(200);
       expect(draft.json().review.variantSelectionGroups[0].selectedRelativePaths).toHaveLength(6);
 
-      const rejected = await app.inject({ method: 'POST', url: `/api/v1/tasks/${task.taskId}/approve`, payload: { variantSelectionGroups: [overLimitGroup], targetStageIds: ['E002'] } });
+      const rejected = await legacyApproval({ method: 'POST', url: `/api/v1/tasks/${task.taskId}/approve`, payload: { variantSelectionGroups: [overLimitGroup], targetStageIds: ['E002'] } });
       expect(rejected.statusCode).toBe(400);
       expect(rejected.json().error).toMatchObject({
         code: 'CONFIG_INVALID',
@@ -878,7 +981,7 @@ describe.sequential('review and submission integration', () => {
 
       const redPaths = ['shared/01.png', 'shared/01.png', 'red/01.png', 'red/02.png', 'red/03.png', 'red/04.png'];
       const whitePaths = ['shared/01.png', 'white/01.png', 'white/02.png', 'white/03.png', 'white/04.png'];
-      const approved = await app.inject({
+      const approved = await legacyApproval({
         method: 'POST',
         url: `/api/v1/tasks/${task.taskId}/approve`,
         payload: {
@@ -912,7 +1015,7 @@ describe.sequential('review and submission integration', () => {
       { groupId: 'group-red', variantName: '', wbColor: TEST_COLORS.red, selectedRelativePaths: ['shared/01.png', 'red/02.png'] },
       { groupId: 'group-white', variantName: '', wbColor: TEST_COLORS.white, selectedRelativePaths: ['shared/01.png', 'power/03.png'] }
     ];
-    const response = await app.inject({ method: 'POST', url: `/api/v1/tasks/${task.taskId}/approve`, payload: { selectedRelativePaths: ['shared/01.png', 'red/02.png', 'power/03.png'], variantSelectionGroups: groups, targetStageIds: ['E002'] } });
+    const response = await legacyApproval({ method: 'POST', url: `/api/v1/tasks/${task.taskId}/approve`, payload: { selectedRelativePaths: ['shared/01.png', 'red/02.png', 'power/03.png'], variantSelectionGroups: groups, targetStageIds: ['E002'] } });
     expect(response.statusCode).toBe(200);
     expect(response.json().pendingSubmissions).toHaveLength(2);
     expect(response.json().pendingSubmissions.map((item: any) => ({ groupId: item.variantGroupId, name: item.variantName, selected: item.selectedRelativePaths, parameter: item.n8nTaskParameters.variants }))).toEqual([
@@ -938,7 +1041,7 @@ describe.sequential('review and submission integration', () => {
       packagedVariants.push(JSON.parse(await readFile(parameterFile, 'utf8')).variants);
     }
     expect(packagedVariants).toEqual(['红色', '白色']);
-    const duplicate = await app.inject({ method: 'POST', url: `/api/v1/tasks/${task.taskId}/approve`, payload: { variantSelectionGroups: [groups[0], { ...groups[1], wbColor: TEST_COLORS.red }], targetStageIds: ['E002'] } });
+    const duplicate = await legacyApproval({ method: 'POST', url: `/api/v1/tasks/${task.taskId}/approve`, payload: { variantSelectionGroups: [groups[0], { ...groups[1], wbColor: TEST_COLORS.red }], targetStageIds: ['E002'] } });
     expect(duplicate.statusCode).toBe(400);
     await rm(path.join(config.stages[1]!.candidateRoot!, '多变体选图产品'), { recursive: true, force: true });
   });
@@ -950,7 +1053,7 @@ describe.sequential('review and submission integration', () => {
     await createProduct(config.stages[1]!.candidateRoot!, folderName, ['white/image_01.png', 'unselected/keep.png']);
     await app.services.mediaIndex.refreshStage(config.stages[1]!.id);
     const task = (await app.inject({ method: 'GET', url: '/api/v1/stages/E001/tasks' })).json().items.find((item: any) => item.sourceFolderName === folderName);
-    const approve = await app.inject({ method: 'POST', url: `/api/v1/tasks/${task.taskId}/approve`, payload: { ...e001Approval(['white/image_01.png']), targetStageIds: ['E002'] } });
+    const approve = await legacyApproval({ method: 'POST', url: `/api/v1/tasks/${task.taskId}/approve`, payload: { ...e001Approval(['white/image_01.png']), targetStageIds: ['E002'] } });
     expect(approve.statusCode).toBe(200);
     const pendingId = approve.json().pendingSubmissions[0].id;
     await rm(path.join(config.stages[1]!.candidateRoot!, folderName, 'white', 'image_01.png'));
@@ -968,7 +1071,7 @@ describe.sequential('review and submission integration', () => {
     await createProduct(config.stages[1]!.candidateRoot!, folderName, ['white/image_01.png']);
     await app.services.mediaIndex.refreshStage('E001');
     const task = (await app.inject({ method: 'GET', url: '/api/v1/stages/E001/tasks' })).json().items.find((item: any) => item.sourceFolderName === folderName);
-    const approve = await app.inject({ method: 'POST', url: `/api/v1/tasks/${task.taskId}/approve`, payload: { ...e001Approval(['white/image_01.png']), targetStageIds: ['E002'] } });
+    const approve = await legacyApproval({ method: 'POST', url: `/api/v1/tasks/${task.taskId}/approve`, payload: { ...e001Approval(['white/image_01.png']), targetStageIds: ['E002'] } });
     expect(approve.statusCode).toBe(200);
     await rm(path.join(task.sourceFolder, 'white', 'image_01.png'));
     await app.services.mediaIndex.refreshStage('E001');
@@ -1031,7 +1134,7 @@ describe.sequential('review and submission integration', () => {
     await mkdir(occupiedArchive, { recursive: true });
     await writeFile(path.join(occupiedArchive, 'unrelated.txt'), 'occupied', 'utf8');
     const task = (await app.inject({ method: 'GET', url: '/api/v1/stages/E001/tasks' })).json().items.find((item: any) => item.sourceFolderName === '归档失败产品');
-    const approve = await app.inject({ method: 'POST', url: `/api/v1/tasks/${task.taskId}/approve`, payload: { ...e001Approval(['white/image_01.png']), targetStageIds: ['E002'] } });
+    const approve = await legacyApproval({ method: 'POST', url: `/api/v1/tasks/${task.taskId}/approve`, payload: { ...e001Approval(['white/image_01.png']), targetStageIds: ['E002'] } });
     const pendingId = approve.json().pendingSubmissions[0].id;
     const batch = await app.inject({ method: 'POST', url: '/api/v1/submissions/batch', payload: { batchId: 'BATCH-TEST-PARTIAL', pendingSubmissionIds: [pendingId], conflictPolicy: 'skip' } });
     expect(batch.json().results[0].status).toBe('PARTIAL_SUCCESS');
@@ -1053,7 +1156,7 @@ describe.sequential('review and submission integration', () => {
     const update = await app.inject({ method: 'PUT', url: '/api/v1/config', payload: config });
     expect(update.statusCode).toBe(200);
     const task = (await app.inject({ method: 'GET', url: '/api/v1/stages/E002/tasks' })).json().items.find((item: any) => item.sourceFolderName === '扁平化产品');
-    const approve = await app.inject({ method: 'POST', url: `/api/v1/tasks/${task.taskId}/approve`, payload: { selectedRelativePaths: ['angle01/image.png', 'angle02/image.png'], targetStageIds: ['E003'] } });
+    const approve = await legacyApproval({ method: 'POST', url: `/api/v1/tasks/${task.taskId}/approve`, payload: { selectedRelativePaths: ['angle01/image.png', 'angle02/image.png'], targetStageIds: ['E003'] } });
     const pendingId = approve.json().pendingSubmissions[0].id;
     const batch = await app.inject({ method: 'POST', url: '/api/v1/submissions/batch', payload: { batchId: 'BATCH-TEST-FLATTEN', pendingSubmissionIds: [pendingId], conflictPolicy: 'skip' } });
     expect(batch.json().results[0].status).toBe('SUCCESS');
@@ -1067,7 +1170,7 @@ describe.sequential('review and submission integration', () => {
   it('delivers E003 to E004 and E005 as independent records', async () => {
     const task = (await app.inject({ method: 'GET', url: '/api/v1/stages/E003/tasks' })).json().items[0];
     const selectedRelativePaths = ['scenePrompt02/image_02.png', 'scenePrompt01/image_01.png'];
-    const approve = await app.inject({ method: 'POST', url: `/api/v1/tasks/${task.taskId}/approve`, payload: { selectedRelativePaths, targetStageIds: ['E004', 'E005'] } });
+    const approve = await legacyApproval({ method: 'POST', url: `/api/v1/tasks/${task.taskId}/approve`, payload: { selectedRelativePaths, targetStageIds: ['E004', 'E005'] } });
     const pendingItems = approve.json().pendingSubmissions;
     const e004Parameters = pendingItems.find((item: any) => item.targetStageId === 'E004').n8nTaskParameters;
     expect(e004Parameters).toMatchObject({ targetDuration: 15, enableLogo: true, allowedImageExtensions: ['.jpg', '.jpeg', '.png', '.webp'] });
@@ -1131,7 +1234,7 @@ describe.sequential('review and submission integration', () => {
     const task = (await app.inject({ method: 'GET', url: '/api/v1/stages/E005/tasks' })).json().items.find((item: any) => item.sourceFolderName === '红色主图结果');
     const taskDetail = await app.services.scanner.getTask(task.taskId);
     expect(taskDetail.images.map((item) => item.relativePath)).toEqual(['07.png', '01.png', '04.png']);
-    const response = await app.inject({ method: 'POST', url: `/api/v1/tasks/${task.taskId}/approve`, payload: { selectedRelativePaths: ['04.png', '07.png'], targetStageIds: [] } });
+    const response = await legacyApproval({ method: 'POST', url: `/api/v1/tasks/${task.taskId}/approve`, payload: { selectedRelativePaths: ['04.png', '07.png'], targetStageIds: [] } });
     expect(response.statusCode).toBe(200);
     expect(response.json().submission).toMatchObject({ sourceStageId: 'E005', targetStageId: 'WB_SHARED_MEDIA', variantName: '红色', deliveryType: 'WB_MEDIA', status: 'SUCCESS', sourceSubmissionId: 'SUB-E003-ORDER', selectedRelativePaths: ['07.png', '04.png'] });
     const submissionId = response.json().submission.submissionId;
@@ -1202,7 +1305,7 @@ describe.sequential('review and submission integration', () => {
     await createProduct(config.stages[1]!.candidateRoot!, '参数锁定产品', ['white/image_01.png']);
     await app.services.mediaIndex.refreshStage(config.stages[1]!.id);
     const task = (await app.inject({ method: 'GET', url: '/api/v1/stages/E001/tasks' })).json().items.find((item: any) => item.sourceFolderName === '参数锁定产品');
-    const approve = await app.inject({ method: 'POST', url: `/api/v1/tasks/${task.taskId}/approve`, payload: { ...e001Approval(['white/image_01.png']), targetStageIds: ['E002'] } });
+    const approve = await legacyApproval({ method: 'POST', url: `/api/v1/tasks/${task.taskId}/approve`, payload: { ...e001Approval(['white/image_01.png']), targetStageIds: ['E002'] } });
     const pendingId = approve.json().pendingSubmissions[0].id;
     await app.services.store.update((db) => { db.pendingSubmissions.find((item) => item.id === pendingId)!.status = 'PACKAGING'; });
     const patch = await app.inject({ method: 'PATCH', url: `/api/v1/pending-submissions/${pendingId}`, payload: { n8nTaskParameters: { locked: 'no' } } });
@@ -1217,7 +1320,8 @@ describe.sequential('review and submission integration', () => {
     const task = (await app.inject({ method: 'GET', url: '/api/v1/stages/E006/tasks' })).json().items.find((row: any) => row.sourceFolderName === folderName);
     const approvePayload = { selectedRelativePaths: ['image.png'], targetStageIds: ['E001'], expectedVersion: 0 };
     const headers = { prefer: 'respond-async', 'idempotency-key': 'async-approve-test' };
-    const approvals = await Promise.all([1, 2].map(() => app.inject({ method: 'POST', url: '/api/v1/tasks/' + task.taskId + '/approve', headers, payload: approvePayload })));
+    const firstApproval = await legacyApproval({ method: 'POST', url: '/api/v1/tasks/' + task.taskId + '/approve', headers, payload: approvePayload });
+    const approvals = [firstApproval, await app.inject({ method: 'POST', url: '/api/v1/tasks/' + task.taskId + '/approve', headers, payload: approvePayload })];
     expect(approvals.map((response) => response.statusCode)).toEqual([202, 202]);
     expect(approvals[0]!.json().operation.operationId).toBe(approvals[1]!.json().operation.operationId);
     const changed = await app.inject({ method: 'POST', url: '/api/v1/tasks/' + task.taskId + '/approve', headers, payload: { ...approvePayload, selectedRelativePaths: [] } });

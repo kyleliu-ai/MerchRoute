@@ -1,6 +1,6 @@
 {
   "name": "jimeng-free-api",
-  "version": "0.9.1",
+  "version": "1.0.0",
   "description": "MerchRoute vendored Jimeng API service with resilient asynchronous image tasks",
   "type": "module",
   "main": "dist/index.js",

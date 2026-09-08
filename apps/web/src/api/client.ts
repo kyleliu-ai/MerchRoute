@@ -946,7 +946,7 @@ export type AboutVersionInfo = {
   error?: string;
 };
 
-export type ReviewOperationView = Omit<ReviewOperation, 'input' | 'requestHash' | 'requestKey'> & { progress?: ReviewOperationProgress };
+export type ReviewOperationView = Omit<ReviewOperation, 'input' | 'requestHash' | 'requestKey'> & { progress?: ReviewOperationProgress; deliveryMode?: 'DIRECT_DIRECTORY' };
 const operationRequests = new Map<string, string>();
 function stableOperationKey(identity: string): string {
   let saved: Record<string, string> = {};

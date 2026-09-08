@@ -154,6 +154,7 @@ export default async function globalSetup(): Promise<void> {
     utimes(path.join(localSource, 'WB'), wbModifiedAt, wbModifiedAt)
   ]);
   await createProduct(config.stages.find((stage) => stage.id === 'E006')!.candidateRoot!, 'E2E-测试产品A', ['主图/image_01.png', '详情图/image_02.png']);
+  await createProduct(config.stages.find((stage) => stage.id === 'E007')!.candidateRoot!, 'E2E-预览切换', ['主图/1688.png']);
   await createProduct(config.stages.find((stage) => stage.id === 'E006')!.candidateRoot!, 'E2E-预览切换', [
     { relativePath: '预览组/01-portrait.png', width: 180, height: 320 },
     { relativePath: '预览组/02-landscape.png', width: 320, height: 180 },
