@@ -67,6 +67,32 @@ describe('ScannerService stage index replacement', () => {
     await expect(scanner.getTask(task!.taskId)).rejects.toMatchObject({ statusCode: 404 });
   });
 
+  it('preserves other products when delivery removes a directory after its snapshot stat', async () => {
+    const disappearing = await createProduct(root, 'E006', '01-delivered');
+    await createProduct(root, 'E006', '02-preserved');
+    await scanner.scanStage('E006');
+    const scanImages = scanner.scanImages.bind(scanner);
+    vi.spyOn(scanner, 'scanImages').mockImplementation(async (folder, mediaTypes) => {
+      if (folder === disappearing) await rm(disappearing, { recursive: true, force: true });
+      return scanImages(folder, mediaTypes);
+    });
+
+    const tasks = await scanner.scanStage('E006');
+    expect(tasks.map((task) => task.sourceFolderName)).toEqual(['02-preserved']);
+    expect(scanner.listIndexedStageTasks('E006').map((task) => task.sourceFolderName)).toEqual(['02-preserved']);
+    await expect(scanner.getTask(tasks[0]!.taskId)).resolves.toMatchObject({ imageCount: 1 });
+  });
+
+  it.each(['EACCES', 'EIO', 'PATH_TRAVERSAL_BLOCKED'])('does not hide %s errors while refreshing a product', async (code) => {
+    await createProduct(root, 'E006', '01-existing');
+    await scanner.scanStage('E006');
+    const before = scanner.listIndexedStageTasks('E006');
+    const error = Object.assign(new Error('injected scan error'), { code });
+    vi.spyOn(scanner, 'scanImages').mockRejectedValue(error);
+    await expect(scanner.scanStage('E006')).rejects.toBe(error);
+    expect(scanner.listIndexedStageTasks('E006')).toEqual(before);
+  });
+
   it('does not expose a partial stage snapshot when a rescan fails', async () => {
     await createProduct(root, 'E006', '01-existing');
     await scanner.scanStage('E006');

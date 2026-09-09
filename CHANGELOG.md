@@ -10,6 +10,8 @@ The project follows [Semantic Versioning](https://semver.org/). Dates use the `Y
 
 ### Fixed
 
+- Update sharp to 0.35.4 to include the libheif security fixes for GHSA-rgj7-g3m4-5g8c.
+- Keep background media refresh working when delivery removes a product during scanning; preserve other products and continue rejecting access and path safety errors.
 - Permanently archive explicitly approved unresolved Jimeng tasks without changing their original remote status or losing idempotency protection. Reject repeat submissions and associated retries; stop polling archived tasks and keep active tasks in mixed batches working.
 - Persist verified archive snapshots alongside the task ledger, with exact approval hashes, atomic binding, consistent backup and restore checks. Exclude only verified archived tasks from maintenance gates and refuse rollback to images that cannot enforce archives.
 - Keep v1.0.0 artifacts immutable and synchronize MerchRoute and Jimeng at 1.0.1. Retain direct review delivery, ten-row local-import pagination and hidden task progress panels.
