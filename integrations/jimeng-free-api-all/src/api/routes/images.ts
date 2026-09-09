@@ -117,6 +117,8 @@ export function resolveAffinityToken(uploadKey: string, tokens: string[], taskKe
 }
 
 export function deriveBatchStatus(tasks: Array<Record<string, any>>, uploadStatus?: string): string {
+  if (tasks.length && tasks.every(task => task.localDisposition)) return 'terminal';
+  tasks = tasks.filter(task => !task.localDisposition);
   if (uploadStatus === "failed_pre_submit") return "failed_pre_submit";
   if (tasks.some((task) => task.status === "reserved")) return uploadStatus || "queued";
   if (tasks.some((task) => task.status === "processing")) return "processing";
@@ -138,7 +140,7 @@ export function decorateAsyncResponse(
     : {
         uploadKey,
         batchStatus: deriveBatchStatus(tasks),
-        nextPollAfterSeconds: tasks.some((task) => ["reserved", "processing"].includes(task.status)) ? 5 : 0,
+        nextPollAfterSeconds: tasks.some((task) => !task.localDisposition && ["reserved", "processing"].includes(task.status)) ? 5 : 0,
         cacheHit: false,
         uploadDurationMs: 0,
         uploadProgress: { total: 0, completed: 0, retryCount: 0 },
@@ -149,7 +151,7 @@ export function decorateAsyncResponse(
   const uploadDurationMs = typeof metricContext?.asyncBatchUploadDurationMs === "number"
     ? Math.max(0, Math.trunc(metricContext.asyncBatchUploadDurationMs))
     : upload.uploadDurationMs;
-  const hasUnknown = tasks.some((task) => task.status === "submission_unknown");
+  const hasUnknown = tasks.some((task) => !task.localDisposition && task.status === "submission_unknown");
   const batchStatus = firstString(base.batchStatus) || deriveBatchStatus(tasks, upload.batchStatus);
   return {
     ...upload,

@@ -214,22 +214,37 @@ export async function verify({ record, container, volume, selected }) {
 }
 
 const VOLUME_HELPER = '/app/deployment/jimeng-volume.cjs';
-export function volumeAction(record, volume, action, { backup, archiveSha256 } = {}) {
+const OFFLINE_HELPER = '/merchroute-tools/jimeng-volume.cjs';
+export function volumeAction(record, volume, action, { backup, archiveSha256, approvalFile } = {}) {
   assert.notEqual(docker(['volume','inspect',safeName(volume)],{allowMissing:true}),null,'Volume absent; helper must never create it implicitly');
   const live=writers(volume);
   if (action==='probe' && live.length===1) {
     assert.equal(live[0].Image,record.imageId);
     return JSON.parse(docker(['exec','--user','1000:1000',live[0].Id,'node',VOLUME_HELPER,'probe']));
   }
-  if (action!=='inspect') assert.equal(live.length,0,'Storage mutation/backup requires a stopped unique writer');
-  const readonly = action === 'inspect' || action === 'backup';
-  const args = ['run','--rm','--network','none','--read-only','--user', action === 'probe' ? '1000:1000' : '0:0',
+  if (!['inspect','archive-plan'].includes(action)) assert.equal(live.length,0,'Storage mutation/backup requires a stopped unique writer');
+  const readonly = ['inspect','backup','archive-plan'].includes(action);
+  const args = ['run','--rm','--network','none','--read-only','--user', ['probe','archive','archive-plan'].includes(action) ? '1000:1000' : '0:0',
     '--entrypoint','node','--mount',`type=volume,src=${safeName(volume)},dst=/app/data${readonly?',readonly':''}`];
+  // Use the current controlled helper even when inspecting a legacy image.
+  // An old bundled helper would silently omit permanent archive information.
+  for(const [source,target] of [
+    ['patches/scripts/jimeng-volume.cjs',OFFLINE_HELPER],
+    ['src/api/services/image-task-archive.mjs','/merchroute-tools/image-task-archive.mjs'],
+  ]) {
+    const sourcePath=path.join(ROOT,PREFIX,source);
+    assert.ok(!sourcePath.includes(','));
+    args.push('--mount',`type=bind,src=${sourcePath},dst=${target},readonly`);
+  }
   if (backup) {
     assert.ok(path.isAbsolute(backup) && !backup.includes(','), 'Unsafe backup path');
     args.push('--mount',`type=bind,src=${backup},dst=/backup${action==='restore'?',readonly':''}`);
   }
-  args.push(record.imageId,VOLUME_HELPER,action);
+  if (approvalFile) {
+    assert.ok(path.isAbsolute(approvalFile) && !approvalFile.includes(','), 'Unsafe approval path');
+    args.push('--mount',`type=bind,src=${approvalFile},dst=/approval/approval.json,readonly`);
+  }
+  args.push(record.imageId,OFFLINE_HELPER,action);
   if (archiveSha256) args.push(archiveSha256);
   return JSON.parse(docker(args));
 }
@@ -248,7 +263,21 @@ export function assertStorageQuiescent(storage, gate, current) {
     const states=name==='image-task-store.json'?['reserved']:['reserved','processing','submission_unknown','receiving','uploading'];
     for(const status of states) assert.equal(store.statuses?.[status]||0,0,`Nonterminal ${status} requires reconciliation`);
   }
-  const count=(tasks?.statuses?.processing||0)+(tasks?.statuses?.submission_unknown||0);
+  const archived = tasks?.archivedRecords || [];
+  const keys = new Set();
+  for (const item of archived) {
+    assert.match(item.keyHash || '',/^[a-f0-9]{64}$/); assert.match(item.recordHash || '',/^[a-f0-9]{64}$/);
+    assert.ok(!keys.has(item.keyHash)); keys.add(item.keyHash);
+    assert.equal(item.disposition,'archived_no_replay'); assert.equal(item.forbidReplay,true);
+    assert.ok(['processing','submission_unknown'].includes(item.status));
+  }
+  if(archived.length) assert.match(tasks.archiveSha256 || '',/^[a-f0-9]{64}$/);
+  for(const status of ['processing','submission_unknown']) assert.ok(archived.filter(r=>r.status===status).length <= (tasks?.statuses?.[status]||0));
+  const count=(tasks?.statuses?.processing||0)+(tasks?.statuses?.submission_unknown||0)-archived.length;
+  if(tasks?.nonterminalRecords) {
+    assert.equal(tasks.nonterminalRecords.length,count);
+    assert.ok(tasks.nonterminalRecords.every(r=>!keys.has(r.keyHash)));
+  }
   if(!count) { assert.equal(gate.historicalDisposition?.records?.length||0,0,'Historical exception no longer matches ledger'); return; }
   const proof=gate.historicalDisposition;
   assert.equal(proof?.schemaVersion,1,'Explicit historical disposition required');
@@ -275,6 +304,68 @@ export function assertStorageQuiescent(storage, gate, current) {
       assert.ok(Date.parse(record.createdAt)<started && Date.parse(record.updatedAt)<started,'Cannot ignore a current-process task');
     }
   }
+}
+export function assertArchiveRuntime(storage, image) {
+  if (storage.stores['image-task-store.json']?.archiveSha256) {
+    assert.equal(image.Config?.Labels?.['org.merchroute.jimeng.archive-schema'],'1',
+      'Target runtime cannot enforce permanent archives; use an archive-aware recovery image');
+  }
+}
+export async function archiveHistoricalTasks({record,container,volume,stateDir,approvalFile,maintenanceFile,execute=false}) {
+  assertImage(record);
+  assert.equal(inspectImage(record.imageId).Config.Labels?.['org.merchroute.jimeng.archive-schema'],'1');
+  await assertExternal(ROOT,approvalFile);
+  const approvalBytes=await readFile(approvalFile), approval=JSON.parse(approvalBytes), current=inspectContainer(container);
+  assert.ok(current);
+  assert.equal(approval.containerId,current.Id); assert.equal(approval.imageId,current.Image);
+  assert.equal(approval.volume,safeName(volume));
+  assert.ok(current.Mounts.some(m=>m.Type==='volume' && m.Name===volume && m.Destination==='/app/data'));
+  const plan=volumeAction(record,volume,'archive-plan',{approvalFile});
+  assert.equal(digest(await readFile(approvalFile)),digest(approvalBytes),'Archive approval changed');
+  if(!execute)return {...plan,container:summarize(current),volume,dryRun:true};
+  await assertExternal(ROOT,stateDir);
+  return withCommandLock(stateDir,async()=>{
+    const operationId=randomUUID();
+    const lease=docker(['create','--name',`merchroute-jimeng-lease-${digest(volume).slice(0,20)}`,
+      '--label',`org.merchroute.operation=${operationId}`,'--network','none','--entrypoint','true',record.imageId]);
+    const journalFile=path.join(stateDir,`archive-${operationId}.jsonl`);
+    const log=(stage,details={})=>writeFile(journalFile,JSON.stringify({at:new Date().toISOString(),operationId,stage,...details})+'\n',{flag:'a',mode:0o600});
+    try {
+      const stopped=inspectContainer(current.Id);
+      assert.equal(digest(await readFile(approvalFile)),digest(approvalBytes),'Archive approval changed');
+      assert.equal(stopped.Image,current.Image); assert.equal(stopped.State.Running,false,'Archive only after controlled shutdown');
+      assert.equal(stopped.HostConfig.RestartPolicy.Name,'no','Disable automatic restart during archive');
+      assert.equal(writers(volume).length,0);
+      assertMaintenance(await json(maintenanceFile),stopped,volume);
+      const before=volumeAction(record,volume,'inspect');
+      await log('archive-planned',{volume,container:summarize(stopped),approvalSha256:digest(await readFile(approvalFile)),storage:before,
+        helperSha256:digest(await readFile(path.join(ROOT,PREFIX,'patches/scripts/jimeng-volume.cjs'))),
+        archiveModuleSha256:digest(await readFile(path.join(ROOT,PREFIX,'src/api/services/image-task-archive.mjs')))});
+      if(plan.reused)return {...plan,journalFile};
+      assert.equal(before.stores['image-task-store.json'].sha256,approval.storeSha256);
+      const requested=new Set(approval.records.map(r=>r.keyHash));
+      for(const row of before.stores['image-task-store.json'].nonterminalRecords.filter(r=>requested.has(r.keyHash))) {
+        assert.ok(Date.parse(row.createdAt)<Date.parse(stopped.State.StartedAt) && Date.parse(row.updatedAt)<Date.parse(stopped.State.StartedAt),
+          'Cannot archive a current-process task');
+      }
+      const backup=path.join(stateDir,`archive-backup-${operationId}`); await privateDirectory(backup);
+      const snapshot=volumeAction(record,volume,'backup',{backup});
+      assert.equal(snapshot.contentHash,before.contentHash);
+      const restoreVolume=`merchroute-jimeng-test-archive-restore-${operationId}`;
+      docker(['volume','create','--label',`org.merchroute.operation=${operationId}`,restoreVolume]);
+      const restored=volumeAction(record,restoreVolume,'restore',{backup,archiveSha256:snapshot.archiveSha256});
+      assert.equal(restored.metadataHash,snapshot.metadataHash);
+      await log('archive-backup-verified',{backup,snapshot,restoreVolume});
+      assert.equal(digest(await readFile(approvalFile)),digest(approvalBytes),'Archive approval changed');
+      const result=volumeAction(record,volume,'archive',{approvalFile});
+      const after=volumeAction(record,volume,'inspect');
+      assert.equal(after.stores['image-task-store.json'].archiveSha256,result.archiveSha256);
+      assert.equal(after.stores['image-task-store.json'].count,before.stores['image-task-store.json'].count);
+      await log('archive-verified',{result,storage:after});
+      return {...result,journalFile,backup,restoreVolume};
+    } catch(error) {await log('archive-failed',{message:error.message});throw error;}
+    finally {assert.equal(inspectContainer(lease).Config.Labels['org.merchroute.operation'],operationId);docker(['rm',lease]);}
+  });
 }
 export async function deploymentPlan({ action, record, container, volume, selected, expectedImage, handoff = false }) {
   assertImage(record); safeName(volume);
@@ -320,8 +411,18 @@ export async function waitVerified(input) {
   throw failure;
 }
 export async function deploy(input) {
-  const {stateDir,record,volume,selected,dryRun,execute,maintenanceFile,allowPermissionMigration} = input;
+  const {stateDir,record,volume,selected,dryRun,execute,maintenanceFile,allowPermissionMigration,archiveApprovalFile} = input;
   const plan = await deploymentPlan(input);
+  if(archiveApprovalFile) {
+    assert.ok(plan.old,'Archival upgrade requires an existing container');
+    assert.equal(inspectImage(record.imageId).Config.Labels?.['org.merchroute.jimeng.archive-schema'],'1');
+    await assertExternal(ROOT,archiveApprovalFile);
+    const approvalBytes=await readFile(archiveApprovalFile), approval=JSON.parse(approvalBytes);
+    assert.equal(approval.containerId,plan.old.id); assert.equal(approval.imageId,plan.old.imageId); assert.equal(approval.volume,volume);
+    plan.archive=volumeAction(record,volume,'archive-plan',{approvalFile:archiveApprovalFile});
+    plan.archiveApprovalSha256=digest(approvalBytes);
+    assert.equal(digest(await readFile(archiveApprovalFile)),plan.archiveApprovalSha256,'Archive approval changed');
+  }
   if (dryRun) return plan; // No mkdir, lock file, helper container, or volume creation.
   assert.equal(execute,true,'Mutation requires explicit --execute; default is read-only');
   await assertExternal(ROOT,stateDir);
@@ -343,6 +444,15 @@ export async function deploy(input) {
         const gate=await json(maintenanceFile);
         assertMaintenance(gate,old,volume);
         const before=volumeAction(record,volume,'inspect');
+        assertArchiveRuntime(before,inspectImage(record.imageId));
+        if(archiveApprovalFile) {
+          assert.equal(digest(await readFile(archiveApprovalFile)),plan.archiveApprovalSha256,'Archive approval changed');
+          const requested=new Set((await json(archiveApprovalFile)).records.map(r=>r.keyHash));
+          for(const row of before.stores['image-task-store.json'].nonterminalRecords.filter(r=>requested.has(r.keyHash))) {
+            assert.ok(Date.parse(row.createdAt)<Date.parse(old.State.StartedAt) && Date.parse(row.updatedAt)<Date.parse(old.State.StartedAt),
+              'Cannot archive a current-process task');
+          }
+        }
         assertStorageQuiescent(before,gate,old);
         const free=await statfs(stateDir);
         assert.ok(Number(free.bavail)*Number(free.bsize)>Math.max(before.bytes*3,256*1024**2),'Insufficient backup disk space');
@@ -368,6 +478,19 @@ export async function deploy(input) {
           assert.equal(allowPermissionMigration,true,'Permission migration needs explicit authorization');
           await log('permission-migration-intent',{volume});
           volumeAction(record,volume,'migrate');
+        }
+        if(archiveApprovalFile) {
+          assert.equal(digest(await readFile(archiveApprovalFile)),plan.archiveApprovalSha256,'Archive approval changed');
+          await log('archive-intent',{approvalSha256:digest(await readFile(archiveApprovalFile))});
+          const archived=volumeAction(record,volume,'archive',{approvalFile:archiveApprovalFile});
+          const archiveBackup=path.join(stateDir,`archive-backup-${operationId}`);await privateDirectory(archiveBackup);
+          const archiveSnapshot=volumeAction(record,volume,'backup',{backup:archiveBackup});
+          const archiveRestoreVolume=`merchroute-jimeng-test-archived-${operationId}`;
+          docker(['volume','create','--label',`org.merchroute.operation=${operationId}`,archiveRestoreVolume]);
+          const archiveRestored=volumeAction(record,archiveRestoreVolume,'restore',{backup:archiveBackup,archiveSha256:archiveSnapshot.archiveSha256});
+          assert.equal(archiveRestored.metadataHash,archiveSnapshot.metadataHash);
+          assert.equal(archiveSnapshot.stores['image-task-store.json'].count,snapshot.stores['image-task-store.json'].count);
+          await log('archive-verified',{archived,archiveBackup,archiveRestoreVolume,storage:archiveSnapshot});
         }
         if (old.Name==='/'+selected.container) {
           const retained=`${selected.container}-retained-${operationId.slice(0,8)}`;
@@ -429,6 +552,7 @@ export async function rollback({journalFile,record,stateDir,execute=false,dryRun
   assert.ok(writers(volume).every((w)=>ownIds.has(w.Id)),'Foreign data writer');
   const output={dryRun:true,previousContainer:old.Id,candidateContainer:candidate?.Id || null,volume,
     preservesLatestData:true,restoresOldSnapshot:false};
+  assertArchiveRuntime(volumeAction(record,volume,'inspect'),inspectImage(old.Image));
   if(dryRun || !execute)return output;
   await assertExternal(ROOT,stateDir);
   return withCommandLock(stateDir,async()=>{
@@ -436,6 +560,7 @@ export async function rollback({journalFile,record,stateDir,execute=false,dryRun
       '--label',`org.merchroute.operation=${first.operationId}`,'--network','none','--entrypoint','true',record.imageId]);
     const log=(stage,details={})=>writeFile(journalFile,JSON.stringify({at:new Date().toISOString(),operationId:first.operationId,stage,...details})+'\n',{flag:'a',mode:0o600});
     try {
+      assertArchiveRuntime(volumeAction(record,volume,'inspect'),inspectImage(old.Image));
       if(entries.some((e)=>e.stage==='rollback-verified')) {
         assertContainer(inspectContainer(old.Id),{imageId:old.Image},volume,selected);
         assert.deepEqual(writers(volume).map((c)=>c.Id),[old.Id]);

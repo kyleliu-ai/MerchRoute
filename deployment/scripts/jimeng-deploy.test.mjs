@@ -4,7 +4,7 @@ import { mkdtemp, access, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { BASELINE, ROOT, assertContainer, assertImage, assertMaintenance, assertStorageQuiescent, assertRecord, digest, profile, releaseIdentity, safeName, summarize } from './jimeng-deploy-lib.mjs';
+import { BASELINE, ROOT, assertArchiveRuntime, assertContainer, assertImage, assertMaintenance, assertStorageQuiescent, assertRecord, digest, profile, releaseIdentity, safeName, summarize } from './jimeng-deploy-lib.mjs';
 
 const imageId='sha256:'+'1'.repeat(64), oldId='2'.repeat(64);
 function record() {
@@ -103,4 +103,23 @@ test('historical disposition preserves exact records while rejecting new work, c
   for(const mutate of cases){const s=structuredClone(storage),g=structuredClone(gate);mutate(s,g);assert.throws(()=>assertStorageQuiescent(s,g,c));}
   assert.throws(()=>assertStorageQuiescent(storage,{},c));
   assertStorageQuiescent({stores:{'image-task-store.json':{statuses:{success:5}}}}, {},c);
+});
+
+test('permanent archives exclude only verified rows; new unknown work and incompatible rollback still fail closed',()=>{
+  const c=container();
+  const archivedRecords=[{keyHash:'a'.repeat(64),recordHash:'b'.repeat(64),status:'submission_unknown',disposition:'archived_no_replay',forbidReplay:true}];
+  const storage={stores:{'image-task-store.json':{statuses:{submission_unknown:1},archivedRecords,nonterminalRecords:[],archiveSha256:'c'.repeat(64)}}};
+  assertStorageQuiescent(storage,{},c);
+  const modern={Config:{Labels:{'org.merchroute.jimeng.archive-schema':'1'}}};
+  assertArchiveRuntime(storage,modern);
+  assert.throws(()=>assertArchiveRuntime(storage,{Config:{Labels:{}}}),/cannot enforce/);
+  assertArchiveRuntime({stores:{}},{Config:{Labels:{}}});
+  for(const mutate of [
+    s=>s.stores['image-task-store.json'].statuses.submission_unknown++,
+    s=>s.stores['image-task-store.json'].archiveSha256=null,
+    s=>s.stores['image-task-store.json'].archivedRecords[0].forbidReplay=false,
+    s=>s.stores['image-task-store.json'].archivedRecords.push(archivedRecords[0]),
+    s=>s.stores['image-task-store.json'].statuses.reserved=1,
+    s=>s.stores['image-task-store.json'].nonterminalRecords.push({keyHash:'d'.repeat(64)}),
+  ]) {const changed=structuredClone(storage);mutate(changed);assert.throws(()=>assertStorageQuiescent(changed,{},c));}
 });

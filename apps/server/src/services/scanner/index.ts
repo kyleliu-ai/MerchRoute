@@ -337,7 +337,13 @@ export class ScannerService {
     if (!isImmediateChild(stage.candidateRoot, sourceFolder)) throw new AppError('PATH_TRAVERSAL_BLOCKED', '任务目录必须位于阶段候选根目录下', { stageId: stage.id, relativeTaskDirectory: normalized });
     const folderInfo = await lstat(sourceFolder).catch(() => null);
     if (!folderInfo?.isDirectory() || folderInfo.isSymbolicLink()) return undefined;
-    const scannedMedia = await this.scanImages(sourceFolder, stage.mediaTypes);
+    const scannedMedia = await this.scanImages(sourceFolder, stage.mediaTypes).catch((error: unknown) => {
+      // Delivery can move a product after the directory listing/stat. Discard
+      // this incomplete task snapshot without failing unrelated products.
+      if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return undefined;
+      throw error;
+    });
+    if (!scannedMedia) return undefined;
     const media = stage.id === 'E005' ? await orderMediaFromSelectionManifest(sourceFolder, scannedMedia) : scannedMedia;
     if (!media.length) return undefined;
     return {

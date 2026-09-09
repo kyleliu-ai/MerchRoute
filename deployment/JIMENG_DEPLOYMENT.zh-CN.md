@@ -1,12 +1,30 @@
 # MerchRoute 即梦代理候选构建与受控部署
 
-## v1.0.0 版本关联
+## v1.0.1 永久归档与禁止重投
 
-MerchRoute 与内置即梦代理的组件版本统一为 `1.0.0`。正式镜像为 `merchroute/jimeng-free-api-all:1.0.0`，正式容器为 `merchroute-jimeng-v1.0.0`；实际启动绑定验收记录中的不可变镜像 ID。镜像与容器同时记录 `org.merchroute.product.version` 和 `org.opencontainers.image.version`，发布清单关联 GitHub `v1.0.0`、源码指纹、平台和镜像 ID。
+永久归档独立于远端生成状态：`image-task-archive.json` 保存明确批准的任务完整原始快照、规范化记录指纹、原因、时间和批准依据；主账本只增加 `archiveSha256` 绑定，不改写任何任务的成功、失败或未确认状态。归档记录保留原幂等键。首次归档清单冻结后不自动扩展，不按年龄批量关闭其他任务。
+
+代理对原请求、参数变更请求及关联重试返回 `task_archived_no_replay`，不上传、不重新生成。状态查询保留原始 `status` 并增加 `localDisposition.state=archived_no_replay`、`canRetry=false`；批次以 `archivedCount` 单独计数，归档任务不计入 `pendingCount`。全部任务已在本地结束时 `allTerminal=true`；异步接口不再要求继续轮询。混合批次中的正常任务继续处理。归档不证明上游已取消或生成未发生。
+
+离线归档入口：`node deployment/scripts/jimeng-deploy.mjs archive --record=<候选记录> --container=<精确容器ID> --volume=<原卷> --state-dir=<仓库外恢复目录> --approval-file=<批准清单> --dry-run`。执行时用 `--execute --maintenance-file=<最新维护证据>`。工具自身不停止或启动正式服务：必须先通过受控维护流程阻止新请求、核实 n8n/worker 空闲、停容器并设置 `restart=no`。归档要求无卷写入者、旧记录早于当前进程启动、精确原账本文件哈希和逐条规范化记录哈希；先一致性备份，并在临时卷恢复核对后才写入。
+
+首次从不支持归档的代理升级时，`upgrade` 可附加 `--archive-approval-file=<批准清单>`。同一次卷维护锁下依次完成旧任务维护核对、停止原容器、原卷备份恢复验证、离线归档、归档后再次备份恢复验证，最后启动支持归档的新镜像。任何阶段失败均保留现场和最新数据，不自动启动旧版。切换主应用前必须确认归档后的新代理可用；恢复方案需准备经过验证的归档兼容镜像。
+
+批准清单包含 `schemaVersion=1`、`operation=archived_no_replay`、`preserveRecords=true`、`forbidReplay=true`、`containerId`、`imageId`、`volume`、`storeSha256`、`approvedAt`、短时有效的 `expiresAt`、`reason`、`approvalReference`，以及 `records:[{keyHash,recordHash}]`。记录哈希采用共享模块 `recordDigest` 的递归键排序规则；不能混用旧维护证据中按 JSON 字段顺序计算的哈希。真实批准清单、账本快照、备份与日志只能保存在仓库外受限目录，不上传到 GitHub。
+
+归档文件与主账本绑定分别原子提交并同步磁盘。若在两次提交之间中断，代理拒绝启动；共享离线修复函数只接受同一份未过期批准清单完成绑定，禁止以空账本启动。已成功执行的同一清单重试只回读原归档，不产生新记录。损坏、缺失、内容变化或未知记录均拒绝放行；启动后归档记录仍按原始快照持久保存。
+
+归档与主账本必须一起备份、一起恢复；业务运行后的恢复保留最新账本，不用归档前备份覆盖新任务。维护工具读取并验证持久归档，无需为已归档项重复提供临时历史例外，其他未决项仍需核对。归档后的升级和回滚目标必须具有 `org.merchroute.jimeng.archive-schema=1` 能力标签。历史旧镜像仍保留，但不支持归档的镜像（包括已发布 v1.0.0）会在停服务前被拒绝作为目标，需另备支持归档的恢复镜像；不能宣称旧镜像会自动获得归档保护。手工绕过维护工具启动旧镜像不在受控回滚支持范围内。
+
+本机制修改代理运行代码；已发布 v1.0.0 的标签、镜像和 Release 资产保持不可变。候选验收不代表已正式发布或已对生产三条记录执行归档。
+
+## v1.0.1 版本关联
+
+MerchRoute 与内置即梦代理的组件版本统一为 `1.0.1`。正式镜像为 `merchroute/jimeng-free-api-all:1.0.1`，正式容器为 `merchroute-jimeng-v1.0.1`；实际启动绑定验收记录中的不可变镜像 ID。镜像与容器同时记录 `org.merchroute.product.version` 和 `org.opencontainers.image.version`，发布清单关联 GitHub `v1.0.1`、源码指纹、平台和镜像 ID。
 
 候选继续使用独立 RC 标签。所有候选检查通过后，只为同一个镜像 ID 添加尚不存在的正式标签，不重新构建，不覆盖旧标签。内部组件版本变更不修改上游模型协议版本、模型标识或账本 schema。
 
-Compose 额外要求显式设置 `JIMENG_RELEASE_VERSION=1.0.0`，并保留显式 `JIMENG_IMAGE` 和 `JIMENG_TASK_VOLUME`。生产部署工具按版本生成容器名；从无版本名称的旧容器升级必须提供精确旧容器 ID、旧镜像 ID、原卷及 `--handoff`。旧容器保留、停用自动重启，新容器继续使用端口 8000 和原持久卷；回滚从原操作日志恢复旧容器名称与重启策略，保留最新账本。
+Compose 额外要求显式设置 `JIMENG_RELEASE_VERSION=1.0.1`，并保留显式 `JIMENG_IMAGE` 和 `JIMENG_TASK_VOLUME`。生产部署工具按版本生成容器名；从无版本名称的旧容器升级必须提供精确旧容器 ID、旧镜像 ID、原卷及 `--handoff`。旧容器保留、停用自动重启，新容器继续使用端口 8000 和原持久卷；兼容的回滚从原操作日志恢复旧容器名称与重启策略，保留最新账本。
 
 版本验收包含容器名称、镜像标签、双版本标签和容器内 package 版本的一致性。旧构建记录没有新增版本字段时，继续支持按原镜像身份核验和回滚。
 

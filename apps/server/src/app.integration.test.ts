@@ -777,7 +777,7 @@ describe.sequential('review and submission integration', () => {
     releasePackaging();
     const completed = await batchPromise;
     expect(completed.statusCode).toBe(200);
-    expect(completed.json().results[0].status).toBe('SUCCESS');
+    expect(completed.json().results[0].status, JSON.stringify(completed.json().results[0])).toBe('SUCCESS');
 
     submissionService.packageAndSubmit = originalPackageAndSubmit;
     const restoredConfig = structuredClone(app.services.config.get());

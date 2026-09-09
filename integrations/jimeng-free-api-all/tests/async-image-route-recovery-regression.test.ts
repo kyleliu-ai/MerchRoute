@@ -4,6 +4,7 @@ import { register } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { seedArchive } from './helpers/archive-fixture.ts';
 
 import { AsyncImageBatchCoordinator } from "../src/api/services/async-image-batch-coordinator.ts";
 import {
@@ -516,6 +517,7 @@ register(new URL("./helpers/stub-loader.mjs", import.meta.url), {
   data: { stubs, sourceRoot: new URL("../src/", import.meta.url).href },
 });
 
+const archivedRouteFixture = seedArchive(routeStoreDir);
 process.env.IMAGE_TASK_STORE_DIR = routeStoreDir;
 const routeModule = await import("../src/api/routes/images.ts");
 
@@ -830,6 +832,35 @@ test('invalid model/capability requests fail before source IO, reservations or r
   assert.equal(new ImageTaskLedger({storeDir:routeStoreDir}).get(task.idempotencyKey)?.status,'reserved');
   assert.equal(new ImageUploadStore({storeDir:routeStoreDir}).get(uploadKey),undefined);
   assert.equal(sideEffects, 0);
+});
+
+test('archived route status is locally terminal and rejects repeat submissions without IO',async()=>{
+  let sideEffects=0;
+  const forbidden=async()=>{sideEffects++;throw new Error('archive triggered IO');};
+  const saved={...routeHarness};
+  routeHarness.download=forbidden;routeHarness.upload=forbidden;routeHarness.submit=forbidden;routeHarness.query=forbidden;
+  try {
+    for(const uploadKey of ['', 'archive-upload']) {
+      const result=await routeModule.default.post['/tasks/status'](mockRouteRequest({
+        tasks:archivedRouteFixture.records.map(r=>({idempotencyKey:r.idempotencyKey})),uploadKey,
+      },'token-archive') as any);
+      assert.equal(result.archivedCount,3);assert.equal(result.pendingCount,0);assert.equal(result.allTerminal,true);
+      assert.equal(result.successCount,0);assert.equal(result.failedCount,0);
+      if(uploadKey){assert.equal(result.batchStatus,'terminal');assert.equal(result.nextPollAfterSeconds,0);}
+    }
+    for(const row of archivedRouteFixture.records) {
+      const result=await routeModule.default.post['/tasks/batch'](mockRouteRequest({
+        tasks:[{...row,prompt:'ignored',sourceSubmissionId:'SUB-archived'}], common:COMMON, sourceImages:sourceImages(),images:['https://fixture.invalid/input.png'],
+        uploadKey:'archive-upload',
+      },'token-archive') as any);
+      assert.equal(result.code,'task_archived_no_replay');assert.equal(result.submittedCount,0);
+    }
+    assert.equal(sideEffects,0);
+    const mixed=routeModule.decorateAsyncResponse({ok:true,tasks:[
+      {status:'processing',localDisposition:{state:'archived_no_replay'}},{status:'processing'},
+    ]},'archive-upload');
+    assert.equal(mixed.batchStatus,'processing');assert.ok(mixed.nextPollAfterSeconds>0);
+  } finally {Object.assign(routeHarness,saved);}
 });
 
 test.after(async () => {

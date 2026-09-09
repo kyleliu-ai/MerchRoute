@@ -10,7 +10,7 @@ import { atomicJson, git, withCommandLock, registration } from './state.mjs';
 import { developmentEnvironment, blockDevelopmentOutbound, assertPortFree } from './development.mjs';
 import { inventoryRelease, verifyInstalledRelease, digest, gitBlob, safeRelative } from '../lib/installed-release.mjs';
 import { switchRelease } from './release-transaction.mjs';
-import { publicationBody, publicationDescriptor, validateV012Rollover, validateV013Rollover } from './publish.mjs';
+import { publicationBody, publicationDescriptor, validateV012Rollover, validateV013Rollover, validateV100Rollover } from './publish.mjs';
 import { assertNoActivity } from './business-gate.mjs';
 import { validateManifest, compareBranchInventory } from '../verify-release-completeness.mjs';
 import { candidateSnapshot, verifyAcceptedCandidate } from './candidate-acceptance.mjs';
@@ -186,6 +186,17 @@ test('publication identity is derived from the active batch and accepted stable 
   assert.match(body,/v0\.1\.5/);assert.match(body,/english-path-migration/);assert.match(body,/不从 GitHub 反向覆盖本机代码/);
   assert.throws(()=>publicationDescriptor({name:'Unsafe Name'},'0.1.5'),/Invalid batch/);
   assert.throws(()=>publicationDescriptor(batch,'0.1.5-rc.1'),/stable semantic/);
+});
+
+test('v1.0.1 rollover preserves v1.0.0 and requires the exact merged PR36 and unchanged main tree',()=>{
+  const previous={number:36,sourceCommit:'d845fbfe89e2bf858bd87e53e4248a9f12d99a82',publicCommit:'a'.repeat(40),tree:'b'.repeat(40)};
+  const input={main:'c'.repeat(40),baseTree:previous.tree,oldPr:{merged:true,state:'closed',base:{ref:'main'},head:{sha:previous.publicCommit},merge_commit_sha:'c'.repeat(40)},
+    oldRelease:{draft:false,prerelease:false,tag_name:'v1.0.0'},oldPublishedTree:previous.tree};
+  assert.equal(validateV100Rollover(previous,input,'1.0.1').status,'PUBLISHED_NOT_ACTIVATED');
+  assert.throws(()=>validateV100Rollover(previous,input,'1.0.2'),/Outside/);
+  assert.throws(()=>validateV100Rollover(previous,{...input,main:'d'.repeat(40)},'1.0.1'),/not aligned/);
+  assert.throws(()=>validateV100Rollover(previous,{...input,oldPublishedTree:'d'.repeat(40)},'1.0.1'),/not aligned/);
+  assert.throws(()=>validateV100Rollover(previous,{...input,oldRelease:{...input.oldRelease,draft:true}},'1.0.1'),/not aligned/);
 });
 
 test('isolated PostgreSQL installs pg_trgm before parallel integration workers start',async()=>{

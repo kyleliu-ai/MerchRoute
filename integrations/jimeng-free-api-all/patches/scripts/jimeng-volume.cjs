@@ -5,6 +5,8 @@ const crypto = require('node:crypto');
 const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
 const root = '/app/data';
+// Same module in source/test layout and the runtime image.
+let taskArchive;
 const sha = (b) => crypto.createHash('sha256').update(b).digest('hex');
 function scan() {
   const files = [];
@@ -29,20 +31,39 @@ function report(files) {
     assert.ok(Array.isArray(records) && (Array.isArray(data) || data.schemaVersion === schema),'Unsupported ledger schema');
     const statuses = {};
     for (const record of records) statuses[record.status] = (statuses[record.status] || 0)+1;
-    stores[name] = {schemaVersion:Array.isArray(data)?'legacy':data.schemaVersion,count:records.length,statuses};
-    if (schema === 2) stores[name].nonterminalRecords = records
-      .filter((r)=>['reserved','processing','submission_unknown'].includes(r.status))
+    stores[name] = {schemaVersion:Array.isArray(data)?'legacy':data.schemaVersion,count:records.length,statuses,
+      sha256:files.find(f=>f.path===name).sha256};
+    if (schema === 2) {
+      const { entries } = taskArchive.readArchive(root, data);
+      stores[name].archiveSha256 = data.archiveSha256 || null;
+      stores[name].archivedRecords = [...entries.values()].map(item => ({ keyHash:item.keyHash,
+        recordHash:item.recordHash, status:item.originalRecord.status, disposition:item.disposition, forbidReplay:true }));
+      stores[name].nonterminalRecords = records
+      .filter((r)=>['reserved','processing','submission_unknown'].includes(r.status) && !entries.has(taskArchive.keyDigest(r.idempotencyKey)))
       .map((r)=>({keyHash:sha(String(r.idempotencyKey)),recordHash:sha(JSON.stringify(r)),
         status:r.status,createdAt:r.createdAt,updatedAt:r.updatedAt,hasHistoryId:!!r.historyId}))
       .sort((a,b)=>a.keyHash.localeCompare(b.keyHash));
+    }
   }
+  if (files.some(f=>f.path===taskArchive.ARCHIVE_FILE)) assert.ok(!stores['image-task-store.json'].missing,'Archive has no task ledger');
   return { files:files.length, bytes:files.reduce((n,f)=>n+(f.size||0),0),
     contentHash:sha(JSON.stringify(files.map(({path,type,size,sha256})=>({path,type,size,sha256})))),
     metadataHash:sha(JSON.stringify(files)),
     permissionsCompatible:files.every((f)=>f.uid===1000 && f.gid===1000 && (f.type==='directory' ? (f.mode & 0o700)===0o700 : f.mode===0o600)),stores };
 }
+async function main() {
+taskArchive = (await import(require('node:url').pathToFileURL(fs.existsSync(path.join(__dirname,'image-task-archive.mjs'))
+  ? path.join(__dirname,'image-task-archive.mjs') : path.join(__dirname,'../../src/api/services/image-task-archive.mjs')).href)).default;
 const action = process.argv[2];
 try {
+  if (action === 'archive' || action === 'archive-plan') {
+    assert.equal(process.getuid(),1000); assert.equal(process.getgid(),1000);
+    const approval = JSON.parse(fs.readFileSync('/approval/approval.json','utf8'));
+    // archiveTasks also supports completing an interrupted archive/ledger binding.
+    const result = taskArchive.archiveTasks({storeDir:root,approval,execute:action==='archive'});
+    console.log(JSON.stringify(result));
+    process.exit(0);
+  }
   const before = scan();
   const initial = report(before); // Fail closed on unreadable/corrupt ledgers before writes.
   if (action === 'inspect') console.log(JSON.stringify(initial));
@@ -93,3 +114,5 @@ try {
   console.error('Jimeng storage check failed; preserve the volume and operation journal');
   process.exitCode=1;
 }
+}
+main().catch(()=>{console.error('Jimeng archive helper initialization failed');process.exitCode=1;});

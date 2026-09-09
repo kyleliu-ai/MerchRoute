@@ -34,6 +34,8 @@ COPY --from=compiled --chown=node:node /app/dist ./dist
 COPY --from=compiled --chown=node:node /app/configs ./configs
 COPY --from=compiled --chown=node:node /app/public ./public
 COPY --from=test --chown=node:node /app/patches/scripts/jimeng-volume.cjs ./deployment/jimeng-volume.cjs
+COPY --from=test --chown=node:node /app/src/api/services/image-task-archive.mjs ./deployment/image-task-archive.mjs
+LABEL org.merchroute.jimeng.archive-schema="1"
 USER node
 EXPOSE 8000
 HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=5 \
