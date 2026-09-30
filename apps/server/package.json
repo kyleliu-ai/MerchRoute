@@ -28,10 +28,10 @@
     "write-file-atomic": "^6.0.0"
   },
   "devDependencies": {
-    "@types/node": "^22.15.32",
-    "@types/pg": "^8.15.4",
+    "@types/node": "^26.6.3",
+    "@types/pg": "^8.23.1",
     "@types/write-file-atomic": "^4.0.3",
-    "tsx": "^4.20.3",
+    "tsx": "^4.23.15",
     "vitest": "^3.2.4"
   }
 }
