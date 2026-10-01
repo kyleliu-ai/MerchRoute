@@ -418,13 +418,13 @@ jobs:
           npm ci
       - name: Download this attempt's sanitized records
         continue-on-error: true
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: ci-evidence-*-${{ github.run_attempt }}
           path: ${{ runner.temp }}/downloaded-ci-records
       - name: Download this attempt's candidate package manifest
         continue-on-error: true
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: merchroute-candidate-${{ env.MERCHROUTE_CI_EXPECTED_COMMIT }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/downloaded-candidate-package
